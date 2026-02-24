@@ -2,7 +2,10 @@ package com.zheng.bulltrack
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -66,8 +69,29 @@ fun BullTrackApp() {
     val navController = rememberNavController()
     val viewModel: GameViewModel = viewModel { ViewModelFactory.createGameViewModel() }
     val uiState by viewModel.uiState.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
     
     var selectedGameType by remember { mutableStateOf<GameType?>(null) }
+    
+    // ========== 调试模式代码开始 ==========
+    // 调试模式开关：将 DEBUG_MODE 改为 true 启用调试
+    val DEBUG_MODE = true
+    
+    // 调试模式：加载预设图片
+    fun loadDebugBitmap(resourceId: Int): Bitmap? {
+        Log.d("DEBUG", "loadDebugBitmap called with resourceId: $resourceId")
+        return try {
+            context.resources.openRawResource(resourceId).use { inputStream ->
+                val bitmap = BitmapFactory.decodeStream(inputStream)
+                Log.d("DEBUG", "Bitmap loaded: ${bitmap != null}, size: ${bitmap?.width}x${bitmap?.height}")
+                bitmap
+            }
+        } catch (e: Exception) {
+            Log.e("DEBUG", "Failed to load bitmap", e)
+            null
+        }
+    }
+    // ========== 调试模式代码结束 ==========
     
     NavHost(
         navController = navController,
@@ -123,8 +147,28 @@ fun BullTrackApp() {
             GameScreen(
                 uiState = uiState,
                 onCaptureBefore = {
+                    // ========== 调试模式代码开始 ==========
+                    Log.d("DEBUG", "onCaptureBefore clicked, DEBUG_MODE: $DEBUG_MODE")
+                    if (DEBUG_MODE) {
+                        val bitmap = loadDebugBitmap(com.zheng.bulltrack.R.raw.debug_before)
+                        bitmap?.let { 
+                            Log.d("DEBUG", "Calling captureBeforeImage")
+                            viewModel.captureBeforeImage(it) 
+                        }
+                    }
+                    // ========== 调试模式代码结束 ==========
                 },
                 onCaptureAfter = {
+                    // ========== 调试模式代码开始 ==========
+                    Log.d("DEBUG", "onCaptureAfter clicked, DEBUG_MODE: $DEBUG_MODE")
+                    if (DEBUG_MODE) {
+                        val bitmap = loadDebugBitmap(com.zheng.bulltrack.R.raw.debug_after)
+                        bitmap?.let { 
+                            Log.d("DEBUG", "Calling captureAfterImage")
+                            viewModel.captureAfterImage(it) 
+                        }
+                    }
+                    // ========== 调试模式代码结束 ==========
                 },
                 onConfirmResult = {
                     viewModel.confirmResult()
