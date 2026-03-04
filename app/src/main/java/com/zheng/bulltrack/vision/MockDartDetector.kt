@@ -1,25 +1,45 @@
 package com.zheng.bulltrack.vision
 
+import android.content.Context
 import android.graphics.Bitmap
-import com.zheng.bulltrack.domain.model.DartPosition
-import com.zheng.bulltrack.domain.model.RingType
+import android.graphics.BitmapFactory
 import com.zheng.bulltrack.domain.model.ThrowResult
-import com.zheng.bulltrack.domain.scoring.DartScorer
 
-class MockDartDetector : DartDetector {
-    
+class MockDartDetector(
+    private val context: Context,
+    private val delegate: NativeDartDetector = NativeDartDetector()
+) : DartDetector {
+
+    private var debugBeforeBitmap: Bitmap? = null
+    private var debugAfterBitmap: Bitmap? = null
+
     override fun init() {
+        delegate.init()
+        loadDebugBitmapsIfNeeded()
     }
-    
+
     override fun detect(before: Bitmap, after: Bitmap): List<ThrowResult> {
-        val mockPositions = listOf(
-            DartPosition(0.3f, 0.2f),
-            DartPosition(-0.5f, 0.4f),
-            DartPosition(0.1f, -0.3f)
-        )
-        
-        return mockPositions.map { position ->
-            DartScorer.calculateScore(position)
+        loadDebugBitmapsIfNeeded()
+        val debugBefore = debugBeforeBitmap
+        val debugAfter = debugAfterBitmap
+        return if (debugBefore != null && debugAfter != null) {
+            delegate.detect(debugBefore, debugAfter)
+        } else {
+            delegate.detect(before, after)
         }
+    }
+
+    private fun loadDebugBitmapsIfNeeded() {
+        if (debugBeforeBitmap != null && debugAfterBitmap != null) {
+            return
+        }
+
+        debugBeforeBitmap = runCatching {
+            context.assets.open("before.jpg").use(BitmapFactory::decodeStream)
+        }.getOrNull()
+
+        debugAfterBitmap = runCatching {
+            context.assets.open("after.jpg").use(BitmapFactory::decodeStream)
+        }.getOrNull()
     }
 }

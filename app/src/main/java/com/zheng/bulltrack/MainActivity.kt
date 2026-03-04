@@ -67,9 +67,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun BullTrackApp() {
     val navController = rememberNavController()
-    val viewModel: GameViewModel = viewModel { ViewModelFactory.createGameViewModel() }
-    val uiState by viewModel.uiState.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
+    val viewModel: GameViewModel = viewModel { ViewModelFactory.createGameViewModel(context) }
+    val uiState by viewModel.uiState.collectAsState()
     
     var selectedGameType by remember { mutableStateOf<GameType?>(null) }
     

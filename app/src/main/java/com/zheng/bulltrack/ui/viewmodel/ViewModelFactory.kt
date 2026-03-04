@@ -1,5 +1,6 @@
 package com.zheng.bulltrack.ui.viewmodel
 
+import android.content.Context
 import com.zheng.bulltrack.application.statemachine.GameStateMachine
 import com.zheng.bulltrack.application.usecase.CaptureRoundUseCase
 import com.zheng.bulltrack.application.usecase.FinishGameUseCase
@@ -13,11 +14,11 @@ class ViewModelFactory {
     companion object {
         private var gameViewModel: GameViewModel? = null
         
-        fun createGameViewModel(): GameViewModel {
+        fun createGameViewModel(context: Context): GameViewModel {
             if (gameViewModel != null) return gameViewModel!!
             
             val stateMachine = GameStateMachine()
-            val dartDetector: DartDetector = MockDartDetector()
+            val dartDetector: DartDetector = MockDartDetector(context.applicationContext)
             
             val startGameUseCase = StartGameUseCase(stateMachine)
             val captureRoundUseCase = CaptureRoundUseCase(stateMachine, dartDetector)
