@@ -13,15 +13,30 @@ class NativeDartDetector : DartDetector {
     }
     
     private external fun nativeInit()
+    private external fun nativeRelease()
     private external fun nativeDetect(
         beforeData: ByteArray,
         afterData: ByteArray,
         width: Int,
         height: Int
     ): Array<DetectionResult>?
+    private external fun nativeReset()
+    private external fun nativeSetParams(minArea: Double, minAspectRatio: Double)
     
     override fun init() {
         nativeInit()
+    }
+    
+    fun release() {
+        nativeRelease()
+    }
+    
+    fun reset() {
+        nativeReset()
+    }
+    
+    fun setParams(minArea: Double = 200.0, minAspectRatio: Double = 1.5) {
+        nativeSetParams(minArea, minAspectRatio)
     }
     
     override fun detect(before: Bitmap, after: Bitmap): List<ThrowResult> {

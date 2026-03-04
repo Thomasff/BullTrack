@@ -9,18 +9,21 @@ set(OpenCV_DIR ${CMAKE_SOURCE_DIR}/opencv-sdk/sdk/native/jni)
 
 find_package(OpenCV REQUIRED)
 
+message(STATUS "OpenCV version: ${OpenCV_VERSION}")
+message(STATUS "OpenCV include dirs: ${OpenCV_INCLUDE_DIRS}")
+
 add_library(${CMAKE_PROJECT_NAME} SHARED
-    dart_detector.cpp
-    image_processor.cpp
-    aruco_detector.cpp
-    board_detector.cpp
-    dart_tip_detector.cpp
-    scoring.cpp
-    native_jni.cpp
+    src/ImagePreprocessor.cpp
+    src/ArucoDetector.cpp
+    src/HomographyWarper.cpp
+    src/BoardCircleDetector.cpp
+    src/DartDetector.cpp
+    src/DartScorer.cpp
+    src/native_jni.cpp
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    ${CMAKE_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/include
     ${OpenCV_INCLUDE_DIRS}
 )
 
