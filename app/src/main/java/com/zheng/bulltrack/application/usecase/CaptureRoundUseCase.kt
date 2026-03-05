@@ -11,10 +11,11 @@ class CaptureRoundUseCase(
 ) {
     suspend operator fun invoke(beforeImage: Bitmap, afterImage: Bitmap): List<ThrowResult> {
         stateMachine.startCapturing()
+        stateMachine.beginProcessing()
         
         return try {
             val results = dartDetector.detect(beforeImage, afterImage)
-            stateMachine.processThrows(results)
+            stateMachine.showDetectedResult(results)
             results
         } catch (e: Exception) {
             stateMachine.setError("Detection failed: ${e.message}")

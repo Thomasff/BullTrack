@@ -53,12 +53,26 @@ class GameStateMachine {
         }
         updateState { it.copy(currentState = newState) }
     }
-    
-    fun processThrows(throws: List<ThrowResult>) {
-        updateState { it.copy(
-            currentState = GameState.PROCESSING,
-            currentThrows = throws
-        )}
+
+    fun beginProcessing() {
+        updateState { it.copy(currentState = GameState.PROCESSING) }
+    }
+
+    fun showDetectedResult(throws: List<ThrowResult>) {
+        updateState {
+            it.copy(
+                currentState = GameState.SHOWING_RESULT,
+                currentThrows = throws,
+                currentRoundResult = null
+            )
+        }
+    }
+
+    fun updateShowingThrows(throws: List<ThrowResult>) {
+        if (_uiState.value.currentState != GameState.SHOWING_RESULT) return
+        updateState {
+            it.copy(currentThrows = throws)
+        }
     }
     
     fun applyRoundResult(result: RoundResult) {

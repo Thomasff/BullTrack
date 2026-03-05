@@ -173,7 +173,8 @@ fun BullTrackApp() {
                 onConfirmResult = {
                     viewModel.confirmResult()
                 },
-                onManualAdjust = { index, sector, ring ->
+                onManualAdjustPosition = { index, position ->
+                    viewModel.updatePendingThrowPosition(index, position)
                 },
                 onReset = {
                     viewModel.resetGame()
