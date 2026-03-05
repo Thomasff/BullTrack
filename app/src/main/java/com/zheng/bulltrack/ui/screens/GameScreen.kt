@@ -49,6 +49,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.zheng.bulltrack.application.state.GameState
@@ -311,7 +312,7 @@ private fun VirtualDartboardEditor(
     modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
-    var boardSizePx by remember { mutableStateOf(0) }
+    var boardCanvasSize by remember { mutableStateOf(IntSize.Zero) }
     var draggingIndex by remember { mutableStateOf<Int?>(null) }
     var hoverRegion by remember { mutableStateOf<ThrowResult?>(null) }
     val lift by animateFloatAsState(
@@ -336,7 +337,7 @@ private fun VirtualDartboardEditor(
                 .fillMaxWidth(0.94f)
                 .aspectRatio(1f)
                 .padding(top = 12.dp)
-                .onSizeChanged { boardSizePx = it.width }
+                .onSizeChanged { boardCanvasSize = it }
         ) {
             androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
                 drawVirtualBoard(
@@ -345,12 +346,11 @@ private fun VirtualDartboardEditor(
                 )
             }
 
-            if (boardSizePx > 0) {
-                val boardSize = boardSizePx.toFloat()
+            if (boardCanvasSize.width > 0 && boardCanvasSize.height > 0) {
                 throws.forEachIndexed { index, throwResult ->
                     val position = throwResult.position ?: fallbackPosition(index)
                     val latestPosition by rememberUpdatedState(position)
-                    val markerCenter = normalizedToCanvas(position, boardSize)
+                    val markerCenter = normalizedToCanvas(position, boardCanvasSize)
                     val touchSizeDp = 72.dp
                     val touchSizePx = with(density) { touchSizeDp.toPx() }
 
@@ -363,7 +363,7 @@ private fun VirtualDartboardEditor(
                                     (markerCenter.y - touchSizePx / 2f).roundToInt()
                                 )
                             }
-                            .pointerInput(index, boardSizePx) {
+                            .pointerInput(index, boardCanvasSize) {
                                 var currentPos = latestPosition
                                 detectDragGestures(
                                     onDragStart = {
@@ -373,9 +373,9 @@ private fun VirtualDartboardEditor(
                                     },
                                     onDrag = { change, dragAmount ->
                                         change.consume()
-                                        val currentCenter = normalizedToCanvas(currentPos, boardSize)
+                                        val currentCenter = normalizedToCanvas(currentPos, boardCanvasSize)
                                         val newCenter = currentCenter + dragAmount
-                                        val unclamped = canvasToNormalized(newCenter, boardSize)
+                                        val unclamped = canvasToNormalized(newCenter, boardCanvasSize)
                                         currentPos = VirtualBoardScorer.clampToBoard(unclamped)
                                         hoverRegion = VirtualBoardScorer.calculateScore(currentPos)
                                         onThrowPositionChanged(index, currentPos)
@@ -598,18 +598,19 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBandSector(
     )
 }
 
-private fun normalizedToCanvas(position: DartPosition, boardSize: Float): Offset {
-    val radius = boardSize / 2f
-    val center = Offset(radius, radius)
+private fun normalizedToCanvas(position: DartPosition, boardSize: IntSize): Offset {
+    val radius = minOf(boardSize.width, boardSize.height) / 2f
+    val center = Offset(boardSize.width / 2f, boardSize.height / 2f)
     return Offset(
         x = center.x + position.x * radius,
         y = center.y + position.y * radius
     )
 }
 
-private fun canvasToNormalized(offset: Offset, boardSize: Float): DartPosition {
-    val radius = boardSize / 2f
-    val center = Offset(radius, radius)
+private fun canvasToNormalized(offset: Offset, boardSize: IntSize): DartPosition {
+    val radius = minOf(boardSize.width, boardSize.height) / 2f
+    if (radius == 0f) return DartPosition(0f, 0f)
+    val center = Offset(boardSize.width / 2f, boardSize.height / 2f)
     val x = ((offset.x - center.x) / radius)
     val y = ((offset.y - center.y) / radius)
 
