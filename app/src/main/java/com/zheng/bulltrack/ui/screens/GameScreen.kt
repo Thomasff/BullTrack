@@ -1,6 +1,11 @@
 package com.zheng.bulltrack.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -17,16 +22,21 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,9 +51,13 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.camera.view.PreviewView
+import androidx.core.content.ContextCompat
 import com.zheng.bulltrack.application.state.GameState
 import com.zheng.bulltrack.application.state.GameUiState
 import com.zheng.bulltrack.domain.model.DartPosition
@@ -60,8 +74,29 @@ fun GameScreen(
     onConfirmResult: () -> Unit,
     onRedetect: () -> Unit,
     onManualAdjustPosition: (Int, DartPosition) -> Unit,
+    onCameraPermissionChanged: (Boolean) -> Unit,
+    onBindPreview: (PreviewView) -> Unit,
+    onUnbindPreview: () -> Unit,
+    onZoomRatioChanged: (Float) -> Unit,
     onReset: () -> Unit
 ) {
+    val context = LocalContext.current
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = onCameraPermissionChanged
+    )
+    val isPermissionGranted = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.CAMERA
+    ) == PackageManager.PERMISSION_GRANTED
+
+    LaunchedEffect(isPermissionGranted) {
+        onCameraPermissionChanged(isPermissionGranted)
+        if (!isPermissionGranted) {
+            permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         GameInfoHeader(
             currentPlayer = uiState.currentPlayer,
@@ -82,6 +117,15 @@ fun GameScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 RoundStatusCard(uiState)
+
+                if (uiState.isPreviewVisible) {
+                    CameraPreviewCard(
+                        uiState = uiState,
+                        onBindPreview = onBindPreview,
+                        onUnbindPreview = onUnbindPreview,
+                        onZoomRatioChanged = onZoomRatioChanged
+                    )
+                }
 
                 Box(
                     modifier = Modifier
@@ -121,6 +165,7 @@ fun GameScreen(
                     PrimaryActionButton(
                         text = "开始本轮",
                         onClick = onStartRound,
+                        enabled = uiState.isCameraPermissionGranted && uiState.isCameraReady,
                         modifier = Modifier.align(Alignment.BottomCenter)
                     )
                 }
@@ -190,6 +235,146 @@ private fun RoundStatusCard(uiState: GameUiState) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(status, style = MaterialTheme.typography.bodySmall)
             }
+
+            uiState.cameraStatusMessage?.let { status ->
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (uiState.isDevelopmentExposureFallback) {
+                        MaterialTheme.colorScheme.tertiary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
+
+            if (uiState.lockedIso != null || uiState.cameraLockPhase != null) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = buildString {
+                        append("曝光锁定")
+                        uiState.lockedIso?.let { iso ->
+                            append(" ISO=$iso")
+                        }
+                        uiState.cameraLockPhase?.let { phase ->
+                            append(" [$phase]")
+                        }
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            uiState.cameraLockReason?.let { reason ->
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = reason,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CameraPreviewCard(
+    uiState: GameUiState,
+    onBindPreview: (PreviewView) -> Unit,
+    onUnbindPreview: () -> Unit,
+    onZoomRatioChanged: (Float) -> Unit
+) {
+    OutlinedCard(
+        modifier = Modifier.fillMaxWidth(),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = "开始本轮前调整预览和倍率",
+                style = MaterialTheme.typography.titleSmall
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(9f / 16f)
+                    .background(Color.Black),
+                contentAlignment = Alignment.Center
+            ) {
+                if (uiState.isCameraPermissionGranted) {
+                    AndroidView(
+                        factory = { context ->
+                            PreviewView(context).apply {
+                                scaleType = PreviewView.ScaleType.FILL_CENTER
+                                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                                onBindPreview(this)
+                            }
+                        },
+                        update = { previewView ->
+                            onBindPreview(previewView)
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    DisposableEffect(Unit) {
+                        onDispose {
+                            onUnbindPreview()
+                        }
+                    }
+                } else {
+                    Text(
+                        text = "等待相机权限",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+
+            Text(
+                text = "倍率 ${String.format("%.2f", uiState.zoomRatio)}x",
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Slider(
+                value = uiState.zoomRatio,
+                onValueChange = onZoomRatioChanged,
+                valueRange = 1f..4f,
+                enabled = uiState.isCameraReady
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AssistChip(
+                    onClick = {},
+                    enabled = false,
+                    label = {
+                        Text(if (uiState.isCameraReady) "相机已就绪" else "相机未就绪")
+                    }
+                )
+                AssistChip(
+                    onClick = {},
+                    enabled = false,
+                    label = {
+                        Text(
+                            if (uiState.isExposureStrictlyLocked) {
+                                "固定 1/100s"
+                            } else if (uiState.isDevelopmentExposureFallback) {
+                                "开发降级模式"
+                            } else {
+                                "等待锁定参数"
+                            }
+                        )
+                    }
+                )
+                if (uiState.lockedIso != null) {
+                    AssistChip(
+                        onClick = {},
+                        enabled = false,
+                        label = { Text("ISO ${uiState.lockedIso}") }
+                    )
+                }
+            }
         }
     }
 }
@@ -248,10 +433,12 @@ fun GameInfoHeader(
 private fun PrimaryActionButton(
     text: String,
     onClick: () -> Unit,
+    enabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     FilledTonalButton(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier
             .padding(32.dp)
             .size(width = 160.dp, height = 56.dp),

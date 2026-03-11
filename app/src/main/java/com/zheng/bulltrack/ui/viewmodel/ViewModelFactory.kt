@@ -6,9 +6,11 @@ import com.zheng.bulltrack.application.usecase.CaptureRoundUseCase
 import com.zheng.bulltrack.application.usecase.FinishGameUseCase
 import com.zheng.bulltrack.application.usecase.ProcessRoundUseCase
 import com.zheng.bulltrack.application.usecase.StartGameUseCase
+import com.zheng.bulltrack.camera.CameraManager
+import com.zheng.bulltrack.camera.CameraRoundFrameSource
+import com.zheng.bulltrack.camera.CameraXManager
 import com.zheng.bulltrack.vision.DartDetector
 import com.zheng.bulltrack.vision.NativeDartDetector
-import com.zheng.bulltrack.vision.TrackFrameSource
 
 class ViewModelFactory {
 
@@ -20,13 +22,16 @@ class ViewModelFactory {
 
             val stateMachine = GameStateMachine()
             val dartDetector: DartDetector = NativeDartDetector()
-            val trackFrameSource = TrackFrameSource(context.applicationContext)
+            val cameraManager: CameraManager = CameraXManager().apply {
+                initialize(context.applicationContext)
+            }
+            val frameSource = CameraRoundFrameSource(cameraManager)
 
             val startGameUseCase = StartGameUseCase(stateMachine)
             val captureRoundUseCase = CaptureRoundUseCase(
                 stateMachine = stateMachine,
                 dartDetector = dartDetector,
-                trackFrameSource = trackFrameSource
+                frameSource = frameSource
             )
             val processRoundUseCase = ProcessRoundUseCase(stateMachine)
             val finishGameUseCase = FinishGameUseCase(stateMachine)
@@ -37,7 +42,8 @@ class ViewModelFactory {
                 captureRoundUseCase = captureRoundUseCase,
                 processRoundUseCase = processRoundUseCase,
                 finishGameUseCase = finishGameUseCase,
-                dartDetector = dartDetector
+                dartDetector = dartDetector,
+                cameraManager = cameraManager
             )
 
             return gameViewModel!!

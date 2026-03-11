@@ -51,7 +51,8 @@ class GameStateMachine {
                 errorMessage = null,
                 statusMessage = "准备开始新一轮",
                 isRoundActive = false,
-                canRedetect = false
+                canRedetect = false,
+                isPreviewVisible = it.isCameraPermissionGranted
             )
         }
     }
@@ -66,7 +67,8 @@ class GameStateMachine {
                 statusMessage = statusMessage,
                 detectedDartCount = 0,
                 isRoundActive = true,
-                canRedetect = false
+                canRedetect = false,
+                isPreviewVisible = false
             )
         }
     }
@@ -80,7 +82,8 @@ class GameStateMachine {
                 detectedDartCount = throws.size,
                 throwNumber = throws.size,
                 isRoundActive = true,
-                canRedetect = false
+                canRedetect = false,
+                isPreviewVisible = false
             )
         }
     }
@@ -89,7 +92,8 @@ class GameStateMachine {
         updateState {
             it.copy(
                 currentState = GameState.PROCESSING,
-                statusMessage = statusMessage
+                statusMessage = statusMessage,
+                isPreviewVisible = false
             )
         }
     }
@@ -104,7 +108,8 @@ class GameStateMachine {
                 detectedDartCount = throws.count { throwResult -> throwResult.score > 0 || throwResult.ring != com.zheng.bulltrack.domain.model.RingType.MISS },
                 throwNumber = throws.size,
                 isRoundActive = false,
-                canRedetect = canRedetect
+                canRedetect = canRedetect,
+                isPreviewVisible = false
             )
         }
     }
@@ -144,7 +149,8 @@ class GameStateMachine {
                         winner = mode.getWinner(),
                         statusMessage = "比赛结束",
                         isRoundActive = false,
-                        canRedetect = false
+                        canRedetect = false,
+                        isPreviewVisible = false
                     )
                 }
             } else {
@@ -159,6 +165,7 @@ class GameStateMachine {
                         statusMessage = "准备开始下一轮",
                         isRoundActive = false,
                         canRedetect = false,
+                        isPreviewVisible = it.isCameraPermissionGranted,
                         roundNumber = if (mode.getCurrentPlayer().id == _uiState.value.players.firstOrNull()?.id) {
                             _uiState.value.roundNumber + 1
                         } else {
@@ -184,13 +191,60 @@ class GameStateMachine {
                 statusMessage = null,
                 currentState = GameState.WAITING_FOR_THROW,
                 isRoundActive = false,
-                canRedetect = false
+                canRedetect = false,
+                isPreviewVisible = _uiState.value.isCameraPermissionGranted
             )
         }
     }
 
     fun clearError() {
         updateState { it.copy(errorMessage = null) }
+    }
+
+    fun setCameraPermission(granted: Boolean) {
+        updateState {
+            it.copy(
+                isCameraPermissionGranted = granted,
+                isPreviewVisible = granted && !it.isRoundActive && it.currentState != GameState.SHOWING_RESULT && it.currentState != GameState.GAME_OVER,
+                cameraStatusMessage = if (granted) it.cameraStatusMessage else "需要相机权限才能开始本轮"
+            )
+        }
+    }
+
+    fun updateCameraStatus(
+        isReady: Boolean,
+        zoomRatio: Float,
+        statusMessage: String?,
+        isExposureStrictlyLocked: Boolean,
+        isDevelopmentExposureFallback: Boolean,
+        lockedIso: Int?,
+        lockPhase: String?,
+        lockReason: String?
+    ) {
+        updateState {
+            it.copy(
+                isCameraReady = isReady,
+                zoomRatio = zoomRatio,
+                cameraStatusMessage = statusMessage,
+                isExposureStrictlyLocked = isExposureStrictlyLocked,
+                isDevelopmentExposureFallback = isDevelopmentExposureFallback,
+                lockedIso = lockedIso,
+                cameraLockPhase = lockPhase,
+                cameraLockReason = lockReason
+            )
+        }
+    }
+
+    fun updatePreviewVisibility(isVisible: Boolean) {
+        updateState {
+            it.copy(
+                isPreviewVisible = isVisible && it.isCameraPermissionGranted && !it.isRoundActive
+            )
+        }
+    }
+
+    fun showError(message: String) {
+        updateState { it.copy(errorMessage = message) }
     }
 
     private fun updateState(update: (GameUiState) -> GameUiState) {

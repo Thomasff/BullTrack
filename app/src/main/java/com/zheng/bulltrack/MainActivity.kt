@@ -8,8 +8,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
 fun BullTrackApp() {
     val navController = rememberNavController()
     val context = androidx.compose.ui.platform.LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val viewModel: GameViewModel = viewModel { ViewModelFactory.createGameViewModel(context) }
     val uiState by viewModel.uiState.collectAsState()
 
@@ -116,6 +117,18 @@ fun BullTrackApp() {
                 },
                 onManualAdjustPosition = { index, position ->
                     viewModel.updatePendingThrowPosition(index, position)
+                },
+                onCameraPermissionChanged = { granted ->
+                    viewModel.setCameraPermissionGranted(granted)
+                },
+                onBindPreview = { previewView ->
+                    viewModel.bindPreview(previewView, lifecycleOwner)
+                },
+                onUnbindPreview = {
+                    viewModel.unbindPreview()
+                },
+                onZoomRatioChanged = { zoomRatio ->
+                    viewModel.updateZoomRatio(zoomRatio)
                 },
                 onReset = {
                     viewModel.resetGame()

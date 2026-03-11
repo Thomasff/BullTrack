@@ -2,23 +2,24 @@ package com.zheng.bulltrack.application.usecase
 
 import android.graphics.Bitmap
 import com.zheng.bulltrack.application.statemachine.GameStateMachine
+import com.zheng.bulltrack.camera.RoundFrameSource
 import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.RingType
 import com.zheng.bulltrack.domain.model.ThrowResult
 import com.zheng.bulltrack.vision.DartDetector
-import com.zheng.bulltrack.vision.TrackFrameSource
 import kotlinx.coroutines.delay
 import kotlin.math.hypot
 
 class CaptureRoundUseCase(
     private val stateMachine: GameStateMachine,
     private val dartDetector: DartDetector,
-    private val trackFrameSource: TrackFrameSource
+    private val frameSource: RoundFrameSource
 ) {
     private data class RoundSession(
         val nativeSessionId: Long,
         val throws: MutableList<ThrowResult> = mutableListOf(),
-        var consumedFrameCount: Int = 1
+        var consumedFrameCount: Int = 1,
+        var isDevelopmentExposureFallback: Boolean = false
     )
 
     private var currentSession: RoundSession? = null
@@ -26,32 +27,39 @@ class CaptureRoundUseCase(
     private var stopRequested: Boolean = false
 
     suspend fun startRound(): List<ThrowResult> {
-        val frames = trackFrameSource.loadFrames()
-        if (frames.isEmpty()) {
-            throw IllegalStateException("track 目录中没有可用图片")
-        }
-
         stopRequested = false
+        frameSource.prepareRound()
+        val firstFrame = frameSource.captureFirstFrame()
         val nativeSessionId = dartDetector.createSession()
-        dartDetector.startRound(nativeSessionId, frames.first())
+        dartDetector.startRound(nativeSessionId, firstFrame.bitmap)
         currentSession = RoundSession(
-            nativeSessionId = nativeSessionId
+            nativeSessionId = nativeSessionId,
+            isDevelopmentExposureFallback = firstFrame.cameraConfig?.isDevelopmentExposureFallback == true
         )
-        stateMachine.startRound("已加载第 1 张图片，开始连续检测")
+        val startMessage = firstFrame.cameraConfig?.statusMessage ?: "已拍摄第 1 张图片，开始连续检测"
+        stateMachine.startRound(startMessage)
 
-        for ((index, frame) in frames.drop(1).withIndex()) {
-            if (stopRequested) {
+        var sourceExhausted = false
+        var frameIndex = 2
+        while (!stopRequested) {
+            delay(FRAME_INTERVAL_MS)
+            val frame = frameSource.captureNextFrame()
+            if (frame == null) {
+                sourceExhausted = true
                 break
             }
 
-            delay(FRAME_INTERVAL_MS)
-            val shouldStop = processNextFrame(frameIndex = index + 2, frame = frame)
+            val shouldStop = processNextFrame(frameIndex = frameIndex, frame = frame.bitmap)
             if (shouldStop) {
                 break
             }
+            frameIndex += 1
         }
 
-        return finalizeRound(manualStop = stopRequested)
+        return finalizeRound(
+            manualStop = stopRequested,
+            sourceExhausted = sourceExhausted
+        )
     }
 
     fun stopRound() {
@@ -88,6 +96,7 @@ class CaptureRoundUseCase(
         currentSession?.let { dartDetector.destroySession(it.nativeSessionId) }
         currentSession = null
         stopRequested = false
+        frameSource.finishRound()
     }
 
     private fun processNextFrame(frameIndex: Int, frame: Bitmap): Boolean {
@@ -105,9 +114,15 @@ class CaptureRoundUseCase(
         }
 
         if (!frameUpdate.gateTriggered) {
+            val gateMessage = buildString {
+                append("第 $frameIndex 张图片未触发精检: ${frameUpdate.gateReason}")
+                if (session.isDevelopmentExposureFallback) {
+                    append("（开发降级模式）")
+                }
+            }
             stateMachine.updateRoundProgress(
                 session.throws.toList(),
-                "第 $frameIndex 张图片未触发精检: ${frameUpdate.gateReason}"
+                gateMessage
             )
             return false
         }
@@ -123,11 +138,16 @@ class CaptureRoundUseCase(
         } else {
             "第 $frameIndex 张图片触发精检，但结果与已有飞镖重复"
         }
-        stateMachine.updateRoundProgress(session.throws.toList(), statusMessage)
+        val finalStatusMessage = if (session.isDevelopmentExposureFallback) {
+            "$statusMessage（开发降级模式）"
+        } else {
+            statusMessage
+        }
+        stateMachine.updateRoundProgress(session.throws.toList(), finalStatusMessage)
         return session.throws.size >= MAX_DARTS
     }
 
-    private fun finalizeRound(manualStop: Boolean): List<ThrowResult> {
+    private fun finalizeRound(manualStop: Boolean, sourceExhausted: Boolean): List<ThrowResult> {
         val session = currentSession ?: return emptyList()
         val finalThrows = session.throws.toMutableList()
         if (manualStop) {
@@ -137,14 +157,20 @@ class CaptureRoundUseCase(
         }
         session.throws.clear()
         session.throws.addAll(finalThrows)
+        frameSource.finishRound()
 
         val statusMessage = when {
             manualStop -> "本轮已手动结束"
             finalThrows.size >= MAX_DARTS -> "已识别满 3 支飞镖，自动结束"
-            session.consumedFrameCount >= TRACK_FRAME_COUNT -> "10 张图片已用完，返回当前结果"
+            sourceExhausted -> "帧源已结束，返回当前结果"
             else -> "本轮检测结束"
         }
-        stateMachine.showDetectedResult(finalThrows, statusMessage, canRedetect = true)
+        val finalStatusMessage = if (session.isDevelopmentExposureFallback) {
+            "$statusMessage（开发降级模式）"
+        } else {
+            statusMessage
+        }
+        stateMachine.showDetectedResult(finalThrows, finalStatusMessage, canRedetect = true)
         return finalThrows
     }
 
@@ -190,7 +216,6 @@ class CaptureRoundUseCase(
     companion object {
         private const val FRAME_INTERVAL_MS = 1000L
         private const val MAX_DARTS = 3
-        private const val TRACK_FRAME_COUNT = 10
         private const val DUPLICATE_DISTANCE_THRESHOLD = 0.08
     }
 }

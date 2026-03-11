@@ -1,7 +1,9 @@
 package com.zheng.bulltrack.ui.viewmodel
 
 import android.graphics.Bitmap
+import androidx.camera.view.PreviewView
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
 import com.zheng.bulltrack.application.state.GameState
 import com.zheng.bulltrack.application.state.GameUiState
@@ -10,6 +12,9 @@ import com.zheng.bulltrack.application.usecase.CaptureRoundUseCase
 import com.zheng.bulltrack.application.usecase.FinishGameUseCase
 import com.zheng.bulltrack.application.usecase.ProcessRoundUseCase
 import com.zheng.bulltrack.application.usecase.StartGameUseCase
+import com.zheng.bulltrack.camera.CameraManager
+import com.zheng.bulltrack.camera.CameraLockPhase
+import com.zheng.bulltrack.camera.CameraState
 import com.zheng.bulltrack.domain.gamemode.GameModeFactory
 import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.GameType
@@ -29,7 +34,8 @@ class GameViewModel(
     private val captureRoundUseCase: CaptureRoundUseCase,
     private val processRoundUseCase: ProcessRoundUseCase,
     private val finishGameUseCase: FinishGameUseCase,
-    private val dartDetector: DartDetector
+    private val dartDetector: DartDetector,
+    private val cameraManager: CameraManager
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(GameUiState())
@@ -42,6 +48,58 @@ class GameViewModel(
         viewModelScope.launch {
             stateMachine.uiState.collect { state ->
                 _uiState.value = state
+            }
+        }
+        viewModelScope.launch {
+            cameraManager.cameraState.collect { cameraState ->
+                when (cameraState) {
+                    CameraState.Idle -> stateMachine.updateCameraStatus(
+                        isReady = false,
+                        zoomRatio = 1f,
+                        statusMessage = "相机未初始化",
+                        isExposureStrictlyLocked = false,
+                        isDevelopmentExposureFallback = false,
+                        lockedIso = null,
+                        lockPhase = CameraLockPhase.IDLE.name,
+                        lockReason = null
+                    )
+
+                    is CameraState.Ready -> stateMachine.updateCameraStatus(
+                        isReady = true,
+                        zoomRatio = cameraState.zoomRatio,
+                        statusMessage = cameraState.statusMessage,
+                        isExposureStrictlyLocked = cameraState.isStrictExposureLocked,
+                        isDevelopmentExposureFallback = cameraState.isDevelopmentExposureFallback,
+                        lockedIso = cameraState.lockedIso,
+                        lockPhase = cameraState.lockPhase.name,
+                        lockReason = null
+                    )
+
+                    is CameraState.Capturing -> stateMachine.updateCameraStatus(
+                        isReady = false,
+                        zoomRatio = cameraState.zoomRatio,
+                        statusMessage = cameraState.statusMessage,
+                        isExposureStrictlyLocked = cameraState.isStrictExposureLocked,
+                        isDevelopmentExposureFallback = cameraState.isDevelopmentExposureFallback,
+                        lockedIso = cameraState.lockedIso,
+                        lockPhase = cameraState.lockPhase.name,
+                        lockReason = null
+                    )
+
+                    is CameraState.Error -> {
+                        stateMachine.updateCameraStatus(
+                            isReady = false,
+                            zoomRatio = cameraManager.getZoomRatio(),
+                            statusMessage = cameraState.message,
+                            isExposureStrictlyLocked = false,
+                            isDevelopmentExposureFallback = true,
+                            lockedIso = null,
+                            lockPhase = CameraLockPhase.FALLBACK.name,
+                            lockReason = cameraState.message
+                        )
+                        stateMachine.showError("相机错误: ${cameraState.message}")
+                    }
+                }
             }
         }
     }
@@ -64,6 +122,14 @@ class GameViewModel(
 
     fun startRound() {
         if (_uiState.value.currentState != GameState.WAITING_FOR_THROW) {
+            return
+        }
+        if (!_uiState.value.isCameraPermissionGranted) {
+            stateMachine.showError("需要先授予相机权限")
+            return
+        }
+        if (!_uiState.value.isCameraReady) {
+            stateMachine.showError("相机尚未就绪")
             return
         }
         roundJob?.cancel()
@@ -119,11 +185,39 @@ class GameViewModel(
         stateMachine.clearError()
     }
 
+    fun setCameraPermissionGranted(granted: Boolean) {
+        stateMachine.setCameraPermission(granted)
+        if (!granted) {
+            cameraManager.unbindPreview()
+        }
+    }
+
+    fun bindPreview(previewView: PreviewView, lifecycleOwner: LifecycleOwner) {
+        if (!_uiState.value.isCameraPermissionGranted) {
+            return
+        }
+        cameraManager.bindPreview(lifecycleOwner, previewView)
+        stateMachine.updatePreviewVisibility(true)
+    }
+
+    fun unbindPreview() {
+        cameraManager.unbindPreview()
+        stateMachine.updatePreviewVisibility(false)
+    }
+
+    fun updateZoomRatio(zoomRatio: Float) {
+        if (_uiState.value.currentState != GameState.WAITING_FOR_THROW) {
+            return
+        }
+        cameraManager.setZoomRatio(zoomRatio)
+    }
+
     override fun onCleared() {
         roundJob?.cancel()
         if (dartDetector is NativeDartDetector) {
             dartDetector.release()
         }
+        cameraManager.release()
         super.onCleared()
     }
 }

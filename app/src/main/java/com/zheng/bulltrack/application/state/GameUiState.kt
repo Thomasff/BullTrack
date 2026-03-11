@@ -22,5 +22,15 @@ data class GameUiState(
     val detectedDartCount: Int = 0,
     val maxDartsPerRound: Int = 3,
     val isRoundActive: Boolean = false,
-    val canRedetect: Boolean = false
+    val canRedetect: Boolean = false,
+    val isCameraPermissionGranted: Boolean = false,
+    val isCameraReady: Boolean = false,
+    val isPreviewVisible: Boolean = false,
+    val zoomRatio: Float = 1f,
+    val cameraStatusMessage: String? = null,
+    val isExposureStrictlyLocked: Boolean = false,
+    val isDevelopmentExposureFallback: Boolean = false,
+    val lockedIso: Int? = null,
+    val cameraLockPhase: String? = null,
+    val cameraLockReason: String? = null
 )
