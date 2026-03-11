@@ -12,22 +12,39 @@ class MockDartDetector(
 
     private var debugBeforeBitmap: Bitmap? = null
     private var debugAfterBitmap: Bitmap? = null
+    private var debugProcessCount: Int = 0
 
     override fun init() {
         delegate.init()
         loadDebugBitmapsIfNeeded()
     }
 
-    override fun detect(before: Bitmap, after: Bitmap): List<ThrowResult> {
+    override fun createSession(): Long {
+        debugProcessCount = 0
+        return delegate.createSession()
+    }
+
+    override fun destroySession(sessionId: Long) {
+        delegate.destroySession(sessionId)
+    }
+
+    override fun startRound(sessionId: Long, firstFrame: Bitmap) {
         loadDebugBitmapsIfNeeded()
-        val debugBefore = debugBeforeBitmap
-        val debugAfter = debugAfterBitmap
-        return if (debugBefore != null && debugAfter != null) {
-            delegate.detect(debugBefore, debugAfter)
+        delegate.startRound(sessionId, debugBeforeBitmap ?: firstFrame)
+    }
+
+    override fun processFrame(sessionId: Long, frame: Bitmap): FrameDetectionUpdate {
+        loadDebugBitmapsIfNeeded()
+        debugProcessCount += 1
+        val debugAfter = if (debugProcessCount == 1) debugAfterBitmap else null
+        return if (debugAfter != null) {
+            delegate.processFrame(sessionId, debugAfter)
         } else {
-            delegate.detect(before, after)
+            delegate.processFrame(sessionId, frame)
         }
     }
+
+    override fun redetect(sessionId: Long): List<ThrowResult> = delegate.redetect(sessionId)
 
     private fun loadDebugBitmapsIfNeeded() {
         if (debugBeforeBitmap != null && debugAfterBitmap != null) {

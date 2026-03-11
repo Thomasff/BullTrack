@@ -16,3 +16,6 @@
 local.properties
 *.jpg
 *.png
+!app/src/main/assets/*.jpg
+!app/src/main/assets/track/*.jpg
+cpp_dart_detector_v2/

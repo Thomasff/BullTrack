@@ -8,7 +8,6 @@ import com.zheng.bulltrack.domain.model.ThrowResult
 import com.zheng.bulltrack.vision.DartDetector
 import com.zheng.bulltrack.vision.TrackFrameSource
 import kotlinx.coroutines.delay
-import kotlin.math.abs
 import kotlin.math.hypot
 
 class CaptureRoundUseCase(
@@ -17,8 +16,7 @@ class CaptureRoundUseCase(
     private val trackFrameSource: TrackFrameSource
 ) {
     private data class RoundSession(
-        val firstFrame: Bitmap,
-        var latestFrame: Bitmap,
+        val nativeSessionId: Long,
         val throws: MutableList<ThrowResult> = mutableListOf(),
         var consumedFrameCount: Int = 1
     )
@@ -34,9 +32,10 @@ class CaptureRoundUseCase(
         }
 
         stopRequested = false
+        val nativeSessionId = dartDetector.createSession()
+        dartDetector.startRound(nativeSessionId, frames.first())
         currentSession = RoundSession(
-            firstFrame = frames.first(),
-            latestFrame = frames.first()
+            nativeSessionId = nativeSessionId
         )
         stateMachine.startRound("已加载第 1 张图片，开始连续检测")
 
@@ -64,7 +63,7 @@ class CaptureRoundUseCase(
         stateMachine.beginProcessing("使用首尾帧执行重新识别")
 
         val redetected = runCatching {
-            dartDetector.detect(session.firstFrame, session.latestFrame)
+            dartDetector.redetect(session.nativeSessionId)
         }.getOrElse {
             stateMachine.showDetectedResult(
                 throws = session.throws.toList(),
@@ -86,39 +85,43 @@ class CaptureRoundUseCase(
     }
 
     fun clearRound() {
+        currentSession?.let { dartDetector.destroySession(it.nativeSessionId) }
         currentSession = null
         stopRequested = false
     }
 
     private fun processNextFrame(frameIndex: Int, frame: Bitmap): Boolean {
         val session = currentSession ?: return true
-        val previousFrame = session.latestFrame
-        session.latestFrame = frame
         session.consumedFrameCount = frameIndex
 
-        if (!shouldTriggerPreciseDetection(previousFrame, frame)) {
-            stateMachine.updateRoundProgress(
-                session.throws.toList(),
-                "第 $frameIndex 张图片未触发精检，继续等待下一帧"
-            )
-            return false
-        }
-
-        val preciseResults = runCatching {
-            dartDetector.detect(previousFrame, frame)
+        val frameUpdate = runCatching {
+            dartDetector.processFrame(session.nativeSessionId, frame)
         }.getOrElse {
             stateMachine.updateRoundProgress(
                 session.throws.toList(),
-                "第 $frameIndex 张图片触发精检，但检测失败"
+                "第 $frameIndex 张图片处理失败: ${it.message}"
             )
             return false
         }
 
-        val addedCount = mergeNewThrows(session.throws, preciseResults)
-        val statusMessage = if (addedCount > 0) {
+        if (!frameUpdate.gateTriggered) {
+            stateMachine.updateRoundProgress(
+                session.throws.toList(),
+                "第 $frameIndex 张图片未触发精检: ${frameUpdate.gateReason}"
+            )
+            return false
+        }
+
+        val addedCount = mergeNewThrows(
+            existing = session.throws,
+            detected = listOfNotNull(frameUpdate.newThrow)
+        )
+        val statusMessage = if (frameUpdate.newThrow == null) {
+            "第 $frameIndex 张图片触发精检，但未识别到新飞镖: ${frameUpdate.gateReason}"
+        } else if (addedCount > 0) {
             "第 $frameIndex 张图片识别到新飞镖，当前共 ${session.throws.size} 支"
         } else {
-            "第 $frameIndex 张图片触发精检，但没有新增结果"
+            "第 $frameIndex 张图片触发精检，但结果与已有飞镖重复"
         }
         stateMachine.updateRoundProgress(session.throws.toList(), statusMessage)
         return session.throws.size >= MAX_DARTS
@@ -170,31 +173,6 @@ class CaptureRoundUseCase(
         return added
     }
 
-    private fun shouldTriggerPreciseDetection(before: Bitmap, after: Bitmap): Boolean {
-        val sampleWidth = 64
-        val sampleHeight = 64
-        val scaledBefore = Bitmap.createScaledBitmap(before, sampleWidth, sampleHeight, true)
-        val scaledAfter = Bitmap.createScaledBitmap(after, sampleWidth, sampleHeight, true)
-        val beforePixels = IntArray(sampleWidth * sampleHeight)
-        val afterPixels = IntArray(sampleWidth * sampleHeight)
-        scaledBefore.getPixels(beforePixels, 0, sampleWidth, 0, 0, sampleWidth, sampleHeight)
-        scaledAfter.getPixels(afterPixels, 0, sampleWidth, 0, 0, sampleWidth, sampleHeight)
-
-        var diffSum = 0L
-        for (i in beforePixels.indices) {
-            diffSum += abs(luma(beforePixels[i]) - luma(afterPixels[i]))
-        }
-        val averageDiff = diffSum.toDouble() / beforePixels.size.toDouble()
-        return averageDiff >= GATE_DIFF_THRESHOLD
-    }
-
-    private fun luma(pixel: Int): Int {
-        val r = (pixel shr 16) and 0xFF
-        val g = (pixel shr 8) and 0xFF
-        val b = pixel and 0xFF
-        return (r * 299 + g * 587 + b * 114) / 1000
-    }
-
     private fun createMissThrow(index: Int): ThrowResult {
         val position = when (index) {
             0 -> DartPosition(1.08f, 0f)
@@ -213,7 +191,6 @@ class CaptureRoundUseCase(
         private const val FRAME_INTERVAL_MS = 1000L
         private const val MAX_DARTS = 3
         private const val TRACK_FRAME_COUNT = 10
-        private const val GATE_DIFF_THRESHOLD = 7.5
         private const val DUPLICATE_DISTANCE_THRESHOLD = 0.08
     }
 }

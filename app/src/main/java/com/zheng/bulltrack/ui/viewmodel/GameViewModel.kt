@@ -66,9 +66,6 @@ class GameViewModel(
         if (_uiState.value.currentState != GameState.WAITING_FOR_THROW) {
             return
         }
-        if (dartDetector is NativeDartDetector) {
-            dartDetector.reset()
-        }
         roundJob?.cancel()
         roundJob = viewModelScope.launch {
             runCatching {
@@ -100,9 +97,6 @@ class GameViewModel(
         processRoundUseCase(throws)
         stateMachine.confirmResult()
         captureRoundUseCase.clearRound()
-        if (dartDetector is NativeDartDetector) {
-            dartDetector.reset()
-        }
         roundJob = null
     }
 
@@ -118,9 +112,6 @@ class GameViewModel(
         roundJob?.cancel()
         roundJob = null
         captureRoundUseCase.clearRound()
-        if (dartDetector is NativeDartDetector) {
-            dartDetector.reset()
-        }
         finishGameUseCase()
     }
 

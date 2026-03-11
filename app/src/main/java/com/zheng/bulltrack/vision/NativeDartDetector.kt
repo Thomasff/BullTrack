@@ -3,72 +3,86 @@ package com.zheng.bulltrack.vision
 import android.graphics.Bitmap
 import android.graphics.Color
 import com.zheng.bulltrack.domain.model.DartPosition
-import com.zheng.bulltrack.domain.model.RingType
 import com.zheng.bulltrack.domain.model.ThrowResult
+import com.zheng.bulltrack.domain.scoring.VirtualBoardScorer
 
 class NativeDartDetector : DartDetector {
-    
+
     init {
         System.loadLibrary("bulltrack")
     }
-    
+
     private external fun nativeInit()
     private external fun nativeRelease()
-    private external fun nativeDetect(
-        beforeData: ByteArray,
-        afterData: ByteArray,
+    private external fun nativeCreateSession(): Long
+    private external fun nativeDestroySession(sessionId: Long)
+    private external fun nativeStartRound(
+        sessionId: Long,
+        frameData: ByteArray,
         width: Int,
         height: Int
-    ): Array<DetectionResult>?
-    private external fun nativeReset()
-    private external fun nativeSetParams(minArea: Double, minAspectRatio: Double)
-    
+    )
+    private external fun nativeProcessFrame(
+        sessionId: Long,
+        frameData: ByteArray,
+        width: Int,
+        height: Int
+    ): NativeFrameProcessResult
+    private external fun nativeRedetectRound(sessionId: Long): Array<NativePointResult>?
+
     override fun init() {
         nativeInit()
     }
-    
+
     fun release() {
         nativeRelease()
     }
-    
-    fun reset() {
-        nativeReset()
-    }
-    
-    fun setParams(minArea: Double = 200.0, minAspectRatio: Double = 1.5) {
-        nativeSetParams(minArea, minAspectRatio)
-    }
-    
-    override fun detect(before: Bitmap, after: Bitmap): List<ThrowResult> {
-        if (before.width != after.width || before.height != after.height) {
-            throw IllegalArgumentException("Before and after images must have the same dimensions")
-        }
-        
-        val width = before.width
-        val height = before.height
-        
-        val beforeData = bitmapToByteArray(before)
-        val afterData = bitmapToByteArray(after)
-        
-        val results = nativeDetect(beforeData, afterData, width, height)
-            ?: return emptyList()
-        
-        return results.map { result ->
-            ThrowResult(
-                sector = result.sector,
-                ring = mapRingType(result.ringType),
-                score = result.score,
-                position = DartPosition(result.normalizedX, result.normalizedY)
-            )
+
+    override fun createSession(): Long = nativeCreateSession()
+
+    override fun destroySession(sessionId: Long) {
+        if (sessionId != 0L) {
+            nativeDestroySession(sessionId)
         }
     }
-    
+
+    override fun startRound(sessionId: Long, firstFrame: Bitmap) {
+        val frameData = bitmapToByteArray(firstFrame)
+        nativeStartRound(sessionId, frameData, firstFrame.width, firstFrame.height)
+    }
+
+    override fun processFrame(sessionId: Long, frame: Bitmap): FrameDetectionUpdate {
+        val result = nativeProcessFrame(
+            sessionId = sessionId,
+            frameData = bitmapToByteArray(frame),
+            width = frame.width,
+            height = frame.height
+        )
+        val newThrow = if (result.hasDetection) {
+            toThrowResult(result.normalizedX, result.normalizedY)
+        } else {
+            null
+        }
+        return FrameDetectionUpdate(
+            gateTriggered = result.gateTriggered,
+            gateReason = result.gateReason,
+            newThrow = newThrow
+        )
+    }
+
+    override fun redetect(sessionId: Long): List<ThrowResult> {
+        val points = nativeRedetectRound(sessionId) ?: return emptyList()
+        return points.map { point ->
+            toThrowResult(point.normalizedX, point.normalizedY)
+        }
+    }
+
     private fun bitmapToByteArray(bitmap: Bitmap): ByteArray {
         val width = bitmap.width
         val height = bitmap.height
         val pixels = IntArray(width * height)
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-        
+
         val byteArray = ByteArray(width * height * 4)
         for (i in pixels.indices) {
             val pixel = pixels[i]
@@ -80,16 +94,8 @@ class NativeDartDetector : DartDetector {
         }
         return byteArray
     }
-    
-    private fun mapRingType(ringType: Int): RingType {
-        return when (ringType) {
-            0 -> RingType.MISS
-            1 -> RingType.DOUBLE
-            2 -> RingType.TRIPLE
-            3 -> RingType.INNER_SINGLE
-            4 -> RingType.OUTER_BULL
-            5 -> RingType.INNER_BULL
-            else -> RingType.OUTER_SINGLE
-        }
+
+    private fun toThrowResult(normalizedX: Float, normalizedY: Float): ThrowResult {
+        return VirtualBoardScorer.calculateScore(DartPosition(normalizedX, normalizedY))
     }
 }
