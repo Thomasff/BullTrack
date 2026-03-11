@@ -1,9 +1,8 @@
 package com.zheng.bulltrack.ui.screens
 
-import android.view.ViewGroup
-import androidx.camera.core.Preview
-import androidx.camera.view.PreviewView
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,20 +17,16 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,16 +40,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.zheng.bulltrack.application.state.GameState
 import com.zheng.bulltrack.application.state.GameUiState
-import com.zheng.bulltrack.camera.CameraXManager
 import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.RingType
 import com.zheng.bulltrack.domain.model.ThrowResult
@@ -64,24 +55,13 @@ import kotlin.math.roundToInt
 @Composable
 fun GameScreen(
     uiState: GameUiState,
-    onCaptureBefore: () -> Unit,
-    onCaptureAfter: () -> Unit,
+    onStartRound: () -> Unit,
+    onEndRound: () -> Unit,
     onConfirmResult: () -> Unit,
+    onRedetect: () -> Unit,
     onManualAdjustPosition: (Int, DartPosition) -> Unit,
     onReset: () -> Unit
 ) {
-    val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
-
-    var cameraManager by remember { mutableStateOf<CameraXManager?>(null) }
-    var preview by remember { mutableStateOf<Preview?>(null) }
-
-    LaunchedEffect(Unit) {
-        cameraManager = CameraXManager(lifecycleOwner).also {
-            it.initialize(context)
-        }
-    }
-
     Column(modifier = Modifier.fillMaxSize()) {
         GameInfoHeader(
             currentPlayer = uiState.currentPlayer,
@@ -93,72 +73,81 @@ fun GameScreen(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth()
+                .background(Color(0xFF101820))
         ) {
-            AndroidView(
-                factory = { ctx ->
-                    PreviewView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT
-                        )
-                        scaleType = PreviewView.ScaleType.FILL_CENTER
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                RoundStatusCard(uiState)
 
-                        preview = Preview.Builder().build().also {
-                            it.setSurfaceProvider(surfaceProvider)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    when (uiState.currentState) {
+                        GameState.WAITING_FOR_THROW,
+                        GameState.ROUND_IN_PROGRESS,
+                        GameState.PROCESSING,
+                        GameState.SHOWING_RESULT -> {
+                            VirtualDartboardEditor(
+                                throws = uiState.currentThrows,
+                                editable = uiState.currentState == GameState.SHOWING_RESULT,
+                                onThrowPositionChanged = onManualAdjustPosition,
+                                modifier = Modifier.align(Alignment.TopCenter)
+                            )
                         }
+
+                        GameState.GAME_OVER -> {
+                            GameOverOverlay(
+                                winner = uiState.winner,
+                                scoreBoard = uiState.scoreBoard,
+                                onPlayAgain = onReset,
+                                modifier = Modifier.align(Alignment.Center)
+                            )
+                        }
+
+                        else -> Unit
                     }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+                }
+            }
 
             when (uiState.currentState) {
                 GameState.WAITING_FOR_THROW -> {
-                    CaptureButton(
-                        text = "拍摄空靶",
-                        onClick = onCaptureBefore,
+                    PrimaryActionButton(
+                        text = "开始本轮",
+                        onClick = onStartRound,
                         modifier = Modifier.align(Alignment.BottomCenter)
                     )
                 }
 
-                GameState.CAPTURING_START -> {
-                    CaptureButton(
-                        text = "拍摄投掷后",
-                        onClick = onCaptureAfter,
-                        modifier = Modifier.align(Alignment.BottomCenter)
-                    )
-                }
-
-                GameState.CAPTURING_END,
+                GameState.ROUND_IN_PROGRESS,
                 GameState.PROCESSING -> {
-                    CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.Center),
-                        color = MaterialTheme.colorScheme.primary
+                    if (uiState.currentState == GameState.PROCESSING) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.align(Alignment.Center),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    PrimaryActionButton(
+                        text = "结束本轮",
+                        onClick = onEndRound,
+                        modifier = Modifier.align(Alignment.BottomCenter)
                     )
                 }
 
                 GameState.SHOWING_RESULT -> {
-                    VirtualDartboardEditor(
-                        throws = uiState.currentThrows,
-                        onThrowPositionChanged = onManualAdjustPosition,
-                        modifier = Modifier
-                            .align(Alignment.TopCenter)
-                            .padding(top = 8.dp)
-                    )
-
                     ResultOverlay(
                         throws = uiState.currentThrows,
                         roundScore = uiState.currentThrows.sumOf { it.score },
+                        canRedetect = uiState.canRedetect,
+                        onRedetect = onRedetect,
                         onConfirm = onConfirmResult,
                         modifier = Modifier.align(Alignment.BottomCenter)
-                    )
-                }
-
-                GameState.GAME_OVER -> {
-                    GameOverOverlay(
-                        winner = uiState.winner,
-                        scoreBoard = uiState.scoreBoard,
-                        onPlayAgain = onReset,
-                        modifier = Modifier.align(Alignment.Center)
                     )
                 }
 
@@ -169,6 +158,37 @@ fun GameScreen(
                 Snackbar(modifier = Modifier.align(Alignment.BottomCenter)) {
                     Text(error)
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RoundStatusCard(uiState: GameUiState) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                text = when (uiState.currentState) {
+                    GameState.WAITING_FOR_THROW -> "等待开始"
+                    GameState.ROUND_IN_PROGRESS -> "连续检测中"
+                    GameState.PROCESSING -> "处理中"
+                    GameState.SHOWING_RESULT -> "本轮结果"
+                    GameState.GAME_OVER -> "比赛结束"
+                    else -> "BullTrack"
+                },
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "已识别 ${uiState.detectedDartCount}/${uiState.maxDartsPerRound} 支飞镖",
+                style = MaterialTheme.typography.bodyMedium
+            )
+
+            uiState.statusMessage?.let { status ->
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(status, style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -225,7 +245,7 @@ fun GameInfoHeader(
 }
 
 @Composable
-fun CaptureButton(
+private fun PrimaryActionButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -234,17 +254,10 @@ fun CaptureButton(
         onClick = onClick,
         modifier = modifier
             .padding(32.dp)
-            .size(80.dp),
+            .size(width = 160.dp, height = 56.dp),
         shape = CircleShape
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = Icons.Default.CameraAlt,
-                contentDescription = null,
-                modifier = Modifier.size(32.dp)
-            )
-            Text(text, style = MaterialTheme.typography.labelSmall)
-        }
+        Text(text)
     }
 }
 
@@ -252,6 +265,8 @@ fun CaptureButton(
 fun ResultOverlay(
     throws: List<ThrowResult>,
     roundScore: Int,
+    canRedetect: Boolean,
+    onRedetect: () -> Unit,
     onConfirm: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -268,14 +283,18 @@ fun ResultOverlay(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            throws.forEachIndexed { index, throwResult ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("飞镖 ${index + 1}", style = MaterialTheme.typography.bodySmall)
-                    Text(formatThrow(throwResult), style = MaterialTheme.typography.bodySmall)
-                    Text(throwResult.score.toString(), style = MaterialTheme.typography.bodySmall)
+            if (throws.isEmpty()) {
+                Text("当前没有识别到飞镖", style = MaterialTheme.typography.bodySmall)
+            } else {
+                throws.forEachIndexed { index, throwResult ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("飞镖 ${index + 1}", style = MaterialTheme.typography.bodySmall)
+                        Text(formatThrow(throwResult), style = MaterialTheme.typography.bodySmall)
+                        Text(throwResult.score.toString(), style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
 
@@ -295,11 +314,22 @@ fun ResultOverlay(
 
             Spacer(modifier = Modifier.height(10.dp))
 
+            if (canRedetect) {
+                Button(
+                    onClick = onRedetect,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("重新识别")
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
             Button(
                 onClick = onConfirm,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("确认")
+                Text("确认结果")
             }
         }
     }
@@ -308,6 +338,7 @@ fun ResultOverlay(
 @Composable
 private fun VirtualDartboardEditor(
     throws: List<ThrowResult>,
+    editable: Boolean,
     onThrowPositionChanged: (Int, DartPosition) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -339,7 +370,7 @@ private fun VirtualDartboardEditor(
                 .padding(top = 12.dp)
                 .onSizeChanged { boardCanvasSize = it }
         ) {
-            androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
                 drawVirtualBoard(
                     hover = hoverRegion,
                     lift = lift
@@ -354,6 +385,40 @@ private fun VirtualDartboardEditor(
                     val touchSizeDp = 72.dp
                     val touchSizePx = with(density) { touchSizeDp.toPx() }
 
+                    val dragModifier = if (editable) {
+                        Modifier.pointerInput(index, boardCanvasSize) {
+                            var currentPos = latestPosition
+                            detectDragGestures(
+                                onDragStart = {
+                                    currentPos = latestPosition
+                                    draggingIndex = index
+                                    hoverRegion = VirtualBoardScorer.calculateScore(currentPos)
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    val currentCenter = normalizedToCanvas(currentPos, boardCanvasSize)
+                                    val newCenter = currentCenter + dragAmount
+                                    val unclamped = canvasToNormalized(newCenter, boardCanvasSize)
+                                    currentPos = VirtualBoardScorer.clampToBoard(unclamped)
+                                    hoverRegion = VirtualBoardScorer.calculateScore(currentPos)
+                                    onThrowPositionChanged(index, currentPos)
+                                },
+                                onDragEnd = {
+                                    val snapped = VirtualBoardScorer.snapToRegionCenter(currentPos)
+                                    onThrowPositionChanged(index, snapped)
+                                    draggingIndex = null
+                                    hoverRegion = null
+                                },
+                                onDragCancel = {
+                                    draggingIndex = null
+                                    hoverRegion = null
+                                }
+                            )
+                        }
+                    } else {
+                        Modifier
+                    }
+
                     Box(
                         modifier = Modifier
                             .size(touchSizeDp)
@@ -363,35 +428,7 @@ private fun VirtualDartboardEditor(
                                     (markerCenter.y - touchSizePx / 2f).roundToInt()
                                 )
                             }
-                            .pointerInput(index, boardCanvasSize) {
-                                var currentPos = latestPosition
-                                detectDragGestures(
-                                    onDragStart = {
-                                        currentPos = latestPosition
-                                        draggingIndex = index
-                                        hoverRegion = VirtualBoardScorer.calculateScore(currentPos)
-                                    },
-                                    onDrag = { change, dragAmount ->
-                                        change.consume()
-                                        val currentCenter = normalizedToCanvas(currentPos, boardCanvasSize)
-                                        val newCenter = currentCenter + dragAmount
-                                        val unclamped = canvasToNormalized(newCenter, boardCanvasSize)
-                                        currentPos = VirtualBoardScorer.clampToBoard(unclamped)
-                                        hoverRegion = VirtualBoardScorer.calculateScore(currentPos)
-                                        onThrowPositionChanged(index, currentPos)
-                                    },
-                                    onDragEnd = {
-                                        val snapped = VirtualBoardScorer.snapToRegionCenter(currentPos)
-                                        onThrowPositionChanged(index, snapped)
-                                        draggingIndex = null
-                                        hoverRegion = null
-                                    },
-                                    onDragCancel = {
-                                        draggingIndex = null
-                                        hoverRegion = null
-                                    }
-                                )
-                            },
+                            .then(dragModifier),
                         contentAlignment = Alignment.Center
                     ) {
                         val color = markerColors[index % markerColors.size]
@@ -402,7 +439,7 @@ private fun VirtualDartboardEditor(
                         val markerArm = with(density) {
                             if (draggingIndex == index) 11.dp.toPx() else 9.dp.toPx()
                         }
-                        androidx.compose.foundation.Canvas(modifier = Modifier.size(28.dp)) {
+                        Canvas(modifier = Modifier.size(28.dp)) {
                             val c = center
                             drawLine(
                                 color = markerColor,
@@ -700,4 +737,3 @@ fun GameOverOverlay(
         }
     }
 }
-

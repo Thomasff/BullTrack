@@ -16,6 +16,11 @@ data class GameUiState(
     val currentThrows: List<ThrowResult> = emptyList(),
     val winner: Player? = null,
     val errorMessage: String? = null,
+    val statusMessage: String? = null,
     val roundNumber: Int = 0,
-    val throwNumber: Int = 0
+    val throwNumber: Int = 0,
+    val detectedDartCount: Int = 0,
+    val maxDartsPerRound: Int = 3,
+    val isRoundActive: Boolean = false,
+    val canRedetect: Boolean = false
 )

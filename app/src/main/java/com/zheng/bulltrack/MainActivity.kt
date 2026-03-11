@@ -1,20 +1,15 @@
 package com.zheng.bulltrack
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.*
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -23,27 +18,18 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.zheng.bulltrack.domain.model.GameType
 import com.zheng.bulltrack.ui.navigation.Screen
-import com.zheng.bulltrack.ui.screens.*
+import com.zheng.bulltrack.ui.screens.GameScreen
+import com.zheng.bulltrack.ui.screens.HomeScreen
+import com.zheng.bulltrack.ui.screens.ModeSelectScreen
+import com.zheng.bulltrack.ui.screens.PlayerSetupScreen
 import com.zheng.bulltrack.ui.theme.BullTrackTheme
 import com.zheng.bulltrack.ui.viewmodel.GameViewModel
 import com.zheng.bulltrack.ui.viewmodel.ViewModelFactory
 
 class MainActivity : ComponentActivity() {
-    
-    private val requestPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (!isGranted) {
-        }
-    }
-    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        if (!hasCameraPermission()) {
-            requestPermissionLauncher.launch(Manifest.permission.CAMERA)
-        }
-        
+
         setContent {
             BullTrackTheme {
                 Surface(
@@ -55,44 +41,15 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    
-    private fun hasCameraPermission(): Boolean {
-        return ContextCompat.checkSelfPermission(
-            this,
-            Manifest.permission.CAMERA
-        ) == PackageManager.PERMISSION_GRANTED
-    }
 }
 
-@Composable
+@androidx.compose.runtime.Composable
 fun BullTrackApp() {
     val navController = rememberNavController()
     val context = androidx.compose.ui.platform.LocalContext.current
     val viewModel: GameViewModel = viewModel { ViewModelFactory.createGameViewModel(context) }
     val uiState by viewModel.uiState.collectAsState()
-    
-    var selectedGameType by remember { mutableStateOf<GameType?>(null) }
-    
-    // ========== 调试模式代码开始 ==========
-    // 调试模式开关：将 DEBUG_MODE 改为 true 启用调试
-    val DEBUG_MODE = true
-    
-    // 调试模式：加载预设图片
-    fun loadDebugBitmap(resourceId: Int): Bitmap? {
-        Log.d("DEBUG", "loadDebugBitmap called with resourceId: $resourceId")
-        return try {
-            context.resources.openRawResource(resourceId).use { inputStream ->
-                val bitmap = BitmapFactory.decodeStream(inputStream)
-                Log.d("DEBUG", "Bitmap loaded: ${bitmap != null}, size: ${bitmap?.width}x${bitmap?.height}")
-                bitmap
-            }
-        } catch (e: Exception) {
-            Log.e("DEBUG", "Failed to load bitmap", e)
-            null
-        }
-    }
-    // ========== 调试模式代码结束 ==========
-    
+
     NavHost(
         navController = navController,
         startDestination = Screen.Home.route
@@ -104,11 +61,10 @@ fun BullTrackApp() {
                 }
             )
         }
-        
+
         composable(Screen.ModeSelect.route) {
             ModeSelectScreen(
                 onModeSelected = { gameType ->
-                    selectedGameType = gameType
                     viewModel.selectGameMode(gameType)
                     navController.navigate(Screen.PlayerSetup.createRoute(gameType.name))
                 },
@@ -117,7 +73,7 @@ fun BullTrackApp() {
                 }
             )
         }
-        
+
         composable(
             route = Screen.PlayerSetup.route,
             arguments = listOf(
@@ -127,10 +83,10 @@ fun BullTrackApp() {
             val gameTypeArg = backStackEntry.arguments?.getString("gameType")
             val gameType = try {
                 GameType.valueOf(gameTypeArg ?: "HIGH_SCORE")
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 GameType.HIGH_SCORE
             }
-            
+
             PlayerSetupScreen(
                 gameType = gameType,
                 onStartGame = { playerNames ->
@@ -142,36 +98,21 @@ fun BullTrackApp() {
                 }
             )
         }
-        
+
         composable(Screen.Game.route) {
             GameScreen(
                 uiState = uiState,
-                onCaptureBefore = {
-                    // ========== 调试模式代码开始 ==========
-                    Log.d("DEBUG", "onCaptureBefore clicked, DEBUG_MODE: $DEBUG_MODE")
-                    if (DEBUG_MODE) {
-                        val bitmap = loadDebugBitmap(com.zheng.bulltrack.R.raw.debug_before)
-                        bitmap?.let { 
-                            Log.d("DEBUG", "Calling captureBeforeImage")
-                            viewModel.captureBeforeImage(it) 
-                        }
-                    }
-                    // ========== 调试模式代码结束 ==========
+                onStartRound = {
+                    viewModel.startRound()
                 },
-                onCaptureAfter = {
-                    // ========== 调试模式代码开始 ==========
-                    Log.d("DEBUG", "onCaptureAfter clicked, DEBUG_MODE: $DEBUG_MODE")
-                    if (DEBUG_MODE) {
-                        val bitmap = loadDebugBitmap(com.zheng.bulltrack.R.raw.debug_after)
-                        bitmap?.let { 
-                            Log.d("DEBUG", "Calling captureAfterImage")
-                            viewModel.captureAfterImage(it) 
-                        }
-                    }
-                    // ========== 调试模式代码结束 ==========
+                onEndRound = {
+                    viewModel.endRound()
                 },
                 onConfirmResult = {
                     viewModel.confirmResult()
+                },
+                onRedetect = {
+                    viewModel.redetectRound()
                 },
                 onManualAdjustPosition = { index, position ->
                     viewModel.updatePendingThrowPosition(index, position)
