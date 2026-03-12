@@ -134,7 +134,6 @@ fun GameScreen(
                     contentAlignment = Alignment.TopCenter
                 ) {
                     when (uiState.currentState) {
-                        GameState.WAITING_FOR_THROW,
                         GameState.ROUND_IN_PROGRESS,
                         GameState.PROCESSING,
                         GameState.SHOWING_RESULT -> {
