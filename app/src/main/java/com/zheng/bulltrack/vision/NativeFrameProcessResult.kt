@@ -5,6 +5,7 @@ data class NativeFrameProcessResult(
     val gateReason: String,
     val hasDetection: Boolean,
     val normalizedX: Float,
-    val normalizedY: Float
+    val normalizedY: Float,
+    val gateDebugImages: Array<NativeDebugImageResult>?,
+    val preciseDebugImages: Array<NativeDebugImageResult>?
 )
-

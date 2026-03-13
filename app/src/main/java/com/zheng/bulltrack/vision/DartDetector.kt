@@ -7,7 +7,7 @@ interface DartDetector {
     fun init()
     fun createSession(): Long
     fun destroySession(sessionId: Long)
-    fun startRound(sessionId: Long, firstFrame: Bitmap)
+    fun startRound(sessionId: Long, firstFrame: Bitmap): StartRoundDetectionUpdate
     fun processFrame(sessionId: Long, frame: Bitmap): FrameDetectionUpdate
     fun redetect(sessionId: Long): List<ThrowResult>
 }

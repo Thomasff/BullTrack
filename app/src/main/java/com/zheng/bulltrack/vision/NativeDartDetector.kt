@@ -21,7 +21,7 @@ class NativeDartDetector : DartDetector {
         frameData: ByteArray,
         width: Int,
         height: Int
-    )
+    ): NativeStartRoundResult
     private external fun nativeProcessFrame(
         sessionId: Long,
         frameData: ByteArray,
@@ -46,9 +46,12 @@ class NativeDartDetector : DartDetector {
         }
     }
 
-    override fun startRound(sessionId: Long, firstFrame: Bitmap) {
+    override fun startRound(sessionId: Long, firstFrame: Bitmap): StartRoundDetectionUpdate {
         val frameData = bitmapToByteArray(firstFrame)
-        nativeStartRound(sessionId, frameData, firstFrame.width, firstFrame.height)
+        val result = nativeStartRound(sessionId, frameData, firstFrame.width, firstFrame.height)
+        return StartRoundDetectionUpdate(
+            debugImages = result.debugImages.orEmpty().map(::toDebugImageArtifact)
+        )
     }
 
     override fun processFrame(sessionId: Long, frame: Bitmap): FrameDetectionUpdate {
@@ -66,7 +69,9 @@ class NativeDartDetector : DartDetector {
         return FrameDetectionUpdate(
             gateTriggered = result.gateTriggered,
             gateReason = result.gateReason,
-            newThrow = newThrow
+            newThrow = newThrow,
+            gateDebugImages = result.gateDebugImages.orEmpty().map(::toDebugImageArtifact),
+            preciseDebugImages = result.preciseDebugImages.orEmpty().map(::toDebugImageArtifact)
         )
     }
 
@@ -93,6 +98,13 @@ class NativeDartDetector : DartDetector {
             byteArray[offset + 3] = Color.alpha(pixel).toByte()
         }
         return byteArray
+    }
+
+    private fun toDebugImageArtifact(result: NativeDebugImageResult): DebugImageArtifact {
+        return DebugImageArtifact(
+            fileName = result.fileName,
+            jpegBytes = result.jpegBytes
+        )
     }
 
     private fun toThrowResult(normalizedX: Float, normalizedY: Float): ThrowResult {

@@ -3,20 +3,26 @@ package com.zheng.bulltrack.application.usecase
 import android.graphics.Bitmap
 import com.zheng.bulltrack.application.statemachine.GameStateMachine
 import com.zheng.bulltrack.camera.RoundFrameSource
+import com.zheng.bulltrack.debug.DebugImageSaver
 import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.RingType
 import com.zheng.bulltrack.domain.model.ThrowResult
 import com.zheng.bulltrack.vision.DartDetector
 import kotlinx.coroutines.delay
 import kotlin.math.hypot
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class CaptureRoundUseCase(
     private val stateMachine: GameStateMachine,
     private val dartDetector: DartDetector,
-    private val frameSource: RoundFrameSource
+    private val frameSource: RoundFrameSource,
+    private val debugImageSaver: DebugImageSaver
 ) {
     private data class RoundSession(
         val nativeSessionId: Long,
+        val roundId: String,
         val throws: MutableList<ThrowResult> = mutableListOf(),
         var consumedFrameCount: Int = 1,
         var isDevelopmentExposureFallback: Boolean = false
@@ -31,9 +37,23 @@ class CaptureRoundUseCase(
         frameSource.prepareRound()
         val firstFrame = frameSource.captureFirstFrame()
         val nativeSessionId = dartDetector.createSession()
-        dartDetector.startRound(nativeSessionId, firstFrame.bitmap)
+        val roundId = createRoundId()
+        debugImageSaver.saveRawBitmap(
+            roundId = roundId,
+            fileName = buildFileName(roundId, 1, "s00_raw_first"),
+            bitmap = firstFrame.bitmap
+        )
+        val startUpdate = runCatching {
+            dartDetector.startRound(nativeSessionId, firstFrame.bitmap)
+        }.getOrElse { error ->
+            dartDetector.destroySession(nativeSessionId)
+            frameSource.finishRound()
+            throw error
+        }
+        debugImageSaver.saveArtifacts(roundId, startUpdate.debugImages)
         currentSession = RoundSession(
             nativeSessionId = nativeSessionId,
+            roundId = roundId,
             isDevelopmentExposureFallback = firstFrame.cameraConfig?.isDevelopmentExposureFallback == true
         )
         val startMessage = firstFrame.cameraConfig?.statusMessage ?: "已拍摄第 1 张图片，开始连续检测"
@@ -49,6 +69,11 @@ class CaptureRoundUseCase(
                 break
             }
 
+            debugImageSaver.saveRawBitmap(
+                roundId = roundId,
+                fileName = buildFileName(roundId, frameIndex, "s00_raw_frame"),
+                bitmap = frame.bitmap
+            )
             val shouldStop = processNextFrame(frameIndex = frameIndex, frame = frame.bitmap)
             if (shouldStop) {
                 break
@@ -99,7 +124,7 @@ class CaptureRoundUseCase(
         frameSource.finishRound()
     }
 
-    private fun processNextFrame(frameIndex: Int, frame: Bitmap): Boolean {
+    private suspend fun processNextFrame(frameIndex: Int, frame: Bitmap): Boolean {
         val session = currentSession ?: return true
         session.consumedFrameCount = frameIndex
 
@@ -112,6 +137,9 @@ class CaptureRoundUseCase(
             )
             return false
         }
+
+        debugImageSaver.saveArtifacts(session.roundId, frameUpdate.gateDebugImages)
+        debugImageSaver.saveArtifacts(session.roundId, frameUpdate.preciseDebugImages)
 
         if (!frameUpdate.gateTriggered) {
             val gateMessage = buildString {
@@ -217,5 +245,12 @@ class CaptureRoundUseCase(
         private const val FRAME_INTERVAL_MS = 1000L
         private const val MAX_DARTS = 3
         private const val DUPLICATE_DISTANCE_THRESHOLD = 0.08
+        private val ROUND_ID_FORMAT = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+    }
+
+    private fun createRoundId(): String = ROUND_ID_FORMAT.format(Date())
+
+    private fun buildFileName(roundId: String, frameIndex: Int, stage: String): String {
+        return "bt_${roundId}_f${frameIndex.toString().padStart(3, '0')}_$stage.jpg"
     }
 }

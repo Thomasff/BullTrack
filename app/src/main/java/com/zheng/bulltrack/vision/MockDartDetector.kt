@@ -28,9 +28,9 @@ class MockDartDetector(
         delegate.destroySession(sessionId)
     }
 
-    override fun startRound(sessionId: Long, firstFrame: Bitmap) {
+    override fun startRound(sessionId: Long, firstFrame: Bitmap): StartRoundDetectionUpdate {
         loadDebugBitmapsIfNeeded()
-        delegate.startRound(sessionId, debugBeforeBitmap ?: firstFrame)
+        return delegate.startRound(sessionId, debugBeforeBitmap ?: firstFrame)
     }
 
     override fun processFrame(sessionId: Long, frame: Bitmap): FrameDetectionUpdate {

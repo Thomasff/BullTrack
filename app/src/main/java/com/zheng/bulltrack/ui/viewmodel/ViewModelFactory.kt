@@ -9,6 +9,7 @@ import com.zheng.bulltrack.application.usecase.StartGameUseCase
 import com.zheng.bulltrack.camera.CameraManager
 import com.zheng.bulltrack.camera.CameraRoundFrameSource
 import com.zheng.bulltrack.camera.CameraXManager
+import com.zheng.bulltrack.debug.DebugImageSaver
 import com.zheng.bulltrack.vision.DartDetector
 import com.zheng.bulltrack.vision.NativeDartDetector
 
@@ -26,12 +27,14 @@ class ViewModelFactory {
                 initialize(context.applicationContext)
             }
             val frameSource = CameraRoundFrameSource(cameraManager)
+            val debugImageSaver = DebugImageSaver(context.applicationContext)
 
             val startGameUseCase = StartGameUseCase(stateMachine)
             val captureRoundUseCase = CaptureRoundUseCase(
                 stateMachine = stateMachine,
                 dartDetector = dartDetector,
-                frameSource = frameSource
+                frameSource = frameSource,
+                debugImageSaver = debugImageSaver
             )
             val processRoundUseCase = ProcessRoundUseCase(stateMachine)
             val finishGameUseCase = FinishGameUseCase(stateMachine)

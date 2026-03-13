@@ -48,12 +48,58 @@ void ThrowJavaRuntimeException(JNIEnv* env, const std::string& message) {
     }
 }
 
+jobject CreateNativeDebugImageResult(JNIEnv* env, const bulltrack::DebugImageArtifact& artifact) {
+    jclass result_class = env->FindClass("com/zheng/bulltrack/vision/NativeDebugImageResult");
+    jmethodID constructor = env->GetMethodID(result_class, "<init>", "(Ljava/lang/String;[B)V");
+    jstring file_name = env->NewStringUTF(artifact.file_name.c_str());
+    jbyteArray jpeg_bytes = env->NewByteArray(static_cast<jsize>(artifact.jpeg_bytes.size()));
+    if (jpeg_bytes != nullptr && !artifact.jpeg_bytes.empty()) {
+        env->SetByteArrayRegion(
+            jpeg_bytes,
+            0,
+            static_cast<jsize>(artifact.jpeg_bytes.size()),
+            reinterpret_cast<const jbyte*>(artifact.jpeg_bytes.data()));
+    }
+    jobject obj = env->NewObject(result_class, constructor, file_name, jpeg_bytes);
+    env->DeleteLocalRef(file_name);
+    env->DeleteLocalRef(jpeg_bytes);
+    return obj;
+}
+
+jobjectArray CreateNativeDebugImageArray(JNIEnv* env, const std::vector<bulltrack::DebugImageArtifact>& artifacts) {
+    jclass result_class = env->FindClass("com/zheng/bulltrack/vision/NativeDebugImageResult");
+    jobjectArray array = env->NewObjectArray(static_cast<jsize>(artifacts.size()), result_class, nullptr);
+    for (size_t i = 0; i < artifacts.size(); ++i) {
+        jobject obj = CreateNativeDebugImageResult(env, artifacts[i]);
+        env->SetObjectArrayElement(array, static_cast<jsize>(i), obj);
+        env->DeleteLocalRef(obj);
+    }
+    return array;
+}
+
+jobject CreateNativeStartRoundResult(JNIEnv* env, const bulltrack::AndroidStartRoundResult& result) {
+    jclass result_class = env->FindClass("com/zheng/bulltrack/vision/NativeStartRoundResult");
+    jmethodID constructor = env->GetMethodID(
+        result_class,
+        "<init>",
+        "([Lcom/zheng/bulltrack/vision/NativeDebugImageResult;)V");
+    jobjectArray debug_images = CreateNativeDebugImageArray(env, result.debug_images);
+    jobject obj = env->NewObject(result_class, constructor, debug_images);
+    env->DeleteLocalRef(debug_images);
+    return obj;
+}
+
 jobject CreateNativeFrameProcessResult(JNIEnv* env, const bulltrack::AndroidFrameProcessResult& result) {
     jclass result_class = env->FindClass("com/zheng/bulltrack/vision/NativeFrameProcessResult");
-    jmethodID constructor = env->GetMethodID(result_class, "<init>", "(ZLjava/lang/String;ZFF)V");
+    jmethodID constructor = env->GetMethodID(
+        result_class,
+        "<init>",
+        "(ZLjava/lang/String;ZFF[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;)V");
     jstring reason = env->NewStringUTF(result.gate_reason.c_str());
     const float normalized_x = result.detected_point_norm.has_value() ? result.detected_point_norm->x : 0.0f;
     const float normalized_y = result.detected_point_norm.has_value() ? result.detected_point_norm->y : 0.0f;
+    jobjectArray gate_debug_images = CreateNativeDebugImageArray(env, result.gate_debug_images);
+    jobjectArray precise_debug_images = CreateNativeDebugImageArray(env, result.precise_debug_images);
     jobject obj = env->NewObject(
         result_class,
         constructor,
@@ -61,8 +107,12 @@ jobject CreateNativeFrameProcessResult(JNIEnv* env, const bulltrack::AndroidFram
         reason,
         static_cast<jboolean>(result.has_detection),
         normalized_x,
-        normalized_y);
+        normalized_y,
+        gate_debug_images,
+        precise_debug_images);
     env->DeleteLocalRef(reason);
+    env->DeleteLocalRef(gate_debug_images);
+    env->DeleteLocalRef(precise_debug_images);
     return obj;
 }
 
@@ -125,7 +175,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeDestroySession(
     delete session;
 }
 
-JNIEXPORT void JNICALL
+JNIEXPORT jobject JNICALL
 Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeStartRound(
     JNIEnv* env,
     jobject thiz,
@@ -137,14 +187,16 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeStartRound(
     auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
     if (session == nullptr) {
         ThrowJavaRuntimeException(env, "native session 无效");
-        return;
+        return nullptr;
     }
     try {
         cv::Mat frame_bgr = ByteArrayToBgrMat(env, frame_data, width, height);
-        session->StartRound(frame_bgr);
+        bulltrack::AndroidStartRoundResult result = session->StartRound(frame_bgr);
+        return CreateNativeStartRoundResult(env, result);
     } catch (const std::exception& error) {
         LOGE("nativeStartRound failed: %s", error.what());
         ThrowJavaRuntimeException(env, error.what());
+        return nullptr;
     }
 }
 

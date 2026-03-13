@@ -8,14 +8,148 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <tuple>
+#include <utility>
 
 namespace bulltrack {
 namespace {
 
 using BoxTuple = std::tuple<int, int, int, int, int, int>;
+
+struct PreciseDetectionDebugResult {
+    SingleDartDetectionResult detection_result;
+    std::vector<DebugImageArtifact> debug_images;
+};
+
+std::vector<std::uint8_t> EncodeJpegBytes(const cv::Mat& image) {
+    std::vector<std::uint8_t> buffer;
+    std::vector<int> params{cv::IMWRITE_JPEG_QUALITY, 95};
+    if (!cv::imencode(".jpg", image, buffer, params)) {
+        throw std::runtime_error("调试图 JPEG 编码失败");
+    }
+    return buffer;
+}
+
+cv::Mat EnsureColorForDebug(const cv::Mat& image) {
+    if (image.channels() == 3) {
+        return image.clone();
+    }
+    cv::Mat color;
+    cv::cvtColor(image, color, cv::COLOR_GRAY2BGR);
+    return color;
+}
+
+void AppendDebugImage(
+    std::vector<DebugImageArtifact>& output,
+    int frame_index,
+    const std::string& step_code,
+    const std::string& stage_name,
+    const cv::Mat& image) {
+    char file_name[128];
+    std::snprintf(
+        file_name,
+        sizeof(file_name),
+        "f%03d_%s_%s.jpg",
+        frame_index,
+        step_code.c_str(),
+        stage_name.c_str());
+    output.push_back(DebugImageArtifact{
+        file_name,
+        EncodeJpegBytes(image)
+    });
+}
+
+void AppendDebugImageIfNotEmpty(
+    std::vector<DebugImageArtifact>& output,
+    int frame_index,
+    const std::string& step_code,
+    const std::string& stage_name,
+    const cv::Mat& image) {
+    if (image.empty()) {
+        return;
+    }
+    AppendDebugImage(output, frame_index, step_code, stage_name, image);
+}
+
+cv::Mat DrawBoardCenterRadiusDebugImage(
+    const cv::Mat& image_bgr,
+    const BoardCircle& board_circle,
+    bool draw_red_radius_regions,
+    const std::vector<cv::Mat>& red_region_masks) {
+    cv::Mat debug_image = image_bgr.clone();
+    cv::circle(debug_image, cv::Point(board_circle.cx, board_circle.cy), board_circle.radius, cv::Scalar(0, 255, 255), 3);
+    cv::circle(debug_image, cv::Point(board_circle.cx, board_circle.cy), 8, cv::Scalar(0, 0, 255), -1);
+    if (draw_red_radius_regions) {
+        static const cv::Scalar kRegionColors[3] = {
+            cv::Scalar(0, 165, 255),
+            cv::Scalar(255, 255, 0),
+            cv::Scalar(255, 0, 255)
+        };
+        const size_t draw_count = std::min<size_t>(3, red_region_masks.size());
+        for (size_t i = 0; i < draw_count; ++i) {
+            if (red_region_masks[i].empty()) {
+                continue;
+            }
+            std::vector<std::vector<cv::Point>> contours;
+            cv::findContours(red_region_masks[i], contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+            if (contours.empty()) {
+                continue;
+            }
+            cv::drawContours(debug_image, contours, -1, kRegionColors[i], 2);
+            std::vector<cv::Point> merged_points;
+            for (const auto& contour : contours) {
+                merged_points.insert(merged_points.end(), contour.begin(), contour.end());
+            }
+            if (merged_points.empty()) {
+                continue;
+            }
+            cv::Rect bbox = cv::boundingRect(merged_points);
+            const std::string label = "R" + std::to_string(static_cast<int>(i + 1));
+            cv::putText(
+                debug_image,
+                label,
+                cv::Point(bbox.x, std::max(16, bbox.y - 6)),
+                cv::FONT_HERSHEY_SIMPLEX,
+                0.6,
+                kRegionColors[i],
+                2);
+        }
+    }
+    return debug_image;
+}
+
+cv::Mat DrawLongestBoxDebugImage(const cv::Mat& binary_img, const std::vector<BoxTuple>& boxes) {
+    cv::Mat debug_image = EnsureColorForDebug(binary_img);
+    if (boxes.empty()) {
+        return debug_image;
+    }
+    const auto longest_it = std::max_element(boxes.begin(), boxes.end(), [](const BoxTuple& lhs, const BoxTuple& rhs) {
+        return std::get<4>(lhs) < std::get<4>(rhs);
+    });
+    for (const auto& box : boxes) {
+        const bool is_longest = &box == &(*longest_it);
+        const auto [x, y, width, height, long_edge, area] = box;
+        (void)long_edge;
+        (void)area;
+        const cv::Scalar color = is_longest ? cv::Scalar(0, 255, 255) : cv::Scalar(255, 0, 0);
+        cv::rectangle(debug_image, cv::Rect(x, y, width, height), color, is_longest ? 2 : 1);
+    }
+    return debug_image;
+}
+
+cv::Mat DrawTipPointOnBinaryImage(const cv::Mat& binary_img, const std::optional<cv::Point>& tip_point) {
+    cv::Mat debug_image = EnsureColorForDebug(binary_img);
+    if (tip_point.has_value()) {
+        cv::circle(debug_image, tip_point.value(), 8, cv::Scalar(0, 255, 0), -1);
+    } else {
+        cv::putText(debug_image, "no_tip", cv::Point(16, 32), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 255), 2);
+    }
+    return debug_image;
+}
 
 cv::Mat ResizeLongEdgeTo720(const cv::Mat& image, int long_edge) {
     const int h = image.rows;
@@ -156,10 +290,11 @@ double ComputeBoxLongShortRatio(const std::optional<BoxTuple>& box) {
     return static_cast<double>(longer_edge) / static_cast<double>(short_edge);
 }
 
-SingleDartDetectionResult DetectSingleDartOnFrames(
+PreciseDetectionDebugResult DetectSingleDartOnFrames(
     const cv::Mat& before_bgr,
     const cv::Mat& after_bgr,
-    const PipelineConfig& config) {
+    const PipelineConfig& config,
+    int frame_index) {
     cv::Mat before_view = EnhanceWarpedImage(
         before_bgr,
         config.enhancement.saturation_scale,
@@ -204,7 +339,29 @@ SingleDartDetectionResult DetectSingleDartOnFrames(
             board_circle.cy,
             board_circle.radius);
     }
-    return result;
+    DiffBinaryOutputs outputs = BuildDiffBinaryOutputs(
+        alignment.before_gray_final,
+        alignment.after_gray_final,
+        board_circle.cx,
+        board_circle.cy,
+        board_circle.radius,
+        single_config);
+    auto [filtered_mask, filtered_components] = FilterConnectedComponents(outputs.binary_img, single_config.min_area, false);
+
+    std::vector<DebugImageArtifact> debug_images;
+    AppendDebugImage(debug_images, frame_index, "s30", "precise_thresh", outputs.thresh);
+    AppendDebugImage(debug_images, frame_index, "s31", "precise_morph_area_filtered", filtered_mask * 255);
+    AppendDebugImage(
+        debug_images,
+        frame_index,
+        "s32",
+        "precise_tip_marked",
+        DrawTipPointOnBinaryImage(filtered_mask * 255, result.tip_point));
+
+    PreciseDetectionDebugResult debug_result;
+    debug_result.detection_result = std::move(result);
+    debug_result.debug_images = std::move(debug_images);
+    return debug_result;
 }
 
 std::vector<cv::Point2f> DetectDartsOnFrames(
@@ -260,7 +417,8 @@ AndroidFrameProcessResult RunFrameGate(
     const BoardCircle& board_circle,
     const cv::Mat& current_frame_bgr,
     const PipelineConfig& pipeline_config,
-    const ExperimentConfig& experiment_config) {
+    const ExperimentConfig& experiment_config,
+    int frame_index) {
     cv::Mat after_resized = ResizeLongEdgeTo720(current_frame_bgr, experiment_config.long_edge);
     cv::Mat after_enhanced = EnhanceWarpedImage(
         after_resized,
@@ -299,20 +457,26 @@ AndroidFrameProcessResult RunFrameGate(
     cv::Mat thresh;
     cv::threshold(contrast_diff, thresh, threshold_value, 255, cv::THRESH_BINARY);
     cv::Mat filtered_thresh = FilterSmallComponents(thresh, 4);
+    std::vector<BoxTuple> closed_boxes;
 
     AndroidFrameProcessResult result;
     result.gate_reason = "all_black_after_filter";
+    AppendDebugImage(result.gate_debug_images, frame_index, "s14", "gate_dynamic_thresh", thresh);
+    AppendDebugImage(result.gate_debug_images, frame_index, "s15", "gate_area_filtered", filtered_thresh);
 
     if (cv::countNonZero(filtered_thresh) == 0) {
+        AppendDebugImage(result.gate_debug_images, frame_index, "s18", "gate_closed_bbox", DrawLongestBoxDebugImage(filtered_thresh, closed_boxes));
         return result;
     }
 
     cv::Mat dilated_thresh = ApplySmallDilate(filtered_thresh, 3, 2);
     cv::Mat closed_thresh = ApplyCloseRepeated(dilated_thresh, 3, 2);
+    closed_boxes = ExtractComponentBoxes(closed_thresh);
     std::optional<BoxTuple> closed_longest_box = LongestBox(closed_thresh);
     const int closed_longest_edge = closed_longest_box.has_value()
         ? std::get<4>(closed_longest_box.value())
         : 0;
+    AppendDebugImage(result.gate_debug_images, frame_index, "s18", "gate_closed_bbox", DrawLongestBoxDebugImage(closed_thresh, closed_boxes));
     if (!closed_longest_box.has_value()) {
         result.gate_reason = "no_closed_box";
         return result;
@@ -354,7 +518,7 @@ AndroidFrameProcessResult RunFrameGate(
 
 AndroidBullTrackSession::AndroidBullTrackSession() = default;
 
-void AndroidBullTrackSession::StartRound(const cv::Mat& first_frame_bgr) {
+AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first_frame_bgr) {
     if (first_frame_bgr.empty()) {
         throw std::runtime_error("首帧为空");
     }
@@ -369,7 +533,12 @@ void AndroidBullTrackSession::StartRound(const cv::Mat& first_frame_bgr) {
         pipeline_config_.enhancement.saturation_scale,
         pipeline_config_.enhancement.contrast_scale);
     cv::cvtColor(before_enhanced, first_gate_gray_, cv::COLOR_BGR2GRAY);
-    gate_board_circle_ = DetectBoardCircle(before_enhanced, pipeline_config_.edge, pipeline_config_.circle, false);
+    BoardCircleDetectionResult board_detection = DetectBoardCircleDetailed(
+        before_enhanced,
+        pipeline_config_.edge,
+        pipeline_config_.circle,
+        false);
+    gate_board_circle_ = board_detection.circle;
 
     cv::Mat before_masked = ApplyBoardMask(
         first_gate_gray_,
@@ -384,6 +553,32 @@ void AndroidBullTrackSession::StartRound(const cv::Mat& first_frame_bgr) {
     cv::Mat before_cropped = CropWithBox(before_masked, crop_box_);
     previous_processed_ = GaussianBlurOnce(before_cropped, experiment_config_.diff_blur_kernel);
     started_ = true;
+    current_frame_index_ = 2;
+
+    AndroidStartRoundResult result;
+    AppendDebugImageIfNotEmpty(
+        result.debug_images,
+        1,
+        "s08",
+        "red_radius_inner_removed_binary",
+        board_detection.red_radius_inner_removed_binary);
+    AppendDebugImageIfNotEmpty(
+        result.debug_images,
+        1,
+        "s09",
+        "red_radius_perpendicular_components_binary",
+        board_detection.red_radius_perpendicular_components_binary);
+    AppendDebugImage(
+        result.debug_images,
+        1,
+        "s10",
+        "board_center_radius",
+        DrawBoardCenterRadiusDebugImage(
+            before_resized,
+            gate_board_circle_,
+            board_detection.red_radius_correction_succeeded,
+            board_detection.red_radius_selected_component_masks));
+    return result;
 }
 
 AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& frame_bgr) {
@@ -402,16 +597,19 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
         gate_board_circle_,
         latest_frame_bgr_,
         pipeline_config_,
-        experiment_config_);
+        experiment_config_,
+        current_frame_index_);
 
     if (result.gate_triggered) {
-        SingleDartDetectionResult precise_result = DetectSingleDartOnFrames(
+        PreciseDetectionDebugResult precise_result = DetectSingleDartOnFrames(
             previous_frame_bgr_,
             latest_frame_bgr_,
-            pipeline_config_);
-        result.has_detection = precise_result.has_dart && precise_result.point_norm.has_value();
-        if (precise_result.point_norm.has_value()) {
-            result.detected_point_norm = precise_result.point_norm.value();
+            pipeline_config_,
+            current_frame_index_);
+        result.precise_debug_images = std::move(precise_result.debug_images);
+        result.has_detection = precise_result.detection_result.has_dart && precise_result.detection_result.point_norm.has_value();
+        if (precise_result.detection_result.point_norm.has_value()) {
+            result.detected_point_norm = precise_result.detection_result.point_norm.value();
         }
     }
 
@@ -435,6 +633,7 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     cv::Mat after_cropped = CropWithBox(after_masked, crop_box_);
     previous_processed_ = GaussianBlurOnce(after_cropped, experiment_config_.diff_blur_kernel);
     previous_frame_bgr_ = latest_frame_bgr_.clone();
+    current_frame_index_ += 1;
 
     return result;
 }
@@ -447,4 +646,3 @@ std::vector<cv::Point2f> AndroidBullTrackSession::RedetectRound() const {
 }
 
 }  // namespace bulltrack
-
