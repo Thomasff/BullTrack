@@ -1,7 +1,7 @@
 #include "AndroidBullTrackSession.h"
 
 #include "Alignment.h"
-#include "BoardDetector.h"
+#include "BoardDetectorAndroid.h"
 #include "DartDetector.h"
 #include "Pipeline.h"
 #include "Preprocessing.h"
@@ -565,9 +565,21 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     AppendDebugImageIfNotEmpty(
         result.debug_images,
         1,
+        "s08b",
+        "red_radius_perpendicular_rotated_boxes",
+        board_detection.red_radius_perpendicular_rotated_boxes_debug);
+    AppendDebugImageIfNotEmpty(
+        result.debug_images,
+        1,
         "s09",
         "red_radius_perpendicular_components_binary",
         board_detection.red_radius_perpendicular_components_binary);
+    AppendDebugImageIfNotEmpty(
+        result.debug_images,
+        1,
+        "s09b",
+        "red_radius_area_grouped_debug",
+        board_detection.red_radius_area_grouped_debug);
     AppendDebugImage(
         result.debug_images,
         1,

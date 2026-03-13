@@ -17,7 +17,7 @@ message(STATUS "OpenCV include dirs: ${OpenCV_INCLUDE_DIRS}")
 add_library(bulltrack_core_v2 STATIC
     ${V2_ROOT}/src/Config.cpp
     ${V2_ROOT}/src/Preprocessing.cpp
-    ${V2_ROOT}/src/BoardDetector.cpp
+    src/BoardDetector.cpp
     ${V2_ROOT}/src/Alignment.cpp
     ${V2_ROOT}/src/DartDetector.cpp
     ${V2_ROOT}/src/Pipeline.cpp
