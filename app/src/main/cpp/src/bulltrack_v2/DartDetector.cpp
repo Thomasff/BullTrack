@@ -143,20 +143,25 @@ std::vector<RankedComponent> SelectDartComponents(const std::vector<ComponentInf
     return selected_ranked;
 }
 
-cv::Point ExtractComponentTopPoint(const cv::Mat& component_mask) {
+cv::Point ExtractComponentLeftmostPoint(const cv::Mat& component_mask) {
     std::vector<cv::Point> points;
     cv::findNonZero(component_mask, points);
     if (points.empty()) throw std::runtime_error("连通域为空，无法提取落点");
 
-    int top_y = points.front().y;
-    int top_x = points.front().x;
+    int left_x = points.front().x;
+    int y_min = points.front().y;
+    int y_max = points.front().y;
     for (const auto& point : points) {
-        if (point.y < top_y || (point.y == top_y && point.x < top_x)) {
-            top_y = point.y;
-            top_x = point.x;
+        if (point.x < left_x) {
+            left_x = point.x;
+            y_min = point.y;
+            y_max = point.y;
+        } else if (point.x == left_x) {
+            y_min = std::min(y_min, point.y);
+            y_max = std::max(y_max, point.y);
         }
     }
-    return {top_x, top_y};
+    return {left_x, (y_min + y_max) / 2};
 }
 
 std::pair<cv::Mat, cv::Mat> EnhanceDiffImage(const cv::Mat& diff, int brightness_beta, double contrast_alpha, double contrast_center) {
@@ -201,7 +206,7 @@ std::vector<cv::Point> DetectDartPointsFromGrayImages(const cv::Mat& before_gray
 
     auto selected_ranked = SelectDartComponents(raw_components, filtered_components, outputs.contrast_diff, config.max_darts);
     std::vector<cv::Point> tip_points;
-    for (const auto& ranked : selected_ranked) tip_points.push_back(ExtractComponentTopPoint(ranked.component.mask));
+    for (const auto& ranked : selected_ranked) tip_points.push_back(ExtractComponentLeftmostPoint(ranked.component.mask));
 
     if (debug) {
         const auto& candidate_source = (static_cast<int>(raw_components.size()) < config.max_darts || filtered_components.empty()) ? raw_components : filtered_components;
@@ -242,7 +247,7 @@ SingleDartSelectionResult DetectSingleDartPointFromGrayImages(const cv::Mat& bef
         return {false, std::nullopt, reason, static_cast<int>(raw_components.size()), static_cast<int>(filtered_components.size())};
     }
 
-    cv::Point tip_point = ExtractComponentTopPoint(selected_component->mask);
+    cv::Point tip_point = ExtractComponentLeftmostPoint(selected_component->mask);
     if (debug) {
         auto raw_ranked = RankComponentsByMeanGray(raw_components, outputs.contrast_diff);
         auto filtered_ranked = RankComponentsByMeanGray(filtered_components, outputs.contrast_diff);

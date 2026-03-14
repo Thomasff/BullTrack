@@ -229,7 +229,10 @@ JNIEXPORT jobjectArray JNICALL
 Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRedetectRound(
     JNIEnv* env,
     jobject thiz,
-    jlong session_id) {
+    jlong session_id,
+    jbyteArray frame_data,
+    jint width,
+    jint height) {
     (void)thiz;
     auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
     if (session == nullptr) {
@@ -237,7 +240,8 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRedetectRound(
         return nullptr;
     }
     try {
-        std::vector<cv::Point2f> points = session->RedetectRound();
+        cv::Mat frame_bgr = ByteArrayToBgrMat(env, frame_data, width, height);
+        std::vector<cv::Point2f> points = session->RedetectRound(frame_bgr);
         return CreateNativePointArray(env, points);
     } catch (const std::exception& error) {
         LOGE("nativeRedetectRound failed: %s", error.what());

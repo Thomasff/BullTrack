@@ -23,7 +23,7 @@ std::vector<RankedComponent> SelectDartComponents(
     const std::vector<ComponentInfo>& filtered_components,
     const cv::Mat& ranking_gray_img,
     int max_darts);
-cv::Point ExtractComponentTopPoint(const cv::Mat& component_mask);
+cv::Point ExtractComponentLeftmostPoint(const cv::Mat& component_mask);
 std::pair<cv::Mat, cv::Mat> EnhanceDiffImage(
     const cv::Mat& diff,
     int brightness_beta,

@@ -46,6 +46,7 @@ class CameraXManager : CameraManager {
         private const val TARGET_WIDTH = 1080
         private const val TARGET_HEIGHT = 1920
         private const val TARGET_EXPOSURE_TIME_NS = 10_000_000L
+        private const val ROUND_ZOOM_SETTLE_MS = 120L
         private const val AE_METERING_TIMEOUT_MS = 1200L
         private const val AE_POLL_INTERVAL_MS = 60L
         private const val AE_STABLE_REQUIRED_COUNT = 3
@@ -70,6 +71,7 @@ class CameraXManager : CameraManager {
     private var previewLifecycleOwner: LifecycleOwner? = null
     private var previewView: PreviewView? = null
     private var currentZoomRatio: Float = 1f
+    private var lockedZoomRatioForRound: Float? = null
 
     private var currentRoundConfig: RoundCameraConfig? = null
     private var strictExposureSupported: Boolean = false
@@ -168,6 +170,7 @@ class CameraXManager : CameraManager {
     override fun getZoomRatio(): Float = currentZoomRatio
 
     override suspend fun captureFirstFrameForRound(): CapturedFrame {
+        lockedZoomRatioForRound = currentZoomRatio
         strictExposureSupported = detectStrictExposureSupport()
         strictExposureLocked = false
         lockedIsoForRound = null
@@ -182,6 +185,7 @@ class CameraXManager : CameraManager {
                 mode = ExposureBindMode.CAPTURE_AUTO,
                 bindPreview = true
             )
+            applyRoundZoomBeforeCapture()
             val bitmap = takePicture()
             val roundConfig = buildRoundCameraConfig(bitmap)
             currentRoundConfig = roundConfig
@@ -218,6 +222,7 @@ class CameraXManager : CameraManager {
         )
         strictExposureLocked = lockedIsoForRound != null
 
+        applyRoundZoomBeforeCapture()
         val bitmap = takePicture()
         val roundConfig = buildRoundCameraConfig(bitmap)
         currentRoundConfig = roundConfig
@@ -230,6 +235,7 @@ class CameraXManager : CameraManager {
     }
 
     override suspend fun captureNextFrameForRound(): CapturedFrame {
+        applyRoundZoomBeforeCapture()
         val bitmap = takePicture()
         val config = currentRoundConfig ?: buildRoundCameraConfig(bitmap).also {
             currentRoundConfig = it
@@ -242,6 +248,7 @@ class CameraXManager : CameraManager {
         strictExposureLocked = false
         strictExposureSupported = false
         lockedIsoForRound = null
+        lockedZoomRatioForRound = null
         lockPhase = CameraLockPhase.IDLE
         lockReason = null
         resetAeTracking()
@@ -272,6 +279,7 @@ class CameraXManager : CameraManager {
         strictExposureLocked = false
         strictExposureSupported = false
         lockedIsoForRound = null
+        lockedZoomRatioForRound = null
         lockPhase = CameraLockPhase.IDLE
         lockReason = null
         resetAeTracking()
@@ -453,11 +461,29 @@ class CameraXManager : CameraManager {
     private fun applyZoom() {
         val camera = boundCamera ?: return
         val zoomState = camera.cameraInfo.zoomState.value ?: return
-        currentZoomRatio = currentZoomRatio.coerceIn(
+        val targetZoom = (lockedZoomRatioForRound ?: currentZoomRatio).coerceIn(
             zoomState.minZoomRatio,
             zoomState.maxZoomRatio
         )
-        camera.cameraControl.setZoomRatio(currentZoomRatio)
+        camera.cameraControl.setZoomRatio(targetZoom)
+        if (lockedZoomRatioForRound != null) {
+            lockedZoomRatioForRound = targetZoom
+        }
+        currentZoomRatio = targetZoom
+    }
+
+    private suspend fun applyRoundZoomBeforeCapture() {
+        val lockedZoom = lockedZoomRatioForRound ?: return
+        val camera = boundCamera ?: return
+        val zoomState = camera.cameraInfo.zoomState.value ?: return
+        val clampedZoom = lockedZoom.coerceIn(
+            zoomState.minZoomRatio,
+            zoomState.maxZoomRatio
+        )
+        lockedZoomRatioForRound = clampedZoom
+        currentZoomRatio = clampedZoom
+        camera.cameraControl.setZoomRatio(clampedZoom)
+        delay(ROUND_ZOOM_SETTLE_MS)
     }
 
     private fun resetAeTracking() {
@@ -535,18 +561,19 @@ class CameraXManager : CameraManager {
         } else {
             IsoSource.FALLBACK
         }
+        val roundZoomRatio = lockedZoomRatioForRound ?: currentZoomRatio
         val statusMessage = if (strict) {
-            "参数锁定：1/100s，ISO ${lockedIsoForRound}, zoom ${formatZoom(currentZoomRatio)}x"
+            "参数锁定：1/100s，ISO ${lockedIsoForRound}, zoom ${formatZoom(roundZoomRatio)}x"
         } else {
             "开发降级模式：${
                 lockReason ?: "未严格锁定1/100+ISO"
-            }，zoom ${formatZoom(currentZoomRatio)}x"
+            }，zoom ${formatZoom(roundZoomRatio)}x"
         }
         return RoundCameraConfig(
             width = bitmap.width,
             height = bitmap.height,
             rotationDegrees = 0,
-            zoomRatio = currentZoomRatio,
+            zoomRatio = roundZoomRatio,
             exposureTimeNs = if (strict) TARGET_EXPOSURE_TIME_NS else null,
             iso = lockedIsoForRound,
             isoSource = isoSource,

@@ -100,10 +100,30 @@ class CaptureRoundUseCase(
 
     suspend fun redetectRound(): List<ThrowResult> {
         val session = currentSession ?: return emptyList()
-        stateMachine.beginProcessing("使用首尾帧执行重新识别")
+        stateMachine.beginProcessing("使用首帧与新拍图片重新识别")
+
+        val redetectFrame = runCatching {
+            frameSource.captureRedetectFrame()
+        }.getOrElse {
+            stateMachine.showDetectedResult(
+                throws = session.throws.toList(),
+                statusMessage = "重新识别拍照失败，已保留当前结果",
+                canRedetect = true
+            )
+            return session.throws.toList()
+        }
+
+        session.consumedFrameCount += 1
+        if (BuildConfig.ENABLE_DEBUG_IMAGES) {
+            debugImageSaver.saveRawBitmap(
+                roundId = session.roundId,
+                fileName = buildFileName(session.roundId, session.consumedFrameCount, "s00_raw_redetect"),
+                bitmap = redetectFrame.bitmap
+            )
+        }
 
         val redetected = runCatching {
-            dartDetector.redetect(session.nativeSessionId)
+            dartDetector.redetect(session.nativeSessionId, redetectFrame.bitmap)
         }.getOrElse {
             stateMachine.showDetectedResult(
                 throws = session.throws.toList(),
@@ -118,7 +138,7 @@ class CaptureRoundUseCase(
         session.throws.addAll(normalized)
         stateMachine.showDetectedResult(
             throws = normalized,
-            statusMessage = "已使用第一张与最后一张图片重新识别",
+            statusMessage = "已使用第一张与新拍图片重新识别",
             canRedetect = true
         )
         return normalized
@@ -194,8 +214,6 @@ class CaptureRoundUseCase(
         }
         session.throws.clear()
         session.throws.addAll(finalThrows)
-        frameSource.finishRound()
-
         val statusMessage = when {
             manualStop -> "本轮已手动结束"
             finalThrows.size >= MAX_DARTS -> "已识别满 3 支飞镖，自动结束"

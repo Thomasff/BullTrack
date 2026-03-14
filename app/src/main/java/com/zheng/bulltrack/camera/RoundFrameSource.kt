@@ -7,6 +7,8 @@ interface RoundFrameSource {
 
     suspend fun captureNextFrame(): CapturedFrame?
 
+    suspend fun captureRedetectFrame(): CapturedFrame
+
     fun finishRound()
 
     fun release()

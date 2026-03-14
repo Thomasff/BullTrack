@@ -16,6 +16,10 @@ class CameraRoundFrameSource(
         return cameraManager.captureNextFrameForRound()
     }
 
+    override suspend fun captureRedetectFrame(): CapturedFrame {
+        return cameraManager.captureNextFrameForRound()
+    }
+
     override fun finishRound() {
         cameraManager.endRoundCapture()
     }

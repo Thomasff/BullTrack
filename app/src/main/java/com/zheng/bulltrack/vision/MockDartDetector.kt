@@ -44,7 +44,10 @@ class MockDartDetector(
         }
     }
 
-    override fun redetect(sessionId: Long): List<ThrowResult> = delegate.redetect(sessionId)
+    override fun redetect(sessionId: Long, frame: Bitmap): List<ThrowResult> {
+        loadDebugBitmapsIfNeeded()
+        return delegate.redetect(sessionId, debugAfterBitmap ?: frame)
+    }
 
     private fun loadDebugBitmapsIfNeeded() {
         if (debugBeforeBitmap != null && debugAfterBitmap != null) {

@@ -661,10 +661,14 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     return result;
 }
 
-std::vector<cv::Point2f> AndroidBullTrackSession::RedetectRound() const {
+std::vector<cv::Point2f> AndroidBullTrackSession::RedetectRound(const cv::Mat& frame_bgr) {
     if (!started_) {
         throw std::runtime_error("round session 尚未开始");
     }
+    if (frame_bgr.empty()) {
+        throw std::runtime_error("重新识别输入帧为空");
+    }
+    latest_frame_bgr_ = frame_bgr.clone();
     return DetectDartsOnFrames(first_frame_bgr_, latest_frame_bgr_, pipeline_config_);
 }
 

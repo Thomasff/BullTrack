@@ -39,6 +39,13 @@ class TrackFrameSource(
         }
     }
 
+    override suspend fun captureRedetectFrame(): CapturedFrame {
+        return frames.getOrNull(nextIndex)?.let { bitmap ->
+            nextIndex += 1
+            CapturedFrame(bitmap = bitmap)
+        } ?: throw IllegalStateException("没有可用于重新识别的新图片")
+    }
+
     override fun finishRound() {
         nextIndex = 0
     }

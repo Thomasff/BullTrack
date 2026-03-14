@@ -37,7 +37,7 @@ public:
 
     AndroidStartRoundResult StartRound(const cv::Mat& first_frame_bgr);
     AndroidFrameProcessResult ProcessFrame(const cv::Mat& frame_bgr);
-    std::vector<cv::Point2f> RedetectRound() const;
+    std::vector<cv::Point2f> RedetectRound(const cv::Mat& frame_bgr);
 
 private:
     std::tuple<int, int, int, int> crop_box_{0, 0, 0, 0};
