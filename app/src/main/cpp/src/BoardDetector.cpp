@@ -376,6 +376,7 @@ std::vector<std::pair<int, int>> BuildIntervalsFromDescSortedValues(const std::v
     return intervals;
 }
 
+#if BT_ENABLE_DEBUG_IMAGES
 cv::Mat DrawGroupedComponentBoundaries(
     const cv::Mat& base_binary_img,
     const std::vector<ComponentStats>& components,
@@ -468,6 +469,8 @@ cv::Mat DrawRotatedBoxesDebugImage(
     }
     return debug_img;
 }
+
+#endif
 
 std::optional<double> ComputeFarthestBoundaryDistance(const cv::Mat& component_mask, int cx, int cy) {
     std::vector<std::vector<cv::Point>> contours;
@@ -575,13 +578,17 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
             perpendicular_components.push_back(component);
         }
     }
-    cv::Mat perpendicular_components_binary = cv::Mat::zeros(red_binary.size(), CV_8U);
+    cv::Mat perpendicular_components_binary;
+    cv::Mat perpendicular_rotated_boxes_debug;
+#if BT_ENABLE_DEBUG_IMAGES
+    perpendicular_components_binary = cv::Mat::zeros(red_binary.size(), CV_8U);
     for (const auto& [area, mask] : perpendicular_components) {
         (void)area;
         cv::bitwise_or(perpendicular_components_binary, mask, perpendicular_components_binary);
     }
-    cv::Mat perpendicular_rotated_boxes_debug =
+    perpendicular_rotated_boxes_debug =
         DrawRotatedBoxesDebugImage(perpendicular_components_binary, perpendicular_components);
+#endif
     if (perpendicular_components.empty()) {
         return {std::nullopt, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), "垂直方向筛选后无可用红色区域"};
     }
@@ -593,7 +600,10 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         areas.push_back(area);
     }
     auto intervals = BuildIntervalsFromDescSortedValues(areas);
-    cv::Mat area_grouped_debug = DrawGroupedComponentBoundaries(perpendicular_components_binary, components, intervals);
+    cv::Mat area_grouped_debug;
+#if BT_ENABLE_DEBUG_IMAGES
+    area_grouped_debug = DrawGroupedComponentBoundaries(perpendicular_components_binary, components, intervals);
+#endif
     std::optional<std::pair<int, int>> selected_interval;
     for (const auto& interval : intervals) {
         if ((interval.second - interval.first) > 5) {
@@ -638,6 +648,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     return {corrected_radius, red_only_mask, red_only_blurred, top_three_masks, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, area_grouped_debug, "红色区域半径纠正成功"};
 }
 
+#if BT_ENABLE_DEBUG_IMAGES
 void DrawDebugImages(
     const cv::Mat& img_before,
     const cv::Mat& edge_input_gray,
@@ -717,6 +728,7 @@ void DrawDebugImages(
     cv::circle(final_center_debug, {final_circle.cx, final_circle.cy}, final_circle.radius, cv::Scalar(0, 255, 0), 2);
     cv::imwrite(DebugImagesPath() + "/debug_00_final_center_radius.jpg", final_center_debug);
 }
+#endif
 
 }  // namespace
 
@@ -765,6 +777,7 @@ BoardCircleDetectionResult DetectBoardCircleDetailed(
 
     BoardCircle final_circle{density_center->x, density_center->y, final_radius};
 
+#if BT_ENABLE_DEBUG_IMAGES
     if (debug) {
         DrawDebugImages(
             img_before,
@@ -784,6 +797,7 @@ BoardCircleDetectionResult DetectBoardCircleDetailed(
             interval_selected,
             final_circle);
     }
+#endif
 
     std::cout << "密度估计圆心: (" << density_center->x << ", " << density_center->y << ")\n";
     if (density_region_radius.has_value()) {
@@ -798,14 +812,18 @@ BoardCircleDetectionResult DetectBoardCircleDetailed(
 
     BoardCircleDetectionResult detection_result;
     detection_result.circle = final_circle;
+#if BT_ENABLE_DEBUG_IMAGES
     detection_result.red_radius_inner_removed_binary = red_radius_result.inner_removed_binary;
     detection_result.red_radius_perpendicular_rotated_boxes_debug = red_radius_result.perpendicular_rotated_boxes_debug;
     detection_result.red_radius_perpendicular_components_binary = red_radius_result.perpendicular_components_binary;
     detection_result.red_radius_area_grouped_debug = red_radius_result.area_grouped_debug;
+#endif
     if (red_radius_result.corrected_radius.has_value() &&
         red_radius_result.selected_component_masks.size() == 3) {
         detection_result.red_radius_correction_succeeded = true;
+#if BT_ENABLE_DEBUG_IMAGES
         detection_result.red_radius_selected_component_masks = red_radius_result.selected_component_masks;
+#endif
     }
     return detection_result;
 }

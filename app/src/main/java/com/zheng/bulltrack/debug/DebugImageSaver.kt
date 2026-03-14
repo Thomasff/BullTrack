@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
+import com.zheng.bulltrack.BuildConfig
 import com.zheng.bulltrack.vision.DebugImageArtifact
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -28,6 +29,9 @@ class DebugImageSaver(
         fileName: String,
         bitmap: Bitmap
     ) {
+        if (!BuildConfig.ENABLE_DEBUG_IMAGES) {
+            return
+        }
         saveJpegBytes(roundId, fileName, bitmap.toJpegBytes())
     }
 
@@ -35,6 +39,9 @@ class DebugImageSaver(
         roundId: String,
         artifacts: List<DebugImageArtifact>
     ) {
+        if (!BuildConfig.ENABLE_DEBUG_IMAGES) {
+            return
+        }
         for (artifact in artifacts) {
             saveJpegBytes(roundId, artifact.fileName, artifact.jpegBytes)
         }

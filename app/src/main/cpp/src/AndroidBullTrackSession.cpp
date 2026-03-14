@@ -25,6 +25,7 @@ struct PreciseDetectionDebugResult {
     std::vector<DebugImageArtifact> debug_images;
 };
 
+#if BT_ENABLE_DEBUG_IMAGES
 std::vector<std::uint8_t> EncodeJpegBytes(const cv::Mat& image) {
     std::vector<std::uint8_t> buffer;
     std::vector<int> params{cv::IMWRITE_JPEG_QUALITY, 95};
@@ -33,6 +34,7 @@ std::vector<std::uint8_t> EncodeJpegBytes(const cv::Mat& image) {
     }
     return buffer;
 }
+#endif
 
 cv::Mat EnsureColorForDebug(const cv::Mat& image) {
     if (image.channels() == 3) {
@@ -43,6 +45,7 @@ cv::Mat EnsureColorForDebug(const cv::Mat& image) {
     return color;
 }
 
+#if BT_ENABLE_DEBUG_IMAGES
 void AppendDebugImage(
     std::vector<DebugImageArtifact>& output,
     int frame_index,
@@ -150,6 +153,7 @@ cv::Mat DrawTipPointOnBinaryImage(const cv::Mat& binary_img, const std::optional
     }
     return debug_image;
 }
+#endif
 
 cv::Mat ResizeLongEdgeTo720(const cv::Mat& image, int long_edge) {
     const int h = image.rows;
@@ -348,19 +352,18 @@ PreciseDetectionDebugResult DetectSingleDartOnFrames(
         single_config);
     auto [filtered_mask, filtered_components] = FilterConnectedComponents(outputs.binary_img, single_config.min_area, false);
 
-    std::vector<DebugImageArtifact> debug_images;
-    AppendDebugImage(debug_images, frame_index, "s30", "precise_thresh", outputs.thresh);
-    AppendDebugImage(debug_images, frame_index, "s31", "precise_morph_area_filtered", filtered_mask * 255);
+    PreciseDetectionDebugResult debug_result;
+    debug_result.detection_result = std::move(result);
+#if BT_ENABLE_DEBUG_IMAGES
+    AppendDebugImage(debug_result.debug_images, frame_index, "s30", "precise_thresh", outputs.thresh);
+    AppendDebugImage(debug_result.debug_images, frame_index, "s31", "precise_morph_area_filtered", filtered_mask * 255);
     AppendDebugImage(
-        debug_images,
+        debug_result.debug_images,
         frame_index,
         "s32",
         "precise_tip_marked",
-        DrawTipPointOnBinaryImage(filtered_mask * 255, result.tip_point));
-
-    PreciseDetectionDebugResult debug_result;
-    debug_result.detection_result = std::move(result);
-    debug_result.debug_images = std::move(debug_images);
+        DrawTipPointOnBinaryImage(filtered_mask * 255, debug_result.detection_result.tip_point));
+#endif
     return debug_result;
 }
 
@@ -461,11 +464,15 @@ AndroidFrameProcessResult RunFrameGate(
 
     AndroidFrameProcessResult result;
     result.gate_reason = "all_black_after_filter";
+#if BT_ENABLE_DEBUG_IMAGES
     AppendDebugImage(result.gate_debug_images, frame_index, "s14", "gate_dynamic_thresh", thresh);
     AppendDebugImage(result.gate_debug_images, frame_index, "s15", "gate_area_filtered", filtered_thresh);
+#endif
 
     if (cv::countNonZero(filtered_thresh) == 0) {
+#if BT_ENABLE_DEBUG_IMAGES
         AppendDebugImage(result.gate_debug_images, frame_index, "s18", "gate_closed_bbox", DrawLongestBoxDebugImage(filtered_thresh, closed_boxes));
+#endif
         return result;
     }
 
@@ -476,7 +483,9 @@ AndroidFrameProcessResult RunFrameGate(
     const int closed_longest_edge = closed_longest_box.has_value()
         ? std::get<4>(closed_longest_box.value())
         : 0;
+#if BT_ENABLE_DEBUG_IMAGES
     AppendDebugImage(result.gate_debug_images, frame_index, "s18", "gate_closed_bbox", DrawLongestBoxDebugImage(closed_thresh, closed_boxes));
+#endif
     if (!closed_longest_box.has_value()) {
         result.gate_reason = "no_closed_box";
         return result;
@@ -556,6 +565,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     current_frame_index_ = 2;
 
     AndroidStartRoundResult result;
+#if BT_ENABLE_DEBUG_IMAGES
     AppendDebugImageIfNotEmpty(
         result.debug_images,
         1,
@@ -590,6 +600,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
             gate_board_circle_,
             board_detection.red_radius_correction_succeeded,
             board_detection.red_radius_selected_component_masks));
+#endif
     return result;
 }
 

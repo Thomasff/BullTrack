@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Config.h"
+#include "DebugImageConfig.h"
 
 #include <opencv2/opencv.hpp>
 

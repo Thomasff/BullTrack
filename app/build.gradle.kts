@@ -3,6 +3,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val enableDebugImages = false
+
 android {
     namespace = "com.zheng.bulltrack"
     compileSdk = 35
@@ -15,17 +17,19 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        
+        buildConfigField("boolean", "ENABLE_DEBUG_IMAGES", enableDebugImages.toString())
+
         externalNativeBuild {
             cmake {
                 cppFlags += "-std=c++17"
                 arguments += listOf(
                     "-DANDROID_STL=c++_shared",
-                    "-DANDROID_TOOLCHAIN=clang"
+                    "-DANDROID_TOOLCHAIN=clang",
+                    "-DBT_ENABLE_DEBUG_IMAGES=${if (enableDebugImages) "ON" else "OFF"}"
                 )
             }
         }
-        
+
         ndk {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
         }
@@ -46,15 +50,16 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
-    
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
         }
     }
-    
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -72,15 +77,15 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation("androidx.compose.material:material-icons-extended")
-    
+
     implementation(libs.camerax.core)
     implementation(libs.camerax.camera2)
     implementation(libs.camerax.lifecycle)
     implementation(libs.camerax.view)
-    
+
     implementation(libs.lifecycle.viewmodel.compose)
     implementation(libs.navigation.compose)
-    
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

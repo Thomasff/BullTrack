@@ -5,6 +5,10 @@ project("bulltrack")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(NOT DEFINED BT_ENABLE_DEBUG_IMAGES)
+    set(BT_ENABLE_DEBUG_IMAGES OFF)
+endif()
+
 set(OpenCV_DIR ${CMAKE_CURRENT_SOURCE_DIR}/opencv-sdk/sdk/native/jni)
 get_filename_component(PROJECT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../.. ABSOLUTE)
 set(V2_ROOT ${PROJECT_ROOT}/cpp_dart_detector_v2)
@@ -13,6 +17,7 @@ find_package(OpenCV REQUIRED)
 
 message(STATUS "OpenCV version: ${OpenCV_VERSION}")
 message(STATUS "OpenCV include dirs: ${OpenCV_INCLUDE_DIRS}")
+message(STATUS "BT_ENABLE_DEBUG_IMAGES: ${BT_ENABLE_DEBUG_IMAGES}")
 
 add_library(bulltrack_core_v2 STATIC
     ${V2_ROOT}/src/Config.cpp
@@ -33,6 +38,7 @@ target_include_directories(bulltrack_core_v2 PRIVATE
 target_compile_definitions(bulltrack_core_v2 PRIVATE
     DEBUG_IMAGES_PATH="result"
     RESULT_IMAGES_PATH="images"
+    BT_ENABLE_DEBUG_IMAGES=$<IF:$<BOOL:${BT_ENABLE_DEBUG_IMAGES}>,1,0>
 )
 
 add_library(${CMAKE_PROJECT_NAME} SHARED
@@ -43,6 +49,10 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     ${V2_ROOT}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${OpenCV_INCLUDE_DIRS}
+)
+
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+    BT_ENABLE_DEBUG_IMAGES=$<IF:$<BOOL:${BT_ENABLE_DEBUG_IMAGES}>,1,0>
 )
 
 target_link_libraries(bulltrack_core_v2

@@ -1,6 +1,7 @@
 package com.zheng.bulltrack.application.usecase
 
 import android.graphics.Bitmap
+import com.zheng.bulltrack.BuildConfig
 import com.zheng.bulltrack.application.statemachine.GameStateMachine
 import com.zheng.bulltrack.camera.RoundFrameSource
 import com.zheng.bulltrack.debug.DebugImageSaver
@@ -38,11 +39,13 @@ class CaptureRoundUseCase(
         val firstFrame = frameSource.captureFirstFrame()
         val nativeSessionId = dartDetector.createSession()
         val roundId = createRoundId()
-        debugImageSaver.saveRawBitmap(
-            roundId = roundId,
-            fileName = buildFileName(roundId, 1, "s00_raw_first"),
-            bitmap = firstFrame.bitmap
-        )
+        if (BuildConfig.ENABLE_DEBUG_IMAGES) {
+            debugImageSaver.saveRawBitmap(
+                roundId = roundId,
+                fileName = buildFileName(roundId, 1, "s00_raw_first"),
+                bitmap = firstFrame.bitmap
+            )
+        }
         val startUpdate = runCatching {
             dartDetector.startRound(nativeSessionId, firstFrame.bitmap)
         }.getOrElse { error ->
@@ -50,7 +53,9 @@ class CaptureRoundUseCase(
             frameSource.finishRound()
             throw error
         }
-        debugImageSaver.saveArtifacts(roundId, startUpdate.debugImages)
+        if (BuildConfig.ENABLE_DEBUG_IMAGES) {
+            debugImageSaver.saveArtifacts(roundId, startUpdate.debugImages)
+        }
         currentSession = RoundSession(
             nativeSessionId = nativeSessionId,
             roundId = roundId,
@@ -69,11 +74,13 @@ class CaptureRoundUseCase(
                 break
             }
 
-            debugImageSaver.saveRawBitmap(
-                roundId = roundId,
-                fileName = buildFileName(roundId, frameIndex, "s00_raw_frame"),
-                bitmap = frame.bitmap
-            )
+            if (BuildConfig.ENABLE_DEBUG_IMAGES) {
+                debugImageSaver.saveRawBitmap(
+                    roundId = roundId,
+                    fileName = buildFileName(roundId, frameIndex, "s00_raw_frame"),
+                    bitmap = frame.bitmap
+                )
+            }
             val shouldStop = processNextFrame(frameIndex = frameIndex, frame = frame.bitmap)
             if (shouldStop) {
                 break
@@ -138,8 +145,10 @@ class CaptureRoundUseCase(
             return false
         }
 
-        debugImageSaver.saveArtifacts(session.roundId, frameUpdate.gateDebugImages)
-        debugImageSaver.saveArtifacts(session.roundId, frameUpdate.preciseDebugImages)
+        if (BuildConfig.ENABLE_DEBUG_IMAGES) {
+            debugImageSaver.saveArtifacts(session.roundId, frameUpdate.gateDebugImages)
+            debugImageSaver.saveArtifacts(session.roundId, frameUpdate.preciseDebugImages)
+        }
 
         if (!frameUpdate.gateTriggered) {
             val gateMessage = buildString {
