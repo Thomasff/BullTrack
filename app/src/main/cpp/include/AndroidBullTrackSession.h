@@ -31,13 +31,18 @@ struct AndroidFrameProcessResult {
     std::vector<DebugImageArtifact> precise_debug_images;
 };
 
+struct AndroidRedetectResult {
+    std::vector<cv::Point2f> points;
+    std::vector<DebugImageArtifact> debug_images;
+};
+
 class AndroidBullTrackSession {
 public:
     AndroidBullTrackSession();
 
     AndroidStartRoundResult StartRound(const cv::Mat& first_frame_bgr);
     AndroidFrameProcessResult ProcessFrame(const cv::Mat& frame_bgr);
-    std::vector<cv::Point2f> RedetectRound(const cv::Mat& frame_bgr);
+    AndroidRedetectResult RedetectRound(const cv::Mat& frame_bgr);
 
 private:
     std::tuple<int, int, int, int> crop_box_{0, 0, 0, 0};

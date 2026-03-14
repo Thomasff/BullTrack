@@ -3,8 +3,6 @@ package com.zheng.bulltrack.vision
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import com.zheng.bulltrack.domain.model.ThrowResult
-
 class MockDartDetector(
     private val context: Context,
     private val delegate: NativeDartDetector = NativeDartDetector()
@@ -44,7 +42,7 @@ class MockDartDetector(
         }
     }
 
-    override fun redetect(sessionId: Long, frame: Bitmap): List<ThrowResult> {
+    override fun redetect(sessionId: Long, frame: Bitmap): RedetectDetectionUpdate {
         loadDebugBitmapsIfNeeded()
         return delegate.redetect(sessionId, debugAfterBitmap ?: frame)
     }

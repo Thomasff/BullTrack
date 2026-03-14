@@ -132,6 +132,20 @@ jobjectArray CreateNativePointArray(JNIEnv* env, const std::vector<cv::Point2f>&
     return array;
 }
 
+jobject CreateNativeRedetectResult(JNIEnv* env, const bulltrack::AndroidRedetectResult& result) {
+    jclass result_class = env->FindClass("com/zheng/bulltrack/vision/NativeRedetectResult");
+    jmethodID constructor = env->GetMethodID(
+        result_class,
+        "<init>",
+        "([Lcom/zheng/bulltrack/vision/NativePointResult;[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;)V");
+    jobjectArray points = CreateNativePointArray(env, result.points);
+    jobjectArray debug_images = CreateNativeDebugImageArray(env, result.debug_images);
+    jobject obj = env->NewObject(result_class, constructor, points, debug_images);
+    env->DeleteLocalRef(points);
+    env->DeleteLocalRef(debug_images);
+    return obj;
+}
+
 }  // namespace
 
 extern "C" {
@@ -225,7 +239,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeProcessFrame(
     }
 }
 
-JNIEXPORT jobjectArray JNICALL
+JNIEXPORT jobject JNICALL
 Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRedetectRound(
     JNIEnv* env,
     jobject thiz,
@@ -241,8 +255,8 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRedetectRound(
     }
     try {
         cv::Mat frame_bgr = ByteArrayToBgrMat(env, frame_data, width, height);
-        std::vector<cv::Point2f> points = session->RedetectRound(frame_bgr);
-        return CreateNativePointArray(env, points);
+        bulltrack::AndroidRedetectResult result = session->RedetectRound(frame_bgr);
+        return CreateNativeRedetectResult(env, result);
     } catch (const std::exception& error) {
         LOGE("nativeRedetectRound failed: %s", error.what());
         ThrowJavaRuntimeException(env, error.what());

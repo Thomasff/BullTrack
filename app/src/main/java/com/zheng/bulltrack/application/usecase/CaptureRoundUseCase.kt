@@ -122,7 +122,7 @@ class CaptureRoundUseCase(
             )
         }
 
-        val redetected = runCatching {
+        val redetectUpdate = runCatching {
             dartDetector.redetect(session.nativeSessionId, redetectFrame.bitmap)
         }.getOrElse {
             stateMachine.showDetectedResult(
@@ -133,7 +133,11 @@ class CaptureRoundUseCase(
             return session.throws.toList()
         }
 
-        val normalized = redetected.take(MAX_DARTS).toMutableList()
+        if (BuildConfig.ENABLE_DEBUG_IMAGES) {
+            debugImageSaver.saveArtifacts(session.roundId, redetectUpdate.debugImages)
+        }
+
+        val normalized = redetectUpdate.throws.take(MAX_DARTS).toMutableList()
         session.throws.clear()
         session.throws.addAll(normalized)
         stateMachine.showDetectedResult(

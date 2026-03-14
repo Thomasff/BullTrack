@@ -33,7 +33,7 @@ class NativeDartDetector : DartDetector {
         frameData: ByteArray,
         width: Int,
         height: Int
-    ): Array<NativePointResult>?
+    ): NativeRedetectResult
 
     override fun init() {
         nativeInit()
@@ -80,16 +80,19 @@ class NativeDartDetector : DartDetector {
         )
     }
 
-    override fun redetect(sessionId: Long, frame: Bitmap): List<ThrowResult> {
-        val points = nativeRedetectRound(
+    override fun redetect(sessionId: Long, frame: Bitmap): RedetectDetectionUpdate {
+        val result = nativeRedetectRound(
             sessionId = sessionId,
             frameData = bitmapToByteArray(frame),
             width = frame.width,
             height = frame.height
-        ) ?: return emptyList()
-        return points.map { point ->
-            toThrowResult(point.normalizedX, point.normalizedY)
-        }
+        )
+        return RedetectDetectionUpdate(
+            throws = result.points.orEmpty().map { point ->
+                toThrowResult(point.normalizedX, point.normalizedY)
+            },
+            debugImages = result.debugImages.orEmpty().map(::toDebugImageArtifact)
+        )
     }
 
     private fun bitmapToByteArray(bitmap: Bitmap): ByteArray {

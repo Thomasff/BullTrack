@@ -25,6 +25,11 @@ struct PreciseDetectionDebugResult {
     std::vector<DebugImageArtifact> debug_images;
 };
 
+struct RedetectDebugComputation {
+    std::vector<cv::Point2f> points;
+    cv::Mat filtered_mask;
+};
+
 #if BT_ENABLE_DEBUG_IMAGES
 std::vector<std::uint8_t> EncodeJpegBytes(const cv::Mat& image) {
     std::vector<std::uint8_t> buffer;
@@ -154,6 +159,54 @@ cv::Mat DrawTipPointOnBinaryImage(const cv::Mat& binary_img, const std::optional
     return debug_image;
 }
 #endif
+
+void AppendBoardDetectionDebugImages(
+    std::vector<DebugImageArtifact>& output,
+    int frame_index,
+    const BoardCircleDetectionResult& board_detection,
+    const cv::Mat& resized_bgr) {
+#if BT_ENABLE_DEBUG_IMAGES
+    AppendDebugImageIfNotEmpty(
+        output,
+        frame_index,
+        "s08",
+        "red_radius_inner_removed_binary",
+        board_detection.red_radius_inner_removed_binary);
+    AppendDebugImageIfNotEmpty(
+        output,
+        frame_index,
+        "s08b",
+        "red_radius_perpendicular_rotated_boxes",
+        board_detection.red_radius_perpendicular_rotated_boxes_debug);
+    AppendDebugImageIfNotEmpty(
+        output,
+        frame_index,
+        "s09",
+        "red_radius_perpendicular_components_binary",
+        board_detection.red_radius_perpendicular_components_binary);
+    AppendDebugImageIfNotEmpty(
+        output,
+        frame_index,
+        "s09b",
+        "red_radius_area_grouped_debug",
+        board_detection.red_radius_area_grouped_debug);
+    AppendDebugImage(
+        output,
+        frame_index,
+        "s10",
+        "board_center_radius",
+        DrawBoardCenterRadiusDebugImage(
+            resized_bgr,
+            board_detection.circle,
+            board_detection.red_radius_correction_succeeded,
+            board_detection.red_radius_selected_component_masks));
+#else
+    (void)output;
+    (void)frame_index;
+    (void)board_detection;
+    (void)resized_bgr;
+#endif
+}
 
 cv::Mat ResizeLongEdgeTo720(const cv::Mat& image, int long_edge) {
     const int h = image.rows;
@@ -367,9 +420,10 @@ PreciseDetectionDebugResult DetectSingleDartOnFrames(
     return debug_result;
 }
 
-std::vector<cv::Point2f> DetectDartsOnFrames(
+RedetectDebugComputation DetectDartsOnFramesForRedetect(
     const cv::Mat& before_bgr,
     const cv::Mat& after_bgr,
+    const BoardCircle& board_circle,
     const PipelineConfig& config) {
     cv::Mat before_view = EnhanceWarpedImage(
         before_bgr,
@@ -380,7 +434,6 @@ std::vector<cv::Point2f> DetectDartsOnFrames(
         config.enhancement.saturation_scale,
         config.enhancement.contrast_scale);
 
-    BoardCircle board_circle = DetectBoardCircle(before_view, config.edge, config.circle, false);
     TwoStageAlignmentResult alignment = AlignAfterImageTwoStage(
         before_view,
         after_view,
@@ -410,7 +463,18 @@ std::vector<cv::Point2f> DetectDartsOnFrames(
             board_circle.cy,
             board_circle.radius));
     }
-    return normalized_positions;
+
+    DiffBinaryOutputs outputs = BuildDiffBinaryOutputs(
+        alignment.before_gray_final,
+        alignment.after_gray_final,
+        board_circle.cx,
+        board_circle.cy,
+        board_circle.radius,
+        config.dart);
+    auto [filtered_mask, filtered_components] = FilterConnectedComponents(outputs.binary_img, config.dart.min_area, false);
+    (void)filtered_components;
+
+    return {normalized_positions, filtered_mask * 255};
 }
 
 AndroidFrameProcessResult RunFrameGate(
@@ -565,42 +629,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     current_frame_index_ = 2;
 
     AndroidStartRoundResult result;
-#if BT_ENABLE_DEBUG_IMAGES
-    AppendDebugImageIfNotEmpty(
-        result.debug_images,
-        1,
-        "s08",
-        "red_radius_inner_removed_binary",
-        board_detection.red_radius_inner_removed_binary);
-    AppendDebugImageIfNotEmpty(
-        result.debug_images,
-        1,
-        "s08b",
-        "red_radius_perpendicular_rotated_boxes",
-        board_detection.red_radius_perpendicular_rotated_boxes_debug);
-    AppendDebugImageIfNotEmpty(
-        result.debug_images,
-        1,
-        "s09",
-        "red_radius_perpendicular_components_binary",
-        board_detection.red_radius_perpendicular_components_binary);
-    AppendDebugImageIfNotEmpty(
-        result.debug_images,
-        1,
-        "s09b",
-        "red_radius_area_grouped_debug",
-        board_detection.red_radius_area_grouped_debug);
-    AppendDebugImage(
-        result.debug_images,
-        1,
-        "s10",
-        "board_center_radius",
-        DrawBoardCenterRadiusDebugImage(
-            before_resized,
-            gate_board_circle_,
-            board_detection.red_radius_correction_succeeded,
-            board_detection.red_radius_selected_component_masks));
-#endif
+    AppendBoardDetectionDebugImages(result.debug_images, 1, board_detection, before_resized);
     return result;
 }
 
@@ -661,7 +690,7 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     return result;
 }
 
-std::vector<cv::Point2f> AndroidBullTrackSession::RedetectRound(const cv::Mat& frame_bgr) {
+AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& frame_bgr) {
     if (!started_) {
         throw std::runtime_error("round session 尚未开始");
     }
@@ -669,7 +698,25 @@ std::vector<cv::Point2f> AndroidBullTrackSession::RedetectRound(const cv::Mat& f
         throw std::runtime_error("重新识别输入帧为空");
     }
     latest_frame_bgr_ = frame_bgr.clone();
-    return DetectDartsOnFrames(first_frame_bgr_, latest_frame_bgr_, pipeline_config_);
+    AndroidRedetectResult result;
+
+    RedetectDebugComputation detection = DetectDartsOnFramesForRedetect(
+        first_frame_bgr_,
+        latest_frame_bgr_,
+        gate_board_circle_,
+        pipeline_config_);
+    result.points = std::move(detection.points);
+
+#if BT_ENABLE_DEBUG_IMAGES
+    AppendDebugImage(
+        result.debug_images,
+        current_frame_index_,
+        "s31",
+        "redetect_diff_morph_area_filtered",
+        detection.filtered_mask);
+#endif
+
+    return result;
 }
 
 }  // namespace bulltrack
