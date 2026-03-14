@@ -10,8 +10,6 @@ if(NOT DEFINED BT_ENABLE_DEBUG_IMAGES)
 endif()
 
 set(OpenCV_DIR ${CMAKE_CURRENT_SOURCE_DIR}/opencv-sdk/sdk/native/jni)
-get_filename_component(PROJECT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../../.. ABSOLUTE)
-set(V2_ROOT ${PROJECT_ROOT}/cpp_dart_detector_v2)
 
 find_package(OpenCV REQUIRED)
 
@@ -20,17 +18,16 @@ message(STATUS "OpenCV include dirs: ${OpenCV_INCLUDE_DIRS}")
 message(STATUS "BT_ENABLE_DEBUG_IMAGES: ${BT_ENABLE_DEBUG_IMAGES}")
 
 add_library(bulltrack_core_v2 STATIC
-    ${V2_ROOT}/src/Config.cpp
-    ${V2_ROOT}/src/Preprocessing.cpp
+    src/bulltrack_v2/Config.cpp
+    src/bulltrack_v2/Preprocessing.cpp
     src/BoardDetector.cpp
-    ${V2_ROOT}/src/Alignment.cpp
-    ${V2_ROOT}/src/DartDetector.cpp
-    ${V2_ROOT}/src/Pipeline.cpp
+    src/bulltrack_v2/Alignment.cpp
+    src/bulltrack_v2/DartDetector.cpp
+    src/bulltrack_v2/Pipeline.cpp
     src/AndroidBullTrackSession.cpp
 )
 
 target_include_directories(bulltrack_core_v2 PRIVATE
-    ${V2_ROOT}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${OpenCV_INCLUDE_DIRS}
 )
@@ -46,7 +43,6 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
 )
 
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    ${V2_ROOT}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${OpenCV_INCLUDE_DIRS}
 )

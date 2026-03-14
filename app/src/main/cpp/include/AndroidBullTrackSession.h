@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Config.h"
+#include "bulltrack_v2/Config.h"
 #include "DebugImageConfig.h"
 
 #include <opencv2/opencv.hpp>

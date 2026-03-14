@@ -1,10 +1,10 @@
 #include "AndroidBullTrackSession.h"
 
-#include "Alignment.h"
+#include "bulltrack_v2/Alignment.h"
 #include "BoardDetectorAndroid.h"
-#include "DartDetector.h"
-#include "Pipeline.h"
-#include "Preprocessing.h"
+#include "bulltrack_v2/DartDetector.h"
+#include "bulltrack_v2/Pipeline.h"
+#include "bulltrack_v2/Preprocessing.h"
 
 #include <algorithm>
 #include <cmath>
