@@ -348,22 +348,51 @@ double ComputeBoxLongShortRatio(const std::optional<BoxTuple>& box) {
 }
 
 PreciseDetectionDebugResult DetectSingleDartOnFrames(
+    const cv::Mat& first_bgr,
     const cv::Mat& before_bgr,
     const cv::Mat& after_bgr,
+    const BoardCircle& board_circle,
     const PipelineConfig& config,
+    int long_edge,
     int frame_index) {
+    cv::Mat first_resized = ResizeLongEdgeTo720(first_bgr, long_edge);
+    cv::Mat before_resized = ResizeLongEdgeTo720(before_bgr, long_edge);
+    cv::Mat after_resized = ResizeLongEdgeTo720(after_bgr, long_edge);
+
+    cv::Mat first_view = EnhanceWarpedImage(
+        first_resized,
+        config.enhancement.saturation_scale,
+        config.enhancement.contrast_scale);
     cv::Mat before_view = EnhanceWarpedImage(
-        before_bgr,
+        before_resized,
         config.enhancement.saturation_scale,
         config.enhancement.contrast_scale);
     cv::Mat after_view = EnhanceWarpedImage(
-        after_bgr,
+        after_resized,
         config.enhancement.saturation_scale,
         config.enhancement.contrast_scale);
 
-    BoardCircle board_circle = DetectBoardCircle(before_view, config.edge, config.circle, false);
-    TwoStageAlignmentResult alignment = AlignAfterImageTwoStage(
+    cv::Mat first_gray_for_alignment = PrepareEccDiffGrayscale(
+        first_view,
+        config.dart.preprocess_blur_kernel,
+        2);
+    cv::Mat before_gray_for_alignment = PrepareEccDiffGrayscale(
         before_view,
+        config.dart.preprocess_blur_kernel,
+        2);
+    PyramidECCResult before_alignment = AlignPyramidEcc(
+        first_gray_for_alignment,
+        before_gray_for_alignment,
+        3,
+        "euclidean");
+    cv::Mat before_view_aligned = WarpImageWithMatrix(
+        before_view,
+        before_alignment.warp_matrix,
+        "euclidean",
+        first_view.size());
+
+    TwoStageAlignmentResult alignment = AlignAfterImageTwoStage(
+        before_view_aligned,
         after_view,
         board_circle.cx,
         board_circle.cy,
@@ -424,13 +453,17 @@ RedetectDebugComputation DetectDartsOnFramesForRedetect(
     const cv::Mat& before_bgr,
     const cv::Mat& after_bgr,
     const BoardCircle& board_circle,
-    const PipelineConfig& config) {
+    const PipelineConfig& config,
+    int long_edge) {
+    cv::Mat before_resized = ResizeLongEdgeTo720(before_bgr, long_edge);
+    cv::Mat after_resized = ResizeLongEdgeTo720(after_bgr, long_edge);
+
     cv::Mat before_view = EnhanceWarpedImage(
-        before_bgr,
+        before_resized,
         config.enhancement.saturation_scale,
         config.enhancement.contrast_scale);
     cv::Mat after_view = EnhanceWarpedImage(
-        after_bgr,
+        after_resized,
         config.enhancement.saturation_scale,
         config.enhancement.contrast_scale);
 
@@ -654,9 +687,12 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
 
     if (result.gate_triggered) {
         PreciseDetectionDebugResult precise_result = DetectSingleDartOnFrames(
+            first_frame_bgr_,
             previous_frame_bgr_,
             latest_frame_bgr_,
+            gate_board_circle_,
             pipeline_config_,
+            experiment_config_.long_edge,
             current_frame_index_);
         result.precise_debug_images = std::move(precise_result.debug_images);
         result.has_detection = precise_result.detection_result.has_dart && precise_result.detection_result.point_norm.has_value();
@@ -704,7 +740,8 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
         first_frame_bgr_,
         latest_frame_bgr_,
         gate_board_circle_,
-        pipeline_config_);
+        pipeline_config_,
+        experiment_config_.long_edge);
     result.points = std::move(detection.points);
 
 #if BT_ENABLE_DEBUG_IMAGES
