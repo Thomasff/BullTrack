@@ -599,16 +599,25 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         (void)mask;
         areas.push_back(area);
     }
-    auto intervals = BuildIntervalsFromDescSortedValues(areas);
+    std::vector<std::pair<int, int>> intervals;
+    if (components.size() <= 15) {
+        intervals.emplace_back(0, static_cast<int>(components.size()));
+    } else {
+        intervals = BuildIntervalsFromDescSortedValues(areas);
+    }
     cv::Mat area_grouped_debug;
 #if BT_ENABLE_DEBUG_IMAGES
     area_grouped_debug = DrawGroupedComponentBoundaries(perpendicular_components_binary, components, intervals);
 #endif
     std::optional<std::pair<int, int>> selected_interval;
-    for (const auto& interval : intervals) {
-        if ((interval.second - interval.first) > 5) {
-            selected_interval = interval;
-            break;
+    if (components.size() <= 15) {
+        selected_interval = intervals.front();
+    } else {
+        for (const auto& interval : intervals) {
+            if ((interval.second - interval.first) > 5) {
+                selected_interval = interval;
+                break;
+            }
         }
     }
     if (!selected_interval.has_value()) {

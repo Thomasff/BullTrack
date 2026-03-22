@@ -184,7 +184,7 @@ DiffBinaryOutputs BuildDiffBinaryOutputs(const cv::Mat& before_gray, const cv::M
     double max_value = 0.0;
     cv::minMaxLoc(outputs.contrast_diff, nullptr, &max_value);
     outputs.max_value = static_cast<int>(max_value);
-    outputs.threshold_value = outputs.max_value > 0 ? std::max(1, static_cast<int>(outputs.max_value * 0.25)) : 1;
+    outputs.threshold_value = outputs.max_value > 0 ? std::max(1, static_cast<int>(outputs.max_value * 0.15)) : 1;
     cv::threshold(outputs.contrast_diff, outputs.thresh, outputs.threshold_value, 255, cv::THRESH_BINARY);
     outputs.opened = ApplyBinaryMorphology(outputs.thresh, config.diff_open_kernel, config.diff_open_iterations, cv::MORPH_OPEN);
     outputs.closed = ApplyBinaryMorphology(outputs.opened, config.diff_close_kernel, config.diff_close_iterations, cv::MORPH_CLOSE);
