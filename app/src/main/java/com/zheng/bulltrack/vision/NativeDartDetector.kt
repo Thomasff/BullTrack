@@ -1,18 +1,21 @@
 package com.zheng.bulltrack.vision
 
+import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.graphics.Color
 import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.ThrowResult
 import com.zheng.bulltrack.domain.scoring.VirtualBoardScorer
 
-class NativeDartDetector : DartDetector {
+class NativeDartDetector(
+    private val assetManager: AssetManager? = null
+) : DartDetector {
 
     init {
         System.loadLibrary("bulltrack")
     }
 
-    private external fun nativeInit()
+    private external fun nativeInit(assetManager: AssetManager?)
     private external fun nativeRelease()
     private external fun nativeCreateSession(): Long
     private external fun nativeDestroySession(sessionId: Long)
@@ -36,7 +39,7 @@ class NativeDartDetector : DartDetector {
     ): NativeRedetectResult
 
     override fun init() {
-        nativeInit()
+        nativeInit(assetManager)
     }
 
     fun release() {
@@ -91,7 +94,8 @@ class NativeDartDetector : DartDetector {
             throws = result.points.orEmpty().map { point ->
                 toThrowResult(point.normalizedX, point.normalizedY)
             },
-            debugImages = result.debugImages.orEmpty().map(::toDebugImageArtifact)
+            debugImages = result.debugImages.orEmpty().map(::toDebugImageArtifact),
+            yoloStatus = result.yoloStatus
         )
     }
 

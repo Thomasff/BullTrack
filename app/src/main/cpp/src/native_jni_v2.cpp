@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <opencv2/opencv.hpp>
 #include <android/log.h>
+#include <android/asset_manager_jni.h>
 
 #include <memory>
 #include <stdexcept>
@@ -8,6 +9,7 @@
 #include <vector>
 
 #include "AndroidBullTrackSession.h"
+#include "YoloNcnnDetector.h"
 
 #define LOG_TAG "BullTrackNativeV2"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -137,12 +139,14 @@ jobject CreateNativeRedetectResult(JNIEnv* env, const bulltrack::AndroidRedetect
     jmethodID constructor = env->GetMethodID(
         result_class,
         "<init>",
-        "([Lcom/zheng/bulltrack/vision/NativePointResult;[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;)V");
+        "([Lcom/zheng/bulltrack/vision/NativePointResult;[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;Ljava/lang/String;)V");
     jobjectArray points = CreateNativePointArray(env, result.points);
     jobjectArray debug_images = CreateNativeDebugImageArray(env, result.debug_images);
-    jobject obj = env->NewObject(result_class, constructor, points, debug_images);
+    jstring yolo_status = env->NewStringUTF(result.yolo_status.c_str());
+    jobject obj = env->NewObject(result_class, constructor, points, debug_images, yolo_status);
     env->DeleteLocalRef(points);
     env->DeleteLocalRef(debug_images);
+    env->DeleteLocalRef(yolo_status);
     return obj;
 }
 
@@ -153,9 +157,11 @@ extern "C" {
 JNIEXPORT void JNICALL
 Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeInit(
     JNIEnv* env,
-    jobject thiz) {
-    (void)env;
+    jobject thiz,
+    jobject asset_manager) {
     (void)thiz;
+    AAssetManager* native_asset_manager = AAssetManager_fromJava(env, asset_manager);
+    bulltrack::SetNcnnAssetManager(native_asset_manager);
     LOGI("Native v2 detector initialized");
 }
 

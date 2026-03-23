@@ -5,6 +5,7 @@
 #include "bulltrack_v2/DartDetector.h"
 #include "bulltrack_v2/Pipeline.h"
 #include "bulltrack_v2/Preprocessing.h"
+#include "YoloNcnnDetector.h"
 
 #include <algorithm>
 #include <cmath>
@@ -743,6 +744,24 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
         pipeline_config_,
         experiment_config_.long_edge);
     result.points = std::move(detection.points);
+    result.yolo_status = "not_run";
+
+    try {
+        YoloDetectionResult yolo_detection = DetectYoloObjects(latest_frame_bgr_);
+        result.yolo_status = "ok";
+#if BT_ENABLE_DEBUG_IMAGES
+        if (!yolo_detection.overlay_bgr.empty()) {
+            AppendDebugImage(
+                result.debug_images,
+                current_frame_index_,
+                "s90",
+                "yolo_redetect_overlay",
+                yolo_detection.overlay_bgr);
+        }
+#endif
+    } catch (const std::exception& error) {
+        result.yolo_status = std::string("error: ") + error.what();
+    }
 
 #if BT_ENABLE_DEBUG_IMAGES
     AppendDebugImage(

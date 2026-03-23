@@ -5,7 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 class MockDartDetector(
     private val context: Context,
-    private val delegate: NativeDartDetector = NativeDartDetector()
+    private val delegate: NativeDartDetector = NativeDartDetector(context.assets)
 ) : DartDetector {
 
     private var debugBeforeBitmap: Bitmap? = null

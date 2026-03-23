@@ -142,7 +142,12 @@ class CaptureRoundUseCase(
         session.throws.addAll(normalized)
         stateMachine.showDetectedResult(
             throws = normalized,
-            statusMessage = "已使用第一张与新拍图片重新识别",
+            statusMessage = buildString {
+                append("已使用第一张与新拍图片重新识别")
+                if (!redetectUpdate.yoloStatus.isNullOrBlank()) {
+                    append("（YOLO: ${redetectUpdate.yoloStatus}）")
+                }
+            },
             canRedetect = true
         )
         return normalized

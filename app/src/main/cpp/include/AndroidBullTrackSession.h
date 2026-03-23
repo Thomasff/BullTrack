@@ -34,6 +34,7 @@ struct AndroidFrameProcessResult {
 struct AndroidRedetectResult {
     std::vector<cv::Point2f> points;
     std::vector<DebugImageArtifact> debug_images;
+    std::string yolo_status;
 };
 
 class AndroidBullTrackSession {

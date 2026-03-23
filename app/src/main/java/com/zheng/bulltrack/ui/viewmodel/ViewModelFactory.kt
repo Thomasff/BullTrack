@@ -22,7 +22,7 @@ class ViewModelFactory {
             if (gameViewModel != null) return gameViewModel!!
 
             val stateMachine = GameStateMachine()
-            val dartDetector: DartDetector = NativeDartDetector()
+            val dartDetector: DartDetector = NativeDartDetector(context.applicationContext.assets)
             val cameraManager: CameraManager = CameraXManager().apply {
                 initialize(context.applicationContext)
             }
