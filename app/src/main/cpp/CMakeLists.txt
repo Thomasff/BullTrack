@@ -10,7 +10,7 @@ if(NOT DEFINED BT_ENABLE_DEBUG_IMAGES)
 endif()
 
 set(OpenCV_DIR ${CMAKE_CURRENT_SOURCE_DIR}/opencv-sdk/sdk/native/jni)
-set(NCNN_PREBUILT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ncnn-20260113-android/${ANDROID_ABI})
+set(NCNN_PREBUILT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/third_party/ncnn-20260113-android-vulkan/${ANDROID_ABI})
 set(ncnn_DIR ${NCNN_PREBUILT_ROOT}/lib/cmake/ncnn)
 
 find_package(OpenCV REQUIRED)

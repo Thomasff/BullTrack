@@ -17,6 +17,8 @@ struct YoloDetectionBox {
 struct YoloDetectionResult {
     std::vector<YoloDetectionBox> boxes;
     cv::Mat overlay_bgr;
+    std::string execution_backend;
+    std::string status_detail;
 };
 
 void SetNcnnAssetManager(AAssetManager* asset_manager);

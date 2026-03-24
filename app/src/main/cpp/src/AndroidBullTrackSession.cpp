@@ -748,7 +748,10 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
 
     try {
         YoloDetectionResult yolo_detection = DetectYoloObjects(latest_frame_bgr_);
-        result.yolo_status = "ok";
+        result.yolo_status = "ok (" + yolo_detection.execution_backend + ")";
+        if (!yolo_detection.status_detail.empty()) {
+            result.yolo_status += " " + yolo_detection.status_detail;
+        }
 #if BT_ENABLE_DEBUG_IMAGES
         if (!yolo_detection.overlay_bgr.empty()) {
             AppendDebugImage(

@@ -1,5 +1,6 @@
 #include "YoloNcnnDetector.h"
 
+#include <ncnn/gpu.h>
 #include <ncnn/net.h>
 
 #include <algorithm>
@@ -23,6 +24,7 @@ constexpr const char* kOutputBlobName = "out0";
 constexpr int kInputSize = 640;
 constexpr float kScoreThreshold = 0.25f;
 constexpr float kNmsThreshold = 0.45f;
+constexpr int kGpuDeviceIndex = 0;
 
 AAssetManager* g_asset_manager = nullptr;
 
@@ -138,7 +140,11 @@ std::vector<YoloDetectionBox> ApplyNms(std::vector<YoloDetectionBox> boxes) {
     return kept;
 }
 
-cv::Mat DrawOverlay(const cv::Mat& image_bgr, const std::vector<YoloDetectionBox>& boxes) {
+cv::Mat DrawOverlay(
+    const cv::Mat& image_bgr,
+    const std::vector<YoloDetectionBox>& boxes,
+    const std::string& backend,
+    const std::string& status_detail) {
     cv::Mat overlay = image_bgr.clone();
     for (const YoloDetectionBox& box : boxes) {
         const cv::Scalar color = box.label == "board"
@@ -163,6 +169,48 @@ cv::Mat DrawOverlay(const cv::Mat& image_bgr, const std::vector<YoloDetectionBox
             color,
             2);
     }
+
+    const std::string backend_text = "NCNN " + backend;
+    int baseline = 0;
+    const double font_scale = 0.9;
+    const int thickness = 2;
+    const cv::Size backend_size = cv::getTextSize(
+        backend_text,
+        cv::FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        thickness,
+        &baseline);
+    const bool used_gpu = backend == "GPU";
+    const cv::Scalar backend_color = used_gpu ? cv::Scalar(0, 220, 0) : cv::Scalar(0, 170, 255);
+    const int margin = 12;
+    const int line_height = backend_size.height + baseline + 8;
+    int box_height = line_height + margin;
+    if (!status_detail.empty()) {
+        box_height += line_height;
+    }
+    cv::rectangle(
+        overlay,
+        cv::Rect(8, 8, std::max(220, backend_size.width + margin * 2), box_height),
+        cv::Scalar(0, 0, 0),
+        cv::FILLED);
+    cv::putText(
+        overlay,
+        backend_text,
+        cv::Point(16, 16 + backend_size.height),
+        cv::FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        backend_color,
+        thickness);
+    if (!status_detail.empty()) {
+        cv::putText(
+            overlay,
+            status_detail,
+            cv::Point(16, 16 + backend_size.height + line_height),
+            cv::FONT_HERSHEY_SIMPLEX,
+            0.55,
+            cv::Scalar(255, 255, 255),
+            1);
+    }
     return overlay;
 }
 
@@ -170,7 +218,90 @@ class YoloNcnnRuntime {
 public:
     YoloDetectionResult Detect(const cv::Mat& image_bgr) {
         std::lock_guard<std::mutex> lock(mutex_);
-        EnsureInitialized();
+        if (g_asset_manager == nullptr) {
+            throw std::runtime_error("NCNN AssetManager 未设置，无法加载模型");
+        }
+
+        std::string gpu_failure_detail;
+        if (TryPrepareGpu()) {
+            try {
+                return DetectWithBackend(image_bgr, gpu_runtime_, "GPU", "");
+            } catch (const std::exception& error) {
+                gpu_failure_detail = std::string("GPU fallback: ") + error.what();
+            }
+        } else {
+            gpu_failure_detail = gpu_failure_reason_.empty()
+                ? "GPU unavailable"
+                : "GPU fallback: " + gpu_failure_reason_;
+        }
+
+        try {
+            return DetectWithBackend(image_bgr, cpu_runtime_, "CPU", gpu_failure_detail);
+        } catch (const std::exception& cpu_error) {
+            if (!gpu_failure_detail.empty()) {
+                throw std::runtime_error(gpu_failure_detail + "; CPU failed: " + cpu_error.what());
+            }
+            throw;
+        }
+    }
+
+private:
+    struct BackendRuntime {
+        bool initialized = false;
+        bool use_vulkan = false;
+        ncnn::Net net;
+    };
+
+    bool TryPrepareGpu() {
+        if (gpu_checked_) {
+            return gpu_available_;
+        }
+        gpu_checked_ = true;
+        const int create_result = ncnn::create_gpu_instance();
+        if (create_result != 0) {
+            gpu_failure_reason_ = "create_gpu_instance failed";
+            gpu_available_ = false;
+            return false;
+        }
+        if (ncnn::get_gpu_count() <= 0) {
+            gpu_failure_reason_ = "get_gpu_count == 0";
+            gpu_available_ = false;
+            return false;
+        }
+        gpu_available_ = true;
+        return true;
+    }
+
+    void EnsureInitialized(BackendRuntime& runtime) {
+        if (runtime.initialized) {
+            return;
+        }
+        if (class_names_.empty()) {
+            class_names_ = ReadAssetLines(g_asset_manager, kClassesAssetPath);
+        }
+        runtime.net.opt.use_vulkan_compute = runtime.use_vulkan;
+        runtime.net.opt.use_fp16_packed = true;
+        runtime.net.opt.use_fp16_storage = true;
+        runtime.net.opt.use_fp16_arithmetic = true;
+        if (runtime.use_vulkan) {
+            runtime.net.set_vulkan_device(kGpuDeviceIndex);
+        }
+
+        if (runtime.net.load_param(g_asset_manager, kModelParamAssetPath) != 0) {
+            throw std::runtime_error("加载 YOLO param 失败: ncnn/model.ncnn.param");
+        }
+        if (runtime.net.load_model(g_asset_manager, kModelBinAssetPath) != 0) {
+            throw std::runtime_error("加载 YOLO bin 失败: ncnn/model.ncnn.bin");
+        }
+        runtime.initialized = true;
+    }
+
+    YoloDetectionResult DetectWithBackend(
+        const cv::Mat& image_bgr,
+        BackendRuntime& runtime,
+        const std::string& backend,
+        const std::string& status_detail) {
+        EnsureInitialized(runtime);
 
         LetterboxResult letterbox = LetterboxResize(image_bgr, kInputSize);
         ncnn::Mat input = ncnn::Mat::from_pixels(
@@ -181,9 +312,11 @@ public:
         const float norm_vals[3] = {1.0f / 255.0f, 1.0f / 255.0f, 1.0f / 255.0f};
         input.substract_mean_normalize(nullptr, norm_vals);
 
-        ncnn::Extractor extractor = net_.create_extractor();
+        ncnn::Extractor extractor = runtime.net.create_extractor();
         extractor.set_light_mode(true);
-        extractor.input(kInputBlobName, input);
+        if (extractor.input(kInputBlobName, input) != 0) {
+            throw std::runtime_error("YOLO 输入失败: in0");
+        }
 
         ncnn::Mat output;
         if (extractor.extract(kOutputBlobName, output) != 0) {
@@ -192,31 +325,7 @@ public:
 
         std::vector<YoloDetectionBox> boxes = DecodeOutput(output, letterbox, image_bgr.size());
         std::vector<YoloDetectionBox> final_boxes = ApplyNms(std::move(boxes));
-        return {final_boxes, DrawOverlay(image_bgr, final_boxes)};
-    }
-
-private:
-    void EnsureInitialized() {
-        if (initialized_) {
-            return;
-        }
-        if (g_asset_manager == nullptr) {
-            throw std::runtime_error("NCNN AssetManager 未设置，无法加载模型");
-        }
-
-        class_names_ = ReadAssetLines(g_asset_manager, kClassesAssetPath);
-        net_.opt.use_vulkan_compute = false;
-        net_.opt.use_fp16_packed = true;
-        net_.opt.use_fp16_storage = true;
-        net_.opt.use_fp16_arithmetic = true;
-
-        if (net_.load_param(g_asset_manager, kModelParamAssetPath) != 0) {
-            throw std::runtime_error("加载 YOLO param 失败: ncnn/model.ncnn.param");
-        }
-        if (net_.load_model(g_asset_manager, kModelBinAssetPath) != 0) {
-            throw std::runtime_error("加载 YOLO bin 失败: ncnn/model.ncnn.bin");
-        }
-        initialized_ = true;
+        return {final_boxes, DrawOverlay(image_bgr, final_boxes, backend, status_detail), backend, status_detail};
     }
 
     std::vector<YoloDetectionBox> DecodeOutput(
@@ -294,8 +403,11 @@ private:
 
 private:
     std::mutex mutex_;
-    bool initialized_ = false;
-    ncnn::Net net_;
+    bool gpu_checked_ = false;
+    bool gpu_available_ = false;
+    std::string gpu_failure_reason_;
+    BackendRuntime gpu_runtime_{false, true, {}};
+    BackendRuntime cpu_runtime_{false, false, {}};
     std::vector<std::string> class_names_;
 };
 
