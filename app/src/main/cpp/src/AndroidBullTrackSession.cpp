@@ -31,6 +31,15 @@ struct RedetectDebugComputation {
     cv::Mat filtered_mask;
 };
 
+struct FirstFrameBoardBaseline {
+    cv::Rect board_box;
+    cv::Mat board_crop_bgr;
+    cv::Mat enhanced_board_crop_bgr;
+    cv::Mat preprocessed_gray;
+    BoardCircle board_circle;
+    BoardCircleDetectionResult board_detection;
+};
+
 #if BT_ENABLE_DEBUG_IMAGES
 std::vector<std::uint8_t> EncodeJpegBytes(const cv::Mat& image) {
     std::vector<std::uint8_t> buffer;
@@ -165,7 +174,7 @@ void AppendBoardDetectionDebugImages(
     std::vector<DebugImageArtifact>& output,
     int frame_index,
     const BoardCircleDetectionResult& board_detection,
-    const cv::Mat& resized_bgr) {
+    const cv::Mat& board_crop_bgr) {
 #if BT_ENABLE_DEBUG_IMAGES
     AppendDebugImageIfNotEmpty(
         output,
@@ -197,7 +206,7 @@ void AppendBoardDetectionDebugImages(
         "s10",
         "board_center_radius",
         DrawBoardCenterRadiusDebugImage(
-            resized_bgr,
+            board_crop_bgr,
             board_detection.circle,
             board_detection.red_radius_correction_succeeded,
             board_detection.red_radius_selected_component_masks));
@@ -205,7 +214,7 @@ void AppendBoardDetectionDebugImages(
     (void)output;
     (void)frame_index;
     (void)board_detection;
-    (void)resized_bgr;
+    (void)board_crop_bgr;
 #endif
 }
 
@@ -251,6 +260,87 @@ std::tuple<int, int, int, int> ComputeBoardSquareCrop(const cv::Size& shape, int
 cv::Mat CropWithBox(const cv::Mat& image, const std::tuple<int, int, int, int>& crop_box) {
     const auto [left, top, right, bottom] = crop_box;
     return image(cv::Rect(left, top, right - left, bottom - top)).clone();
+}
+
+cv::Rect ClampRectToImage(const cv::Rect2f& rect, const cv::Size& image_size) {
+    const int left = std::max(0, static_cast<int>(std::floor(rect.x)));
+    const int top = std::max(0, static_cast<int>(std::floor(rect.y)));
+    const int right = std::min(image_size.width, static_cast<int>(std::ceil(rect.x + rect.width)));
+    const int bottom = std::min(image_size.height, static_cast<int>(std::ceil(rect.y + rect.height)));
+    if (left >= right || top >= bottom) {
+        throw std::runtime_error("首帧 board 框无效");
+    }
+    return cv::Rect(left, top, right - left, bottom - top);
+}
+
+cv::Mat CropBoardByRect(const cv::Mat& image, const cv::Rect& rect) {
+    if (image.empty()) {
+        throw std::runtime_error("输入图为空，无法裁剪 board 区域");
+    }
+    if (rect.width <= 0 || rect.height <= 0) {
+        throw std::runtime_error("board 裁剪区域无效");
+    }
+    return image(rect).clone();
+}
+
+cv::Rect SelectBestBoardBox(const YoloDetectionResult& detection, const cv::Size& image_size) {
+    std::optional<YoloDetectionBox> best_board_box;
+    for (const YoloDetectionBox& box : detection.boxes) {
+        if (box.label != "board") {
+            continue;
+        }
+        if (!best_board_box.has_value() || box.score > best_board_box->score) {
+            best_board_box = box;
+        }
+    }
+    if (!best_board_box.has_value()) {
+        throw std::runtime_error("首帧未检测到 board");
+    }
+    return ClampRectToImage(best_board_box->rect, image_size);
+}
+
+cv::Mat CropByReferenceBoardBox(const cv::Mat& image, const cv::Rect& board_box) {
+    return CropBoardByRect(
+        image,
+        ClampRectToImage(
+            cv::Rect2f(
+                static_cast<float>(board_box.x),
+                static_cast<float>(board_box.y),
+                static_cast<float>(board_box.width),
+                static_cast<float>(board_box.height)),
+            image.size()));
+}
+
+FirstFrameBoardBaseline BuildFirstFrameBoardBaseline(
+    const cv::Mat& first_frame_bgr,
+    const PipelineConfig& pipeline_config) {
+    if (first_frame_bgr.empty()) {
+        throw std::runtime_error("首帧为空");
+    }
+
+    YoloDetectionResult yolo_detection = DetectYoloObjects(first_frame_bgr);
+    const cv::Rect board_box = SelectBestBoardBox(yolo_detection, first_frame_bgr.size());
+    cv::Mat board_crop_bgr = CropBoardByRect(first_frame_bgr, board_box);
+    cv::Mat enhanced_board_crop_bgr = EnhanceWarpedImage(
+        board_crop_bgr,
+        pipeline_config.enhancement.saturation_scale,
+        pipeline_config.enhancement.contrast_scale);
+    BoardCircleDetectionResult board_detection = DetectBoardCircleDetailed(
+        enhanced_board_crop_bgr,
+        pipeline_config.edge,
+        pipeline_config.circle,
+        false);
+
+    FirstFrameBoardBaseline baseline;
+    baseline.board_box = board_box;
+    baseline.board_crop_bgr = std::move(board_crop_bgr);
+    baseline.enhanced_board_crop_bgr = std::move(enhanced_board_crop_bgr);
+    baseline.preprocessed_gray = PreprocessImage(
+        baseline.enhanced_board_crop_bgr,
+        pipeline_config.dart.preprocess_blur_kernel);
+    baseline.board_circle = board_detection.circle;
+    baseline.board_detection = std::move(board_detection);
+    return baseline;
 }
 
 cv::Mat FilterSmallComponents(const cv::Mat& binary_img, int min_area) {
@@ -349,16 +439,16 @@ double ComputeBoxLongShortRatio(const std::optional<BoxTuple>& box) {
 }
 
 PreciseDetectionDebugResult DetectSingleDartOnFrames(
-    const cv::Mat& first_bgr,
-    const cv::Mat& before_bgr,
-    const cv::Mat& after_bgr,
+    const cv::Mat& first_board_crop_bgr,
+    const cv::Mat& before_board_crop_bgr,
+    const cv::Mat& after_board_crop_bgr,
     const BoardCircle& board_circle,
     const PipelineConfig& config,
     int long_edge,
     int frame_index) {
-    cv::Mat first_resized = ResizeLongEdgeTo720(first_bgr, long_edge);
-    cv::Mat before_resized = ResizeLongEdgeTo720(before_bgr, long_edge);
-    cv::Mat after_resized = ResizeLongEdgeTo720(after_bgr, long_edge);
+    cv::Mat first_resized = ResizeLongEdgeTo720(first_board_crop_bgr, long_edge);
+    cv::Mat before_resized = ResizeLongEdgeTo720(before_board_crop_bgr, long_edge);
+    cv::Mat after_resized = ResizeLongEdgeTo720(after_board_crop_bgr, long_edge);
 
     cv::Mat first_view = EnhanceWarpedImage(
         first_resized,
@@ -451,13 +541,13 @@ PreciseDetectionDebugResult DetectSingleDartOnFrames(
 }
 
 RedetectDebugComputation DetectDartsOnFramesForRedetect(
-    const cv::Mat& before_bgr,
-    const cv::Mat& after_bgr,
+    const cv::Mat& before_board_crop_bgr,
+    const cv::Mat& after_board_crop_bgr,
     const BoardCircle& board_circle,
     const PipelineConfig& config,
     int long_edge) {
-    cv::Mat before_resized = ResizeLongEdgeTo720(before_bgr, long_edge);
-    cv::Mat after_resized = ResizeLongEdgeTo720(after_bgr, long_edge);
+    cv::Mat before_resized = ResizeLongEdgeTo720(before_board_crop_bgr, long_edge);
+    cv::Mat after_resized = ResizeLongEdgeTo720(after_board_crop_bgr, long_edge);
 
     cv::Mat before_view = EnhanceWarpedImage(
         before_resized,
@@ -516,17 +606,16 @@ AndroidFrameProcessResult RunFrameGate(
     const cv::Mat& previous_processed,
     const std::tuple<int, int, int, int>& crop_box,
     const BoardCircle& board_circle,
-    const cv::Mat& current_frame_bgr,
+    const cv::Mat& current_frame_board_crop_bgr,
     const PipelineConfig& pipeline_config,
     const ExperimentConfig& experiment_config,
     int frame_index) {
-    cv::Mat after_resized = ResizeLongEdgeTo720(current_frame_bgr, experiment_config.long_edge);
+    cv::Mat after_resized = ResizeLongEdgeTo720(current_frame_board_crop_bgr, experiment_config.long_edge);
     cv::Mat after_enhanced = EnhanceWarpedImage(
         after_resized,
         pipeline_config.enhancement.saturation_scale,
         pipeline_config.enhancement.contrast_scale);
-    cv::Mat after_gray;
-    cv::cvtColor(after_enhanced, after_gray, cv::COLOR_BGR2GRAY);
+    cv::Mat after_gray = PreprocessImage(after_enhanced, pipeline_config.dart.preprocess_blur_kernel);
 
     PyramidECCResult alignment_result = AlignPyramidEcc(
         first_gate_gray,
@@ -634,18 +723,12 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     previous_frame_bgr_ = first_frame_bgr.clone();
     latest_frame_bgr_ = first_frame_bgr.clone();
 
-    cv::Mat before_resized = ResizeLongEdgeTo720(first_frame_bgr_, experiment_config_.long_edge);
-    cv::Mat before_enhanced = EnhanceWarpedImage(
-        before_resized,
-        pipeline_config_.enhancement.saturation_scale,
-        pipeline_config_.enhancement.contrast_scale);
-    cv::cvtColor(before_enhanced, first_gate_gray_, cv::COLOR_BGR2GRAY);
-    BoardCircleDetectionResult board_detection = DetectBoardCircleDetailed(
-        before_enhanced,
-        pipeline_config_.edge,
-        pipeline_config_.circle,
-        false);
-    gate_board_circle_ = board_detection.circle;
+    FirstFrameBoardBaseline baseline = BuildFirstFrameBoardBaseline(first_frame_bgr_, pipeline_config_);
+    first_frame_board_box_ = baseline.board_box;
+    first_frame_board_crop_bgr_ = baseline.board_crop_bgr.clone();
+    first_frame_preprocessed_for_alignment_ = baseline.preprocessed_gray.clone();
+    gate_board_circle_ = baseline.board_circle;
+    first_gate_gray_ = baseline.preprocessed_gray.clone();
 
     cv::Mat before_masked = ApplyBoardMask(
         first_gate_gray_,
@@ -663,7 +746,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     current_frame_index_ = 2;
 
     AndroidStartRoundResult result;
-    AppendBoardDetectionDebugImages(result.debug_images, 1, board_detection, before_resized);
+    AppendBoardDetectionDebugImages(result.debug_images, 1, baseline.board_detection, first_frame_board_crop_bgr_);
     return result;
 }
 
@@ -676,21 +759,23 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     }
 
     latest_frame_bgr_ = frame_bgr.clone();
+    cv::Mat latest_board_crop_bgr = CropByReferenceBoardBox(latest_frame_bgr_, first_frame_board_box_);
     AndroidFrameProcessResult result = RunFrameGate(
         first_gate_gray_,
         previous_processed_,
         crop_box_,
         gate_board_circle_,
-        latest_frame_bgr_,
+        latest_board_crop_bgr,
         pipeline_config_,
         experiment_config_,
         current_frame_index_);
 
     if (result.gate_triggered) {
+        cv::Mat previous_board_crop_bgr = CropByReferenceBoardBox(previous_frame_bgr_, first_frame_board_box_);
         PreciseDetectionDebugResult precise_result = DetectSingleDartOnFrames(
-            first_frame_bgr_,
-            previous_frame_bgr_,
-            latest_frame_bgr_,
+            first_frame_board_crop_bgr_,
+            previous_board_crop_bgr,
+            latest_board_crop_bgr,
             gate_board_circle_,
             pipeline_config_,
             experiment_config_.long_edge,
@@ -702,13 +787,12 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
         }
     }
 
-    cv::Mat after_resized = ResizeLongEdgeTo720(latest_frame_bgr_, experiment_config_.long_edge);
+    cv::Mat after_resized = ResizeLongEdgeTo720(latest_board_crop_bgr, experiment_config_.long_edge);
     cv::Mat after_enhanced = EnhanceWarpedImage(
         after_resized,
         pipeline_config_.enhancement.saturation_scale,
         pipeline_config_.enhancement.contrast_scale);
-    cv::Mat after_gray;
-    cv::cvtColor(after_enhanced, after_gray, cv::COLOR_BGR2GRAY);
+    cv::Mat after_gray = PreprocessImage(after_enhanced, pipeline_config_.dart.preprocess_blur_kernel);
     PyramidECCResult alignment_result = AlignPyramidEcc(
         first_gate_gray_,
         after_gray,
@@ -736,10 +820,11 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
     }
     latest_frame_bgr_ = frame_bgr.clone();
     AndroidRedetectResult result;
+    cv::Mat latest_board_crop_bgr = CropByReferenceBoardBox(latest_frame_bgr_, first_frame_board_box_);
 
     RedetectDebugComputation detection = DetectDartsOnFramesForRedetect(
-        first_frame_bgr_,
-        latest_frame_bgr_,
+        first_frame_board_crop_bgr_,
+        latest_board_crop_bgr,
         gate_board_circle_,
         pipeline_config_,
         experiment_config_.long_edge);

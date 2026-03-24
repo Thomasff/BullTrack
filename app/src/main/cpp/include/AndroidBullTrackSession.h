@@ -2,6 +2,7 @@
 
 #include "bulltrack_v2/Config.h"
 #include "DebugImageConfig.h"
+#include "YoloNcnnDetector.h"
 
 #include <opencv2/opencv.hpp>
 
@@ -50,7 +51,10 @@ private:
     PipelineConfig pipeline_config_{};
     ExperimentConfig experiment_config_{};
     BoardCircle gate_board_circle_{};
+    cv::Rect first_frame_board_box_{};
     cv::Mat first_frame_bgr_;
+    cv::Mat first_frame_board_crop_bgr_;
+    cv::Mat first_frame_preprocessed_for_alignment_;
     cv::Mat latest_frame_bgr_;
     cv::Mat previous_frame_bgr_;
     cv::Mat first_gate_gray_;
