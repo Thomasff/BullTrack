@@ -25,8 +25,7 @@ class CaptureRoundUseCase(
         val nativeSessionId: Long,
         val roundId: String,
         val throws: MutableList<ThrowResult> = mutableListOf(),
-        var consumedFrameCount: Int = 1,
-        var isDevelopmentExposureFallback: Boolean = false
+        var consumedFrameCount: Int = 1
     )
 
     private var currentSession: RoundSession? = null
@@ -58,8 +57,7 @@ class CaptureRoundUseCase(
         }
         currentSession = RoundSession(
             nativeSessionId = nativeSessionId,
-            roundId = roundId,
-            isDevelopmentExposureFallback = firstFrame.cameraConfig?.isDevelopmentExposureFallback == true
+            roundId = roundId
         )
         val startMessage = firstFrame.cameraConfig?.statusMessage ?: "已拍摄第 1 张图片，开始连续检测"
         stateMachine.startRound(startMessage)
@@ -180,12 +178,7 @@ class CaptureRoundUseCase(
         }
 
         if (!frameUpdate.gateTriggered) {
-            val gateMessage = buildString {
-                append("第 $frameIndex 张图片未触发精检: ${describeGateReason(frameUpdate.gateReason)}")
-                if (session.isDevelopmentExposureFallback) {
-                    append("（开发降级模式）")
-                }
-            }
+            val gateMessage = "第 $frameIndex 张图片未触发精检: ${describeGateReason(frameUpdate.gateReason)}"
             stateMachine.updateRoundProgress(
                 session.throws.toList(),
                 gateMessage
@@ -204,12 +197,7 @@ class CaptureRoundUseCase(
         } else {
             "第 $frameIndex 张图片触发精检，但结果与已有飞镖重复"
         }
-        val finalStatusMessage = if (session.isDevelopmentExposureFallback) {
-            "$statusMessage（开发降级模式）"
-        } else {
-            statusMessage
-        }
-        stateMachine.updateRoundProgress(session.throws.toList(), finalStatusMessage)
+        stateMachine.updateRoundProgress(session.throws.toList(), statusMessage)
         return session.throws.size >= MAX_DARTS
     }
 
@@ -229,12 +217,7 @@ class CaptureRoundUseCase(
             sourceExhausted -> "帧源已结束，返回当前结果"
             else -> "本轮检测结束"
         }
-        val finalStatusMessage = if (session.isDevelopmentExposureFallback) {
-            "$statusMessage（开发降级模式）"
-        } else {
-            statusMessage
-        }
-        stateMachine.showDetectedResult(finalThrows, finalStatusMessage, canRedetect = true)
+        stateMachine.showDetectedResult(finalThrows, statusMessage, canRedetect = true)
         return finalThrows
     }
 

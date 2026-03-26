@@ -28,9 +28,6 @@ data class GameUiState(
     val isPreviewVisible: Boolean = false,
     val zoomRatio: Float = 1f,
     val cameraStatusMessage: String? = null,
-    val isExposureStrictlyLocked: Boolean = false,
-    val isDevelopmentExposureFallback: Boolean = false,
-    val lockedIso: Int? = null,
     val cameraLockPhase: String? = null,
     val cameraLockReason: String? = null
 )

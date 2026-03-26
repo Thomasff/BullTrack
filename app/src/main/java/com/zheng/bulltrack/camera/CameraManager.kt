@@ -11,28 +11,17 @@ sealed class CameraState {
     data class Ready(
         val zoomRatio: Float = 1f,
         val isPreviewBound: Boolean = false,
-        val isStrictExposureLocked: Boolean = false,
-        val isDevelopmentExposureFallback: Boolean = false,
-        val lockedIso: Int? = null,
         val lockPhase: CameraLockPhase = CameraLockPhase.IDLE,
         val statusMessage: String = "相机就绪"
     ) : CameraState()
 
     data class Capturing(
         val zoomRatio: Float,
-        val isStrictExposureLocked: Boolean,
-        val isDevelopmentExposureFallback: Boolean,
-        val lockedIso: Int? = null,
         val lockPhase: CameraLockPhase = CameraLockPhase.IDLE,
         val statusMessage: String
     ) : CameraState()
 
     data class Error(val message: String) : CameraState()
-}
-
-enum class IsoSource {
-    AE_MEASURED,
-    FALLBACK
 }
 
 enum class CameraLockPhase {
@@ -47,12 +36,7 @@ data class RoundCameraConfig(
     val height: Int,
     val rotationDegrees: Int,
     val zoomRatio: Float,
-    val exposureTimeNs: Long?,
-    val iso: Int?,
-    val isoSource: IsoSource,
     val lockReason: String?,
-    val isStrictExposureLocked: Boolean,
-    val isDevelopmentExposureFallback: Boolean,
     val statusMessage: String
 )
 

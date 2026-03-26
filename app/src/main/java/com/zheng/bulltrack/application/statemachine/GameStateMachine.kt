@@ -215,9 +215,6 @@ class GameStateMachine {
         isReady: Boolean,
         zoomRatio: Float,
         statusMessage: String?,
-        isExposureStrictlyLocked: Boolean,
-        isDevelopmentExposureFallback: Boolean,
-        lockedIso: Int?,
         lockPhase: String?,
         lockReason: String?
     ) {
@@ -226,9 +223,6 @@ class GameStateMachine {
                 isCameraReady = isReady,
                 zoomRatio = zoomRatio,
                 cameraStatusMessage = statusMessage,
-                isExposureStrictlyLocked = isExposureStrictlyLocked,
-                isDevelopmentExposureFallback = isDevelopmentExposureFallback,
-                lockedIso = lockedIso,
                 cameraLockPhase = lockPhase,
                 cameraLockReason = lockReason
             )

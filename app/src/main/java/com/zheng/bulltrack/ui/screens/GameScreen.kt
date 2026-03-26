@@ -240,22 +240,15 @@ private fun RoundStatusCard(uiState: GameUiState) {
                 Text(
                     text = status,
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (uiState.isDevelopmentExposureFallback) {
-                        MaterialTheme.colorScheme.tertiary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
-            if (uiState.lockedIso != null || uiState.cameraLockPhase != null) {
+            if (uiState.cameraLockPhase != null) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = buildString {
-                        append("曝光锁定")
-                        uiState.lockedIso?.let { iso ->
-                            append(" ISO=$iso")
-                        }
+                        append("拍摄模式")
                         uiState.cameraLockPhase?.let { phase ->
                             append(" [$phase]")
                         }
@@ -356,23 +349,10 @@ private fun CameraPreviewCard(
                     enabled = false,
                     label = {
                         Text(
-                            if (uiState.isExposureStrictlyLocked) {
-                                "固定 1/100s"
-                            } else if (uiState.isDevelopmentExposureFallback) {
-                                "开发降级模式"
-                            } else {
-                                "等待锁定参数"
-                            }
+                            "自动稳定拍摄"
                         )
                     }
                 )
-                if (uiState.lockedIso != null) {
-                    AssistChip(
-                        onClick = {},
-                        enabled = false,
-                        label = { Text("ISO ${uiState.lockedIso}") }
-                    )
-                }
             }
         }
     }

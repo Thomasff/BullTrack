@@ -8,25 +8,25 @@ import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.YuvImage
 import android.hardware.camera2.CameraCaptureSession
-import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.util.Log
-import android.util.Range
 import android.util.Size
-import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -45,18 +45,11 @@ class CameraXManager : CameraManager {
         private const val TAG = "CameraXManager"
         private const val TARGET_WIDTH = 1080
         private const val TARGET_HEIGHT = 1920
-        private const val TARGET_EXPOSURE_TIME_NS = 10_000_000L
         private const val ROUND_ZOOM_SETTLE_MS = 120L
-        private const val AE_METERING_TIMEOUT_MS = 1200L
-        private const val AE_POLL_INTERVAL_MS = 60L
-        private const val AE_STABLE_REQUIRED_COUNT = 3
-    }
-
-    private enum class ExposureBindMode {
-        PREVIEW_AUTO,
-        METERING_AUTO_SHUTTER_FIXED,
-        MANUAL_LOCKED,
-        CAPTURE_AUTO
+        private const val AF_AE_TIMEOUT_MS = 1500L
+        private const val AF_AE_POLL_INTERVAL_MS = 50L
+        private const val AF_AE_STABLE_REQUIRED_COUNT = 2
+        private const val AUTO_FOCUS_SIZE = 0.2f
     }
 
     private val _cameraState = MutableStateFlow<CameraState>(CameraState.Idle)
@@ -74,26 +67,20 @@ class CameraXManager : CameraManager {
     private var lockedZoomRatioForRound: Float? = null
 
     private var currentRoundConfig: RoundCameraConfig? = null
-    private var strictExposureSupported: Boolean = false
-    private var strictExposureLocked: Boolean = false
-    private var lockedIsoForRound: Int? = null
     private var lockPhase: CameraLockPhase = CameraLockPhase.IDLE
     private var lockReason: String? = null
-
-    private var exposureRange: Range<Long>? = null
-    private var sensitivityRange: Range<Int>? = null
-
-    @Volatile
-    private var latestAeIso: Int? = null
 
     @Volatile
     private var latestAeState: Int? = null
 
     @Volatile
-    private var latestAeExposureTimeNs: Long? = null
+    private var latestAfState: Int? = null
 
     @Volatile
     private var aeStableCount: Int = 0
+
+    @Volatile
+    private var afStableCount: Int = 0
 
     private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
@@ -101,14 +88,19 @@ class CameraXManager : CameraManager {
             request: CaptureRequest,
             result: TotalCaptureResult
         ) {
-            latestAeIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
             latestAeState = result.get(CaptureResult.CONTROL_AE_STATE)
-            latestAeExposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+            latestAfState = result.get(CaptureResult.CONTROL_AF_STATE)
 
             if (isAeStable(latestAeState)) {
                 aeStableCount += 1
             } else {
                 aeStableCount = 0
+            }
+
+            if (isAfStable(latestAfState)) {
+                afStableCount += 1
+            } else {
+                afStableCount = 0
             }
         }
     }
@@ -139,10 +131,7 @@ class CameraXManager : CameraManager {
     override fun bindPreview(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
         previewLifecycleOwner = lifecycleOwner
         this.previewView = previewView
-        bindCameraUseCases(
-            mode = ExposureBindMode.PREVIEW_AUTO,
-            bindPreview = true
-        )
+        bindCameraUseCases(bindPreview = true)
     }
 
     override fun unbindPreview() {
@@ -171,58 +160,9 @@ class CameraXManager : CameraManager {
 
     override suspend fun captureFirstFrameForRound(): CapturedFrame {
         lockedZoomRatioForRound = currentZoomRatio
-        strictExposureSupported = detectStrictExposureSupport()
-        strictExposureLocked = false
-        lockedIsoForRound = null
-        lockReason = null
         lockPhase = CameraLockPhase.METERING
-        resetAeTracking()
-
-        if (!strictExposureSupported) {
-            lockPhase = CameraLockPhase.FALLBACK
-            lockReason = "设备不支持固定1/100+手动ISO"
-            bindCameraUseCases(
-                mode = ExposureBindMode.CAPTURE_AUTO,
-                bindPreview = true
-            )
-            applyRoundZoomBeforeCapture()
-            val bitmap = takePicture()
-            val roundConfig = buildRoundCameraConfig(bitmap)
-            currentRoundConfig = roundConfig
-            unbindPreview()
-            _cameraState.value = readyState(
-                isPreviewBound = false,
-                statusMessage = roundConfig.statusMessage
-            )
-            return CapturedFrame(bitmap = bitmap, cameraConfig = roundConfig)
-        }
-
-        bindCameraUseCases(
-            mode = ExposureBindMode.METERING_AUTO_SHUTTER_FIXED,
-            bindPreview = true
-        )
-        val measuredIso = waitForAeIso()
-        if (measuredIso == null) {
-            lockPhase = CameraLockPhase.FALLBACK
-            lockReason = "AE测光超时，无法读取ISO"
-            lockedIsoForRound = sensitivityRange?.lower
-        } else {
-            lockPhase = CameraLockPhase.LOCKED
-            lockReason = "AE测光完成并锁定ISO"
-            lockedIsoForRound = measuredIso
-        }
-
-        bindCameraUseCases(
-            mode = if (lockedIsoForRound != null) {
-                ExposureBindMode.MANUAL_LOCKED
-            } else {
-                ExposureBindMode.CAPTURE_AUTO
-            },
-            bindPreview = true
-        )
-        strictExposureLocked = lockedIsoForRound != null
-
-        applyRoundZoomBeforeCapture()
+        lockReason = "本轮使用自动对焦/测光稳定后拍摄"
+        prepareAutoCapture()
         val bitmap = takePicture()
         val roundConfig = buildRoundCameraConfig(bitmap)
         currentRoundConfig = roundConfig
@@ -235,7 +175,8 @@ class CameraXManager : CameraManager {
     }
 
     override suspend fun captureNextFrameForRound(): CapturedFrame {
-        applyRoundZoomBeforeCapture()
+        lockPhase = CameraLockPhase.METERING
+        prepareAutoCapture()
         val bitmap = takePicture()
         val config = currentRoundConfig ?: buildRoundCameraConfig(bitmap).also {
             currentRoundConfig = it
@@ -245,23 +186,14 @@ class CameraXManager : CameraManager {
 
     override fun endRoundCapture() {
         currentRoundConfig = null
-        strictExposureLocked = false
-        strictExposureSupported = false
-        lockedIsoForRound = null
         lockedZoomRatioForRound = null
         lockPhase = CameraLockPhase.IDLE
         lockReason = null
-        resetAeTracking()
+        reset3AState()
         if (previewLifecycleOwner != null && previewView != null) {
-            bindCameraUseCases(
-                mode = ExposureBindMode.PREVIEW_AUTO,
-                bindPreview = true
-            )
+            bindCameraUseCases(bindPreview = true)
         } else {
-            bindCameraUseCases(
-                mode = ExposureBindMode.CAPTURE_AUTO,
-                bindPreview = false
-            )
+            bindCameraUseCases(bindPreview = false)
         }
     }
 
@@ -276,17 +208,14 @@ class CameraXManager : CameraManager {
         previewLifecycleOwner = null
         previewView = null
         currentRoundConfig = null
-        strictExposureLocked = false
-        strictExposureSupported = false
-        lockedIsoForRound = null
         lockedZoomRatioForRound = null
         lockPhase = CameraLockPhase.IDLE
         lockReason = null
-        resetAeTracking()
+        reset3AState()
         _cameraState.value = CameraState.Idle
     }
 
-    private fun bindCameraUseCases(mode: ExposureBindMode, bindPreview: Boolean) {
+    private fun bindCameraUseCases(bindPreview: Boolean) {
         val provider = cameraProvider ?: return
         val lifecycleOwner = previewLifecycleOwner
         if (bindPreview && lifecycleOwner == null) {
@@ -294,7 +223,7 @@ class CameraXManager : CameraManager {
         }
 
         val preview = if (bindPreview) {
-            buildPreview(mode).also { useCase ->
+            buildPreview().also { useCase ->
                 previewView?.let { view ->
                     useCase.setSurfaceProvider(view.surfaceProvider)
                 }
@@ -303,7 +232,7 @@ class CameraXManager : CameraManager {
             null
         }
 
-        val imageCaptureUseCase = buildImageCapture(mode)
+        val imageCaptureUseCase = buildImageCapture()
 
         try {
             provider.unbindAll()
@@ -318,7 +247,6 @@ class CameraXManager : CameraManager {
             previewUseCase = preview
             imageCapture = imageCaptureUseCase
             applyZoom()
-            cacheCameraCharacteristics()
             _cameraState.value = readyState(
                 isPreviewBound = preview != null,
                 statusMessage = currentRoundConfig?.statusMessage ?: "相机就绪"
@@ -329,133 +257,38 @@ class CameraXManager : CameraManager {
         }
     }
 
-    private fun buildPreview(mode: ExposureBindMode): Preview {
+    private fun buildPreview(): Preview {
         val builder = Preview.Builder()
             .setTargetResolution(Size(TARGET_WIDTH, TARGET_HEIGHT))
         val extender = Camera2Interop.Extender(builder)
         extender.setSessionCaptureCallback(captureCallback)
-        when (mode) {
-            ExposureBindMode.METERING_AUTO_SHUTTER_FIXED -> {
-                extender.setCaptureRequestOption(
-                    CaptureRequest.CONTROL_AE_MODE,
-                    CaptureRequest.CONTROL_AE_MODE_ON
-                )
-                extender.setCaptureRequestOption(
-                    CaptureRequest.SENSOR_EXPOSURE_TIME,
-                    TARGET_EXPOSURE_TIME_NS
-                )
-            }
-
-            ExposureBindMode.MANUAL_LOCKED -> {
-                lockedIsoForRound?.let { iso ->
-                    extender.setCaptureRequestOption(
-                        CaptureRequest.CONTROL_AE_MODE,
-                        CaptureRequest.CONTROL_AE_MODE_OFF
-                    )
-                    extender.setCaptureRequestOption(
-                        CaptureRequest.SENSOR_EXPOSURE_TIME,
-                        TARGET_EXPOSURE_TIME_NS
-                    )
-                    extender.setCaptureRequestOption(
-                        CaptureRequest.SENSOR_SENSITIVITY,
-                        iso
-                    )
-                }
-            }
-
-            ExposureBindMode.PREVIEW_AUTO,
-            ExposureBindMode.CAPTURE_AUTO -> {
-                extender.setCaptureRequestOption(
-                    CaptureRequest.CONTROL_AE_MODE,
-                    CaptureRequest.CONTROL_AE_MODE_ON
-                )
-            }
-        }
+        extender.setCaptureRequestOption(
+            CaptureRequest.CONTROL_AE_MODE,
+            CaptureRequest.CONTROL_AE_MODE_ON
+        )
+        extender.setCaptureRequestOption(
+            CaptureRequest.CONTROL_AF_MODE,
+            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        )
         return builder.build()
     }
 
-    private fun buildImageCapture(mode: ExposureBindMode): ImageCapture {
+    private fun buildImageCapture(): ImageCapture {
         val builder = ImageCapture.Builder()
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
             .setTargetResolution(Size(TARGET_WIDTH, TARGET_HEIGHT))
         val extender = Camera2Interop.Extender(builder)
         extender.setSessionCaptureCallback(captureCallback)
-
-        when (mode) {
-            ExposureBindMode.METERING_AUTO_SHUTTER_FIXED -> {
-                extender.setCaptureRequestOption(
-                    CaptureRequest.CONTROL_AE_MODE,
-                    CaptureRequest.CONTROL_AE_MODE_ON
-                )
-                extender.setCaptureRequestOption(
-                    CaptureRequest.SENSOR_EXPOSURE_TIME,
-                    TARGET_EXPOSURE_TIME_NS
-                )
-            }
-
-            ExposureBindMode.MANUAL_LOCKED -> {
-                val lockedIso = lockedIsoForRound
-                if (lockedIso != null) {
-                    extender.setCaptureRequestOption(
-                        CaptureRequest.CONTROL_AE_MODE,
-                        CaptureRequest.CONTROL_AE_MODE_OFF
-                    )
-                    extender.setCaptureRequestOption(
-                        CaptureRequest.SENSOR_EXPOSURE_TIME,
-                        TARGET_EXPOSURE_TIME_NS
-                    )
-                    extender.setCaptureRequestOption(
-                        CaptureRequest.SENSOR_SENSITIVITY,
-                        lockedIso
-                    )
-                }
-            }
-
-            ExposureBindMode.PREVIEW_AUTO,
-            ExposureBindMode.CAPTURE_AUTO -> {
-                extender.setCaptureRequestOption(
-                    CaptureRequest.CONTROL_AE_MODE,
-                    CaptureRequest.CONTROL_AE_MODE_ON
-                )
-            }
-        }
+        extender.setCaptureRequestOption(
+            CaptureRequest.CONTROL_AE_MODE,
+            CaptureRequest.CONTROL_AE_MODE_ON
+        )
+        extender.setCaptureRequestOption(
+            CaptureRequest.CONTROL_AF_MODE,
+            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+        )
 
         return builder.build()
-    }
-
-    private suspend fun waitForAeIso(): Int? {
-        val isoRange = sensitivityRange ?: return null
-        val measuredIso = withTimeoutOrNull(AE_METERING_TIMEOUT_MS) {
-            var isoResult: Int? = null
-            while (isoResult == null) {
-                val iso = latestAeIso
-                if (iso != null && aeStableCount >= AE_STABLE_REQUIRED_COUNT) {
-                    isoResult = iso.coerceIn(isoRange.lower, isoRange.upper)
-                    break
-                }
-                delay(AE_POLL_INTERVAL_MS)
-            }
-            isoResult
-        }
-        return measuredIso ?: latestAeIso?.coerceIn(isoRange.lower, isoRange.upper)
-    }
-
-    private fun detectStrictExposureSupport(): Boolean {
-        cacheCameraCharacteristics()
-        val supportsExposure = exposureRange?.contains(TARGET_EXPOSURE_TIME_NS) == true
-        val supportsIso = sensitivityRange != null
-        return supportsExposure && supportsIso
-    }
-
-    private fun cacheCameraCharacteristics() {
-        val cameraInfo = boundCamera?.cameraInfo ?: return
-        val camera2Info = Camera2CameraInfo.from(cameraInfo)
-        exposureRange = camera2Info.getCameraCharacteristic(
-            CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE
-        )
-        sensitivityRange = camera2Info.getCameraCharacteristic(
-            CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE
-        )
     }
 
     private fun applyZoom() {
@@ -472,6 +305,23 @@ class CameraXManager : CameraManager {
         currentZoomRatio = targetZoom
     }
 
+    private suspend fun prepareAutoCapture() {
+        reset3AState()
+        applyRoundZoomBeforeCapture()
+        triggerCenterFocusAndMetering()
+        val stabilized = waitForAutoStateStable()
+        lockPhase = if (stabilized) {
+            CameraLockPhase.LOCKED
+        } else {
+            CameraLockPhase.FALLBACK
+        }
+        lockReason = if (stabilized) {
+            "zoom、生效后的自动对焦与测光已稳定"
+        } else {
+            "自动对焦/测光等待超时，按当前状态拍摄"
+        }
+    }
+
     private suspend fun applyRoundZoomBeforeCapture() {
         val lockedZoom = lockedZoomRatioForRound ?: return
         val camera = boundCamera ?: return
@@ -482,20 +332,59 @@ class CameraXManager : CameraManager {
         )
         lockedZoomRatioForRound = clampedZoom
         currentZoomRatio = clampedZoom
-        camera.cameraControl.setZoomRatio(clampedZoom)
+        camera.cameraControl.setZoomRatio(clampedZoom).await()
         delay(ROUND_ZOOM_SETTLE_MS)
     }
 
-    private fun resetAeTracking() {
-        latestAeIso = null
+    private suspend fun triggerCenterFocusAndMetering() {
+        val camera = boundCamera ?: return
+        val point = SurfaceOrientedMeteringPointFactory(1f, 1f)
+            .createPoint(0.5f, 0.5f, AUTO_FOCUS_SIZE)
+        val action = FocusMeteringAction.Builder(
+            point,
+            FocusMeteringAction.FLAG_AF or
+                FocusMeteringAction.FLAG_AE or
+                FocusMeteringAction.FLAG_AWB
+        ).setAutoCancelDuration(2, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        runCatching {
+            camera.cameraControl.startFocusAndMetering(action).await()
+        }.onFailure { error ->
+            Log.w(TAG, "Focus and metering trigger failed", error)
+        }
+    }
+
+    private suspend fun waitForAutoStateStable(): Boolean {
+        return withTimeoutOrNull(AF_AE_TIMEOUT_MS) {
+            while (true) {
+                if (aeStableCount >= AF_AE_STABLE_REQUIRED_COUNT &&
+                    afStableCount >= AF_AE_STABLE_REQUIRED_COUNT
+                ) {
+                    return@withTimeoutOrNull true
+                }
+                delay(AF_AE_POLL_INTERVAL_MS)
+            }
+            false
+        } ?: false
+    }
+
+    private fun reset3AState() {
         latestAeState = null
-        latestAeExposureTimeNs = null
+        latestAfState = null
         aeStableCount = 0
+        afStableCount = 0
     }
 
     private fun isAeStable(aeState: Int?): Boolean {
         return aeState == CaptureResult.CONTROL_AE_STATE_CONVERGED ||
             aeState == CaptureResult.CONTROL_AE_STATE_LOCKED
+    }
+
+    private fun isAfStable(afState: Int?): Boolean {
+        return afState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
+            afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED ||
+            afState == CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED ||
+            afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED
     }
 
     private suspend fun takePicture(): Bitmap = suspendCancellableCoroutine { continuation ->
@@ -508,17 +397,11 @@ class CameraXManager : CameraManager {
 
         _cameraState.value = CameraState.Capturing(
             zoomRatio = currentZoomRatio,
-            isStrictExposureLocked = strictExposureLocked,
-            isDevelopmentExposureFallback = !strictExposureLocked,
-            lockedIso = lockedIsoForRound,
             lockPhase = lockPhase,
             statusMessage = when (lockPhase) {
-                CameraLockPhase.METERING -> "固定 1/100s，正在测光推断 ISO"
-                CameraLockPhase.LOCKED -> "使用固定 1/100s + ISO ${lockedIsoForRound ?: "-"} 拍摄"
-                CameraLockPhase.FALLBACK -> "开发降级模式：${
-                    lockReason ?: "未能锁定ISO"
-                }"
-
+                CameraLockPhase.METERING -> "正在等待 zoom、生效后的自动对焦和测光"
+                CameraLockPhase.LOCKED -> "自动对焦/测光已稳定，准备拍摄"
+                CameraLockPhase.FALLBACK -> lockReason ?: "自动对焦/测光未完全稳定，按当前状态拍摄"
                 CameraLockPhase.IDLE -> "相机拍摄中"
             }
         )
@@ -555,31 +438,16 @@ class CameraXManager : CameraManager {
     }
 
     private fun buildRoundCameraConfig(bitmap: Bitmap): RoundCameraConfig {
-        val strict = strictExposureLocked && lockedIsoForRound != null
-        val isoSource = if (strict) {
-            IsoSource.AE_MEASURED
-        } else {
-            IsoSource.FALLBACK
-        }
         val roundZoomRatio = lockedZoomRatioForRound ?: currentZoomRatio
-        val statusMessage = if (strict) {
-            "参数锁定：1/100s，ISO ${lockedIsoForRound}, zoom ${formatZoom(roundZoomRatio)}x"
-        } else {
-            "开发降级模式：${
-                lockReason ?: "未严格锁定1/100+ISO"
-            }，zoom ${formatZoom(roundZoomRatio)}x"
-        }
+        val statusMessage = "本轮固定 zoom ${formatZoom(roundZoomRatio)}x，${
+            lockReason ?: "自动对焦/测光后拍摄"
+        }"
         return RoundCameraConfig(
             width = bitmap.width,
             height = bitmap.height,
             rotationDegrees = 0,
             zoomRatio = roundZoomRatio,
-            exposureTimeNs = if (strict) TARGET_EXPOSURE_TIME_NS else null,
-            iso = lockedIsoForRound,
-            isoSource = isoSource,
             lockReason = lockReason,
-            isStrictExposureLocked = strict,
-            isDevelopmentExposureFallback = !strict,
             statusMessage = statusMessage
         )
     }
@@ -588,17 +456,35 @@ class CameraXManager : CameraManager {
         isPreviewBound: Boolean,
         statusMessage: String
     ): CameraState.Ready {
-        val strict = currentRoundConfig?.isStrictExposureLocked == true
-        val fallback = currentRoundConfig?.isDevelopmentExposureFallback == true
         return CameraState.Ready(
             zoomRatio = currentZoomRatio,
             isPreviewBound = isPreviewBound,
-            isStrictExposureLocked = strict,
-            isDevelopmentExposureFallback = fallback,
-            lockedIso = currentRoundConfig?.iso ?: lockedIsoForRound,
             lockPhase = lockPhase,
             statusMessage = statusMessage
         )
+    }
+
+    private suspend fun <T> ListenableFuture<T>.await(): T {
+        return suspendCancellableCoroutine { continuation ->
+            val context = appContext
+            if (context == null) {
+                continuation.resumeWithException(IllegalStateException("相机上下文尚未初始化"))
+                return@suspendCancellableCoroutine
+            }
+            addListener(
+                {
+                    try {
+                        continuation.resume(get())
+                    } catch (error: Exception) {
+                        continuation.resumeWithException(error)
+                    }
+                },
+                ContextCompat.getMainExecutor(context)
+            )
+            continuation.invokeOnCancellation {
+                cancel(true)
+            }
+        }
     }
 
     private fun imageProxyToBitmap(image: ImageProxy): Bitmap {

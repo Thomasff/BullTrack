@@ -57,9 +57,6 @@ class GameViewModel(
                         isReady = false,
                         zoomRatio = 1f,
                         statusMessage = "相机未初始化",
-                        isExposureStrictlyLocked = false,
-                        isDevelopmentExposureFallback = false,
-                        lockedIso = null,
                         lockPhase = CameraLockPhase.IDLE.name,
                         lockReason = null
                     )
@@ -68,22 +65,16 @@ class GameViewModel(
                         isReady = true,
                         zoomRatio = cameraState.zoomRatio,
                         statusMessage = cameraState.statusMessage,
-                        isExposureStrictlyLocked = cameraState.isStrictExposureLocked,
-                        isDevelopmentExposureFallback = cameraState.isDevelopmentExposureFallback,
-                        lockedIso = cameraState.lockedIso,
                         lockPhase = cameraState.lockPhase.name,
-                        lockReason = null
+                        lockReason = cameraState.statusMessage
                     )
 
                     is CameraState.Capturing -> stateMachine.updateCameraStatus(
                         isReady = false,
                         zoomRatio = cameraState.zoomRatio,
                         statusMessage = cameraState.statusMessage,
-                        isExposureStrictlyLocked = cameraState.isStrictExposureLocked,
-                        isDevelopmentExposureFallback = cameraState.isDevelopmentExposureFallback,
-                        lockedIso = cameraState.lockedIso,
                         lockPhase = cameraState.lockPhase.name,
-                        lockReason = null
+                        lockReason = cameraState.statusMessage
                     )
 
                     is CameraState.Error -> {
@@ -91,9 +82,6 @@ class GameViewModel(
                             isReady = false,
                             zoomRatio = cameraManager.getZoomRatio(),
                             statusMessage = cameraState.message,
-                            isExposureStrictlyLocked = false,
-                            isDevelopmentExposureFallback = true,
-                            lockedIso = null,
                             lockPhase = CameraLockPhase.FALLBACK.name,
                             lockReason = cameraState.message
                         )
