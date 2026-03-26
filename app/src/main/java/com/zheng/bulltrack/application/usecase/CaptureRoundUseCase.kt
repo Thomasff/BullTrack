@@ -181,7 +181,7 @@ class CaptureRoundUseCase(
 
         if (!frameUpdate.gateTriggered) {
             val gateMessage = buildString {
-                append("第 $frameIndex 张图片未触发精检: ${frameUpdate.gateReason}")
+                append("第 $frameIndex 张图片未触发精检: ${describeGateReason(frameUpdate.gateReason)}")
                 if (session.isDevelopmentExposureFallback) {
                     append("（开发降级模式）")
                 }
@@ -277,8 +277,20 @@ class CaptureRoundUseCase(
         )
     }
 
+    private fun describeGateReason(gateReason: String): String {
+        return when {
+            gateReason == "yolo_count_not_increased" -> "YOLO 飞镖数量未增加"
+            gateReason == "yolo_count_increased_wait_next_frame" -> "YOLO 飞镖数量增加，等待下一张确认"
+            gateReason == "yolo_count_not_stable" -> "YOLO 飞镖数量未稳定"
+            gateReason == "yolo_new_dart_box_not_resolved" -> "YOLO 未能唯一确定新增飞镖框"
+            gateReason.startsWith("yolo_detect_failed:") -> "YOLO 检测失败"
+            gateReason.isBlank() -> "未知原因"
+            else -> gateReason
+        }
+    }
+
     companion object {
-        private const val FRAME_INTERVAL_MS = 1000L
+        private const val FRAME_INTERVAL_MS = 333L
         private const val MAX_DARTS = 3
         private const val DUPLICATE_DISTANCE_THRESHOLD = 0.08
         private val ROUND_ID_FORMAT = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)

@@ -38,6 +38,21 @@ struct AndroidRedetectResult {
     std::string yolo_status;
 };
 
+struct TrackedYoloFrameState {
+    int frame_index = 0;
+    cv::Mat frame_bgr;
+    cv::Mat board_crop_bgr;
+    cv::Rect board_box{};
+    std::vector<YoloDetectionBox> dart_boxes;
+    cv::Mat overlay_bgr;
+    std::string yolo_status;
+};
+
+struct PendingYoloCandidateState {
+    TrackedYoloFrameState base_frame;
+    TrackedYoloFrameState candidate_frame;
+};
+
 class AndroidBullTrackSession {
 public:
     AndroidBullTrackSession();
@@ -59,6 +74,9 @@ private:
     cv::Mat previous_frame_bgr_;
     cv::Mat first_gate_gray_;
     cv::Mat previous_processed_;
+    std::vector<TrackedYoloFrameState> recent_frames_;
+    std::optional<PendingYoloCandidateState> pending_candidate_;
+    int last_confirmed_dart_count_ = 0;
     bool started_ = false;
     int current_frame_index_ = 2;
 };

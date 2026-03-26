@@ -38,6 +38,7 @@ struct FirstFrameBoardBaseline {
     cv::Mat preprocessed_gray;
     BoardCircle board_circle;
     BoardCircleDetectionResult board_detection;
+    YoloDetectionResult yolo_detection;
 };
 
 #if BT_ENABLE_DEBUG_IMAGES
@@ -170,6 +171,81 @@ cv::Mat DrawTipPointOnBinaryImage(const cv::Mat& binary_img, const std::optional
 }
 #endif
 
+cv::Rect ClampRectToImage(const cv::Rect2f& rect, const cv::Size& image_size);
+
+cv::Point2f BoxCenter(const YoloDetectionBox& box) {
+    return cv::Point2f(
+        box.rect.x + (box.rect.width * 0.5f),
+        box.rect.y + (box.rect.height * 0.5f));
+}
+
+std::vector<YoloDetectionBox> SelectTopDartBoxes(const YoloDetectionResult& detection, int max_count) {
+    std::vector<YoloDetectionBox> dart_boxes;
+    for (const YoloDetectionBox& box : detection.boxes) {
+        if (box.label == "dart") {
+            dart_boxes.push_back(box);
+        }
+    }
+    std::sort(dart_boxes.begin(), dart_boxes.end(), [](const YoloDetectionBox& lhs, const YoloDetectionBox& rhs) {
+        return lhs.score > rhs.score;
+    });
+    const size_t limit = static_cast<size_t>(std::max(0, max_count));
+    if (dart_boxes.size() > limit) {
+        dart_boxes.resize(limit);
+    }
+    return dart_boxes;
+}
+
+std::optional<cv::Rect> SelectOptionalBestBoardBox(const YoloDetectionResult& detection, const cv::Size& image_size) {
+    std::optional<YoloDetectionBox> best_board_box;
+    for (const YoloDetectionBox& box : detection.boxes) {
+        if (box.label != "board") {
+            continue;
+        }
+        if (!best_board_box.has_value() || box.score > best_board_box->score) {
+            best_board_box = box;
+        }
+    }
+    if (!best_board_box.has_value()) {
+        return std::nullopt;
+    }
+    return ClampRectToImage(best_board_box->rect, image_size);
+}
+
+#if BT_ENABLE_DEBUG_IMAGES
+cv::Mat DrawFrameOverlayWithHighlightedNewBox(
+    const cv::Mat& image_bgr,
+    const std::vector<YoloDetectionBox>& dart_boxes,
+    const std::optional<YoloDetectionBox>& new_dart_box,
+    const std::string& label) {
+    cv::Mat debug_image = image_bgr.clone();
+    for (const YoloDetectionBox& box : dart_boxes) {
+        cv::rectangle(debug_image, box.rect, cv::Scalar(0, 255, 255), 2);
+        cv::putText(
+            debug_image,
+            "dart " + cv::format("%.2f", box.score),
+            cv::Point(static_cast<int>(box.rect.x), std::max(18, static_cast<int>(box.rect.y) - 6)),
+            cv::FONT_HERSHEY_SIMPLEX,
+            0.5,
+            cv::Scalar(0, 255, 255),
+            2);
+    }
+    if (new_dart_box.has_value()) {
+        cv::rectangle(debug_image, new_dart_box->rect, cv::Scalar(0, 0, 255), 3);
+        cv::putText(
+            debug_image,
+            "new_dart",
+            cv::Point(static_cast<int>(new_dart_box->rect.x), std::max(36, static_cast<int>(new_dart_box->rect.y) - 10)),
+            cv::FONT_HERSHEY_SIMPLEX,
+            0.8,
+            cv::Scalar(0, 0, 255),
+            2);
+    }
+    cv::putText(debug_image, label, cv::Point(16, 28), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(255, 255, 0), 2);
+    return debug_image;
+}
+#endif
+
 void AppendBoardDetectionDebugImages(
     std::vector<DebugImageArtifact>& output,
     int frame_index,
@@ -284,19 +360,11 @@ cv::Mat CropBoardByRect(const cv::Mat& image, const cv::Rect& rect) {
 }
 
 cv::Rect SelectBestBoardBox(const YoloDetectionResult& detection, const cv::Size& image_size) {
-    std::optional<YoloDetectionBox> best_board_box;
-    for (const YoloDetectionBox& box : detection.boxes) {
-        if (box.label != "board") {
-            continue;
-        }
-        if (!best_board_box.has_value() || box.score > best_board_box->score) {
-            best_board_box = box;
-        }
-    }
-    if (!best_board_box.has_value()) {
+    std::optional<cv::Rect> board_box = SelectOptionalBestBoardBox(detection, image_size);
+    if (!board_box.has_value()) {
         throw std::runtime_error("首帧未检测到 board");
     }
-    return ClampRectToImage(best_board_box->rect, image_size);
+    return board_box.value();
 }
 
 cv::Mat CropByReferenceBoardBox(const cv::Mat& image, const cv::Rect& board_box) {
@@ -340,7 +408,100 @@ FirstFrameBoardBaseline BuildFirstFrameBoardBaseline(
         pipeline_config.dart.preprocess_blur_kernel);
     baseline.board_circle = board_detection.circle;
     baseline.board_detection = std::move(board_detection);
+    baseline.yolo_detection = std::move(yolo_detection);
     return baseline;
+}
+
+TrackedYoloFrameState BuildTrackedYoloFrameState(
+    int frame_index,
+    const cv::Mat& frame_bgr,
+    const cv::Rect& reference_board_box,
+    const YoloDetectionResult& detection,
+    int max_dart_count) {
+    TrackedYoloFrameState frame_state;
+    frame_state.frame_index = frame_index;
+    frame_state.frame_bgr = frame_bgr.clone();
+    frame_state.board_crop_bgr = CropByReferenceBoardBox(frame_bgr, reference_board_box);
+    frame_state.board_box = SelectOptionalBestBoardBox(detection, frame_bgr.size()).value_or(reference_board_box);
+    frame_state.dart_boxes = SelectTopDartBoxes(detection, max_dart_count);
+    frame_state.overlay_bgr = detection.overlay_bgr.clone();
+    frame_state.yolo_status = detection.execution_backend;
+    if (!detection.status_detail.empty()) {
+        frame_state.yolo_status += " " + detection.status_detail;
+    }
+    return frame_state;
+}
+
+void PushRecentFrame(std::vector<TrackedYoloFrameState>& recent_frames, TrackedYoloFrameState frame_state) {
+    recent_frames.push_back(std::move(frame_state));
+    while (recent_frames.size() > 3) {
+        recent_frames.erase(recent_frames.begin());
+    }
+}
+
+std::optional<YoloDetectionBox> ResolveNewDartBox(
+    const std::vector<YoloDetectionBox>& base_boxes,
+    const std::vector<YoloDetectionBox>& stable_boxes) {
+    if (stable_boxes.size() != base_boxes.size() + 1) {
+        return std::nullopt;
+    }
+    if (base_boxes.empty()) {
+        return stable_boxes.front();
+    }
+
+    struct DistancePair {
+        size_t stable_index = 0;
+        size_t base_index = 0;
+        float distance = 0.0f;
+    };
+
+    std::vector<DistancePair> distances;
+    distances.reserve(base_boxes.size() * stable_boxes.size());
+    for (size_t stable_index = 0; stable_index < stable_boxes.size(); ++stable_index) {
+        const cv::Point2f stable_center = BoxCenter(stable_boxes[stable_index]);
+        for (size_t base_index = 0; base_index < base_boxes.size(); ++base_index) {
+            const cv::Point2f base_center = BoxCenter(base_boxes[base_index]);
+            distances.push_back(DistancePair{
+                stable_index,
+                base_index,
+                static_cast<float>(cv::norm(stable_center - base_center))
+            });
+        }
+    }
+    std::sort(distances.begin(), distances.end(), [](const DistancePair& lhs, const DistancePair& rhs) {
+        return lhs.distance < rhs.distance;
+    });
+
+    std::vector<bool> used_stable(stable_boxes.size(), false);
+    std::vector<bool> used_base(base_boxes.size(), false);
+    size_t matched_count = 0;
+    for (const DistancePair& pair : distances) {
+        if (used_stable[pair.stable_index] || used_base[pair.base_index]) {
+            continue;
+        }
+        used_stable[pair.stable_index] = true;
+        used_base[pair.base_index] = true;
+        matched_count += 1;
+        if (matched_count == base_boxes.size()) {
+            break;
+        }
+    }
+
+    if (matched_count != base_boxes.size()) {
+        return std::nullopt;
+    }
+
+    std::optional<YoloDetectionBox> new_box;
+    for (size_t stable_index = 0; stable_index < stable_boxes.size(); ++stable_index) {
+        if (used_stable[stable_index]) {
+            continue;
+        }
+        if (new_box.has_value()) {
+            return std::nullopt;
+        }
+        new_box = stable_boxes[stable_index];
+    }
+    return new_box;
 }
 
 cv::Mat FilterSmallComponents(const cv::Mat& binary_img, int min_area) {
@@ -442,10 +603,12 @@ PreciseDetectionDebugResult DetectSingleDartOnFrames(
     const cv::Mat& first_board_crop_bgr,
     const cv::Mat& before_board_crop_bgr,
     const cv::Mat& after_board_crop_bgr,
+    const std::optional<YoloDetectionBox>& new_dart_box,
     const BoardCircle& board_circle,
     const PipelineConfig& config,
     int long_edge,
     int frame_index) {
+    (void)new_dart_box;
     cv::Mat first_resized = ResizeLongEdgeTo720(first_board_crop_bgr, long_edge);
     cv::Mat before_resized = ResizeLongEdgeTo720(before_board_crop_bgr, long_edge);
     cv::Mat after_resized = ResizeLongEdgeTo720(after_board_crop_bgr, long_edge);
@@ -729,6 +892,17 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     first_frame_preprocessed_for_alignment_ = baseline.preprocessed_gray.clone();
     gate_board_circle_ = baseline.board_circle;
     first_gate_gray_ = baseline.preprocessed_gray.clone();
+    recent_frames_.clear();
+    pending_candidate_.reset();
+    last_confirmed_dart_count_ = static_cast<int>(SelectTopDartBoxes(baseline.yolo_detection, 3).size());
+    PushRecentFrame(
+        recent_frames_,
+        BuildTrackedYoloFrameState(
+            1,
+            first_frame_bgr_,
+            first_frame_board_box_,
+            baseline.yolo_detection,
+            3));
 
     cv::Mat before_masked = ApplyBoardMask(
         first_gate_gray_,
@@ -759,52 +933,105 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     }
 
     latest_frame_bgr_ = frame_bgr.clone();
-    cv::Mat latest_board_crop_bgr = CropByReferenceBoardBox(latest_frame_bgr_, first_frame_board_box_);
-    AndroidFrameProcessResult result = RunFrameGate(
-        first_gate_gray_,
-        previous_processed_,
-        crop_box_,
-        gate_board_circle_,
-        latest_board_crop_bgr,
-        pipeline_config_,
-        experiment_config_,
-        current_frame_index_);
+    AndroidFrameProcessResult result;
+    YoloDetectionResult yolo_detection;
+    try {
+        yolo_detection = DetectYoloObjects(latest_frame_bgr_);
+    } catch (const std::exception& error) {
+        result.gate_reason = std::string("yolo_detect_failed: ") + error.what();
+        previous_frame_bgr_ = latest_frame_bgr_.clone();
+        current_frame_index_ += 1;
+        return result;
+    }
 
-    if (result.gate_triggered) {
-        cv::Mat previous_board_crop_bgr = CropByReferenceBoardBox(previous_frame_bgr_, first_frame_board_box_);
-        PreciseDetectionDebugResult precise_result = DetectSingleDartOnFrames(
-            first_frame_board_crop_bgr_,
-            previous_board_crop_bgr,
-            latest_board_crop_bgr,
-            gate_board_circle_,
-            pipeline_config_,
-            experiment_config_.long_edge,
-            current_frame_index_);
-        result.precise_debug_images = std::move(precise_result.debug_images);
-        result.has_detection = precise_result.detection_result.has_dart && precise_result.detection_result.point_norm.has_value();
-        if (precise_result.detection_result.point_norm.has_value()) {
-            result.detected_point_norm = precise_result.detection_result.point_norm.value();
+    const int max_candidate_count = std::min(3, last_confirmed_dart_count_ + 1);
+    TrackedYoloFrameState current_frame_state = BuildTrackedYoloFrameState(
+        current_frame_index_,
+        latest_frame_bgr_,
+        first_frame_board_box_,
+        yolo_detection,
+        max_candidate_count);
+#if BT_ENABLE_DEBUG_IMAGES
+    if (!current_frame_state.overlay_bgr.empty()) {
+        AppendDebugImage(
+            result.gate_debug_images,
+            current_frame_index_,
+            "s12",
+            "gate_yolo_current",
+            current_frame_state.overlay_bgr);
+    }
+#endif
+
+    const int current_count = static_cast<int>(current_frame_state.dart_boxes.size());
+    PushRecentFrame(recent_frames_, current_frame_state);
+    const TrackedYoloFrameState& stored_current = recent_frames_.back();
+
+    if (current_count <= last_confirmed_dart_count_) {
+        pending_candidate_.reset();
+        result.gate_reason = "yolo_count_not_increased";
+    } else if (!pending_candidate_.has_value()) {
+        if (recent_frames_.size() < 2) {
+            result.gate_reason = "yolo_count_not_increased";
+        } else {
+            pending_candidate_ = PendingYoloCandidateState{
+                recent_frames_[recent_frames_.size() - 2],
+                stored_current
+            };
+            result.gate_reason = "yolo_count_increased_wait_next_frame";
+        }
+    } else {
+        const int candidate_count = static_cast<int>(pending_candidate_->candidate_frame.dart_boxes.size());
+        if (current_count < candidate_count) {
+            pending_candidate_.reset();
+            result.gate_reason = "yolo_count_not_stable";
+        } else {
+            std::vector<YoloDetectionBox> stable_dart_boxes = stored_current.dart_boxes;
+            if (stable_dart_boxes.size() > static_cast<size_t>(candidate_count)) {
+                stable_dart_boxes.resize(static_cast<size_t>(candidate_count));
+            }
+            std::optional<YoloDetectionBox> new_dart_box = ResolveNewDartBox(
+                pending_candidate_->base_frame.dart_boxes,
+                stable_dart_boxes);
+            if (!new_dart_box.has_value()) {
+                pending_candidate_.reset();
+                result.gate_reason = "yolo_new_dart_box_not_resolved";
+            } else {
+#if BT_ENABLE_DEBUG_IMAGES
+                AppendDebugImage(
+                    result.gate_debug_images,
+                    current_frame_index_,
+                    "s13",
+                    "gate_yolo_confirmed",
+                    DrawFrameOverlayWithHighlightedNewBox(
+                        stored_current.frame_bgr,
+                        stable_dart_boxes,
+                        new_dart_box,
+                        "stable_count_confirmed"));
+#endif
+                PreciseDetectionDebugResult precise_result = DetectSingleDartOnFrames(
+                    first_frame_board_crop_bgr_,
+                    pending_candidate_->base_frame.board_crop_bgr,
+                    stored_current.board_crop_bgr,
+                    new_dart_box,
+                    gate_board_circle_,
+                    pipeline_config_,
+                    experiment_config_.long_edge,
+                    current_frame_index_);
+                result.precise_debug_images = std::move(precise_result.debug_images);
+                result.gate_triggered = true;
+                result.gate_reason = "trigger_precise_detection";
+                result.has_detection =
+                    precise_result.detection_result.has_dart &&
+                    precise_result.detection_result.point_norm.has_value();
+                if (precise_result.detection_result.point_norm.has_value()) {
+                    result.detected_point_norm = precise_result.detection_result.point_norm.value();
+                }
+                last_confirmed_dart_count_ = std::min(3, last_confirmed_dart_count_ + 1);
+                pending_candidate_.reset();
+            }
         }
     }
 
-    cv::Mat after_resized = ResizeLongEdgeTo720(latest_board_crop_bgr, experiment_config_.long_edge);
-    cv::Mat after_enhanced = EnhanceWarpedImage(
-        after_resized,
-        pipeline_config_.enhancement.saturation_scale,
-        pipeline_config_.enhancement.contrast_scale);
-    cv::Mat after_gray = PreprocessImage(after_enhanced, pipeline_config_.dart.preprocess_blur_kernel);
-    PyramidECCResult alignment_result = AlignPyramidEcc(
-        first_gate_gray_,
-        after_gray,
-        experiment_config_.levels,
-        experiment_config_.motion_type);
-    cv::Mat after_masked = ApplyBoardMask(
-        alignment_result.aligned_target,
-        gate_board_circle_.cx,
-        gate_board_circle_.cy,
-        gate_board_circle_.radius);
-    cv::Mat after_cropped = CropWithBox(after_masked, crop_box_);
-    previous_processed_ = GaussianBlurOnce(after_cropped, experiment_config_.diff_blur_kernel);
     previous_frame_bgr_ = latest_frame_bgr_.clone();
     current_frame_index_ += 1;
 
