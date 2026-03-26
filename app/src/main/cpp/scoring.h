@@ -14,11 +14,11 @@ struct ScoreResult {
 
 class Scoring {
 public:
-    static constexpr double DOUBLE_START = 0.935;
-    static constexpr double OUTER_SINGLE_START = 0.645;
-    static constexpr double TRIPLE_START = 0.57;
-    static constexpr double INNER_SINGLE_END = 0.57;
-    static constexpr double BULL_END = 0.14;
+    static constexpr double DOUBLE_START = 0.9363;
+    static constexpr double OUTER_SINGLE_START = 0.6369;
+    static constexpr double TRIPLE_START = 0.5732;
+    static constexpr double INNER_SINGLE_END = 0.5732;
+    static constexpr double BULL_END = 0.121;
     
     static constexpr int CENTER_BULL_SCORE = 50;
     static constexpr int OUTER_BULL_SCORE = 25;
