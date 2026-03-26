@@ -9,7 +9,6 @@
 #include <optional>
 #include <cstdint>
 #include <string>
-#include <tuple>
 #include <vector>
 
 namespace bulltrack {
@@ -64,18 +63,13 @@ public:
     AndroidRedetectResult RedetectRound(const cv::Mat& frame_bgr);
 
 private:
-    std::tuple<int, int, int, int> crop_box_{0, 0, 0, 0};
     PipelineConfig pipeline_config_{};
-    ExperimentConfig experiment_config_{};
     BoardCircle gate_board_circle_{};
     cv::Rect first_frame_board_box_{};
     cv::Mat first_frame_bgr_;
     cv::Mat first_frame_board_crop_bgr_;
     cv::Mat first_frame_preprocessed_for_alignment_;
     cv::Mat latest_frame_bgr_;
-    cv::Mat previous_frame_bgr_;
-    cv::Mat first_gate_gray_;
-    cv::Mat previous_processed_;
     std::vector<TrackedYoloFrameState> recent_frames_;
     std::optional<PendingYoloCandidateState> pending_candidate_;
     int last_confirmed_dart_count_ = 0;
