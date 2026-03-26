@@ -41,8 +41,10 @@ struct AndroidRedetectResult {
 struct TrackedYoloFrameState {
     int frame_index = 0;
     cv::Mat frame_bgr;
-    cv::Mat board_crop_bgr;
+    cv::Mat reference_board_crop_bgr;
+    cv::Mat detected_board_crop_bgr;
     cv::Rect board_box{};
+    bool has_board_box = false;
     std::vector<YoloDetectionBox> dart_boxes;
     cv::Mat overlay_bgr;
     std::string yolo_status;
