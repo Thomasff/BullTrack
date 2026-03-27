@@ -10,7 +10,9 @@ import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.RingType
 import com.zheng.bulltrack.domain.model.ThrowResult
 import com.zheng.bulltrack.vision.DartDetector
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -45,14 +47,18 @@ class CaptureRoundUseCase(
         val nativeSessionId = dartDetector.createSession()
         val roundId = createRoundId()
         val startUpdate = runCatching {
-            dartDetector.startRound(nativeSessionId, firstFrame.bitmap)
+            withContext(Dispatchers.Default) {
+                dartDetector.startRound(nativeSessionId, firstFrame.bitmap)
+            }
         }.getOrElse { error ->
             dartDetector.destroySession(nativeSessionId)
             frameSource.finishRound()
             throw error
         }
         if (BuildConfig.ENABLE_DEBUG_IMAGES) {
-            debugImageSaver.saveArtifacts(roundId, startUpdate.debugImages)
+            withContext(Dispatchers.IO) {
+                debugImageSaver.saveArtifacts(roundId, startUpdate.debugImages)
+            }
         }
         currentSession = RoundSession(
             nativeSessionId = nativeSessionId,
@@ -110,7 +116,9 @@ class CaptureRoundUseCase(
 
         session.consumedFrameCount += 1
         val redetectUpdate = runCatching {
-            dartDetector.redetect(session.nativeSessionId, redetectFrame.bitmap)
+            withContext(Dispatchers.Default) {
+                dartDetector.redetect(session.nativeSessionId, redetectFrame.bitmap)
+            }
         }.getOrElse {
             stateMachine.showDetectedResult(
                 throws = session.throws.toList(),
@@ -121,7 +129,9 @@ class CaptureRoundUseCase(
         }
 
         if (BuildConfig.ENABLE_DEBUG_IMAGES) {
-            debugImageSaver.saveArtifacts(session.roundId, redetectUpdate.debugImages)
+            withContext(Dispatchers.IO) {
+                debugImageSaver.saveArtifacts(session.roundId, redetectUpdate.debugImages)
+            }
         }
 
         val normalized = redetectUpdate.throws.take(MAX_DARTS).toMutableList()
@@ -166,7 +176,9 @@ class CaptureRoundUseCase(
         session.consumedFrameCount = frameIndex
 
         val frameUpdate = runCatching {
-            dartDetector.processFrame(session.nativeSessionId, frame)
+            withContext(Dispatchers.Default) {
+                dartDetector.processFrame(session.nativeSessionId, frame)
+            }
         }.getOrElse {
             stateMachine.updateRoundProgress(
                 session.throws.toList(),
@@ -176,8 +188,10 @@ class CaptureRoundUseCase(
         }
 
         if (BuildConfig.ENABLE_DEBUG_IMAGES) {
-            debugImageSaver.saveArtifacts(session.roundId, frameUpdate.gateDebugImages)
-            debugImageSaver.saveArtifacts(session.roundId, frameUpdate.preciseDebugImages)
+            withContext(Dispatchers.IO) {
+                debugImageSaver.saveArtifacts(session.roundId, frameUpdate.gateDebugImages)
+                debugImageSaver.saveArtifacts(session.roundId, frameUpdate.preciseDebugImages)
+            }
         }
 
         if (!frameUpdate.gateTriggered) {

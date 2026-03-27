@@ -17,6 +17,10 @@ class MockDartDetector(
         loadDebugBitmapsIfNeeded()
     }
 
+    override fun warmUp() {
+        delegate.warmUp()
+    }
+
     override fun createSession(): Long {
         debugProcessCount = 0
         return delegate.createSession()

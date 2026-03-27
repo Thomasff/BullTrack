@@ -46,7 +46,7 @@ class CameraXManager : CameraManager {
         private const val TARGET_WIDTH = 1080
         private const val TARGET_HEIGHT = 1920
         private const val ROUND_ZOOM_SETTLE_MS = 120L
-        private const val AF_AE_TIMEOUT_MS = 1500L
+        private const val AF_AE_TIMEOUT_MS = 800L
         private const val AF_AE_POLL_INTERVAL_MS = 50L
         private const val AF_AE_STABLE_REQUIRED_COUNT = 2
         private const val AUTO_FOCUS_SIZE = 0.2f

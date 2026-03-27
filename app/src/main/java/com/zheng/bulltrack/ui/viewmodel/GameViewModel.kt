@@ -22,6 +22,7 @@ import com.zheng.bulltrack.domain.model.Player
 import com.zheng.bulltrack.domain.scoring.VirtualBoardScorer
 import com.zheng.bulltrack.vision.DartDetector
 import com.zheng.bulltrack.vision.NativeDartDetector
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,6 +43,8 @@ class GameViewModel(
     val uiState: StateFlow<GameUiState> = _uiState.asStateFlow()
 
     private var roundJob: Job? = null
+    @Volatile
+    private var warmUpRequested: Boolean = false
 
     init {
         dartDetector.init()
@@ -198,6 +201,18 @@ class GameViewModel(
             return
         }
         cameraManager.setZoomRatio(zoomRatio)
+    }
+
+    fun warmUpDetectorOnGameScreenOpened() {
+        if (warmUpRequested) {
+            return
+        }
+        warmUpRequested = true
+        viewModelScope.launch(Dispatchers.Default) {
+            runCatching {
+                dartDetector.warmUp()
+            }
+        }
     }
 
     override fun onCleared() {

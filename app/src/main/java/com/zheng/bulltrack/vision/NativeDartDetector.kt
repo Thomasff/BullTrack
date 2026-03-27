@@ -17,6 +17,7 @@ class NativeDartDetector(
 
     private external fun nativeInit(assetManager: AssetManager?)
     private external fun nativeRelease()
+    private external fun nativeWarmUp()
     private external fun nativeCreateSession(): Long
     private external fun nativeDestroySession(sessionId: Long)
     private external fun nativeStartRound(
@@ -40,6 +41,10 @@ class NativeDartDetector(
 
     override fun init() {
         nativeInit(assetManager)
+    }
+
+    override fun warmUp() {
+        nativeWarmUp()
     }
 
     fun release() {

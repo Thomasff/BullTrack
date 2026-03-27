@@ -69,6 +69,7 @@ import kotlin.math.roundToInt
 @Composable
 fun GameScreen(
     uiState: GameUiState,
+    onScreenOpened: () -> Unit,
     onStartRound: () -> Unit,
     onEndRound: () -> Unit,
     onConfirmResult: () -> Unit,
@@ -95,6 +96,10 @@ fun GameScreen(
         if (!isPermissionGranted) {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
+    }
+
+    LaunchedEffect(Unit) {
+        onScreenOpened()
     }
 
     Column(modifier = Modifier.fillMaxSize()) {

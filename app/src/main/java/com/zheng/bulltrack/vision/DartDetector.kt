@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 
 interface DartDetector {
     fun init()
+    fun warmUp()
     fun createSession(): Long
     fun destroySession(sessionId: Long)
     fun startRound(sessionId: Long, firstFrame: Bitmap): StartRoundDetectionUpdate

@@ -103,6 +103,7 @@ fun BullTrackApp() {
         composable(Screen.Game.route) {
             GameScreen(
                 uiState = uiState,
+                onScreenOpened = { viewModel.warmUpDetectorOnGameScreenOpened() },
                 onStartRound = {
                     viewModel.startRound()
                 },
@@ -140,3 +141,4 @@ fun BullTrackApp() {
         }
     }
 }
+

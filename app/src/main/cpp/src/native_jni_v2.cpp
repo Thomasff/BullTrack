@@ -174,6 +174,20 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRelease(
     LOGI("Native v2 detector released");
 }
 
+JNIEXPORT void JNICALL
+Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeWarmUp(
+    JNIEnv* env,
+    jobject thiz) {
+    (void)env;
+    (void)thiz;
+    try {
+        bulltrack::WarmUpYoloObjects();
+        LOGI("Native v2 detector warm-up completed");
+    } catch (const std::exception& error) {
+        LOGE("nativeWarmUp failed: %s", error.what());
+    }
+}
+
 JNIEXPORT jlong JNICALL
 Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeCreateSession(
     JNIEnv* env,

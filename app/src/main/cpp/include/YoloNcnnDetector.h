@@ -22,6 +22,7 @@ struct YoloDetectionResult {
 };
 
 void SetNcnnAssetManager(AAssetManager* asset_manager);
+void WarmUpYoloObjects();
 YoloDetectionResult DetectYoloObjects(const cv::Mat& image_bgr);
 
 }  // namespace bulltrack

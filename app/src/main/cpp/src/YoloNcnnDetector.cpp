@@ -422,6 +422,11 @@ void SetNcnnAssetManager(AAssetManager* asset_manager) {
     g_asset_manager = asset_manager;
 }
 
+void WarmUpYoloObjects() {
+    cv::Mat warmup_image(kInputSize, kInputSize, CV_8UC3, cv::Scalar(114, 114, 114));
+    GetRuntime().Detect(warmup_image);
+}
+
 YoloDetectionResult DetectYoloObjects(const cv::Mat& image_bgr) {
     return GetRuntime().Detect(image_bgr);
 }
