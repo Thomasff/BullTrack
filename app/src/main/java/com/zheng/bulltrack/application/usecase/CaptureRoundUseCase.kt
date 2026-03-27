@@ -22,6 +22,11 @@ class CaptureRoundUseCase(
     private val frameSource: RoundFrameSource,
     private val debugImageSaver: DebugImageSaver
 ) {
+    private data class FrameLoopDecision(
+        val shouldStop: Boolean,
+        val captureNextImmediately: Boolean = false
+    )
+
     private data class RoundSession(
         val nativeSessionId: Long,
         val roundId: String,
@@ -59,16 +64,20 @@ class CaptureRoundUseCase(
         var sourceExhausted = false
         var frameIndex = 2
         var lastCaptureTimestampNs = firstFrame.timestampNs
+        var captureNextImmediately = false
         while (!stopRequested) {
-            waitUntilNextFrameWindow(lastCaptureTimestampNs)
+            if (!captureNextImmediately) {
+                waitUntilNextFrameWindow(lastCaptureTimestampNs)
+            }
             val frame = frameSource.captureNextFrame()
             if (frame == null) {
                 sourceExhausted = true
                 break
             }
             lastCaptureTimestampNs = frame.timestampNs
-            val shouldStop = processNextFrame(frameIndex = frameIndex, frame = frame.bitmap)
-            if (shouldStop) {
+            val decision = processNextFrame(frameIndex = frameIndex, frame = frame.bitmap)
+            captureNextImmediately = decision.captureNextImmediately
+            if (decision.shouldStop) {
                 break
             }
             frameIndex += 1
@@ -152,8 +161,8 @@ class CaptureRoundUseCase(
         }
     }
 
-    private suspend fun processNextFrame(frameIndex: Int, frame: Bitmap): Boolean {
-        val session = currentSession ?: return true
+    private suspend fun processNextFrame(frameIndex: Int, frame: Bitmap): FrameLoopDecision {
+        val session = currentSession ?: return FrameLoopDecision(shouldStop = true)
         session.consumedFrameCount = frameIndex
 
         val frameUpdate = runCatching {
@@ -163,7 +172,7 @@ class CaptureRoundUseCase(
                 session.throws.toList(),
                 "第 $frameIndex 张图片处理失败: ${it.message}"
             )
-            return false
+            return FrameLoopDecision(shouldStop = false)
         }
 
         if (BuildConfig.ENABLE_DEBUG_IMAGES) {
@@ -177,7 +186,10 @@ class CaptureRoundUseCase(
                 session.throws.toList(),
                 gateMessage
             )
-            return false
+            return FrameLoopDecision(
+                shouldStop = false,
+                captureNextImmediately = frameUpdate.gateReason == "yolo_count_increased_wait_next_frame"
+            )
         }
 
         val addedCount = mergeNewThrows(
@@ -192,7 +204,7 @@ class CaptureRoundUseCase(
             "第 $frameIndex 张图片触发精检，但结果与已有飞镖重复"
         }
         stateMachine.updateRoundProgress(session.throws.toList(), statusMessage)
-        return session.throws.size >= MAX_DARTS
+        return FrameLoopDecision(shouldStop = session.throws.size >= MAX_DARTS)
     }
 
     private fun finalizeRound(manualStop: Boolean, sourceExhausted: Boolean): List<ThrowResult> {
