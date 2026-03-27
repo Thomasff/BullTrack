@@ -1,5 +1,6 @@
 package com.zheng.bulltrack.application.usecase
 
+import android.os.SystemClock
 import android.graphics.Bitmap
 import com.zheng.bulltrack.BuildConfig
 import com.zheng.bulltrack.application.statemachine.GameStateMachine
@@ -10,10 +11,10 @@ import com.zheng.bulltrack.domain.model.RingType
 import com.zheng.bulltrack.domain.model.ThrowResult
 import com.zheng.bulltrack.vision.DartDetector
 import kotlinx.coroutines.delay
-import kotlin.math.hypot
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.hypot
 
 class CaptureRoundUseCase(
     private val stateMachine: GameStateMachine,
@@ -38,13 +39,6 @@ class CaptureRoundUseCase(
         val firstFrame = frameSource.captureFirstFrame()
         val nativeSessionId = dartDetector.createSession()
         val roundId = createRoundId()
-        if (BuildConfig.ENABLE_DEBUG_IMAGES) {
-            debugImageSaver.saveRawBitmap(
-                roundId = roundId,
-                fileName = buildFileName(roundId, 1, "s00_raw_first"),
-                bitmap = firstFrame.bitmap
-            )
-        }
         val startUpdate = runCatching {
             dartDetector.startRound(nativeSessionId, firstFrame.bitmap)
         }.getOrElse { error ->
@@ -64,21 +58,15 @@ class CaptureRoundUseCase(
 
         var sourceExhausted = false
         var frameIndex = 2
+        var lastCaptureTimestampNs = firstFrame.timestampNs
         while (!stopRequested) {
-            delay(FRAME_INTERVAL_MS)
+            waitUntilNextFrameWindow(lastCaptureTimestampNs)
             val frame = frameSource.captureNextFrame()
             if (frame == null) {
                 sourceExhausted = true
                 break
             }
-
-            if (BuildConfig.ENABLE_DEBUG_IMAGES) {
-                debugImageSaver.saveRawBitmap(
-                    roundId = roundId,
-                    fileName = buildFileName(roundId, frameIndex, "s00_raw_frame"),
-                    bitmap = frame.bitmap
-                )
-            }
+            lastCaptureTimestampNs = frame.timestampNs
             val shouldStop = processNextFrame(frameIndex = frameIndex, frame = frame.bitmap)
             if (shouldStop) {
                 break
@@ -112,14 +100,6 @@ class CaptureRoundUseCase(
         }
 
         session.consumedFrameCount += 1
-        if (BuildConfig.ENABLE_DEBUG_IMAGES) {
-            debugImageSaver.saveRawBitmap(
-                roundId = session.roundId,
-                fileName = buildFileName(session.roundId, session.consumedFrameCount, "s00_raw_redetect"),
-                bitmap = redetectFrame.bitmap
-            )
-        }
-
         val redetectUpdate = runCatching {
             dartDetector.redetect(session.nativeSessionId, redetectFrame.bitmap)
         }.getOrElse {
@@ -156,6 +136,20 @@ class CaptureRoundUseCase(
         currentSession = null
         stopRequested = false
         frameSource.finishRound()
+    }
+
+    private suspend fun waitUntilNextFrameWindow(lastCaptureTimestampNs: Long) {
+        val nowNs = SystemClock.elapsedRealtimeNanos()
+        val elapsedNs = nowNs - lastCaptureTimestampNs
+        if (elapsedNs < 0L) {
+            return
+        }
+        var remainingMs = FRAME_INTERVAL_MS - (elapsedNs / NANOS_PER_MILLISECOND)
+        while (!stopRequested && remainingMs > 0) {
+            val stepMs = remainingMs.coerceAtMost(FRAME_WAIT_SLICE_MS)
+            delay(stepMs)
+            remainingMs -= stepMs
+        }
     }
 
     private suspend fun processNextFrame(frameIndex: Int, frame: Bitmap): Boolean {
@@ -274,6 +268,8 @@ class CaptureRoundUseCase(
 
     companion object {
         private const val FRAME_INTERVAL_MS = 333L
+        private const val FRAME_WAIT_SLICE_MS = 50L
+        private const val NANOS_PER_MILLISECOND = 1_000_000L
         private const val MAX_DARTS = 3
         private const val DUPLICATE_DISTANCE_THRESHOLD = 0.08
         private val ROUND_ID_FORMAT = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)

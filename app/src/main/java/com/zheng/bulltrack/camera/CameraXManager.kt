@@ -163,25 +163,25 @@ class CameraXManager : CameraManager {
         lockPhase = CameraLockPhase.METERING
         lockReason = "本轮使用自动对焦/测光稳定后拍摄"
         prepareAutoCapture()
-        val bitmap = takePicture()
-        val roundConfig = buildRoundCameraConfig(bitmap)
+        val capturedFrame = takePicture()
+        val roundConfig = buildRoundCameraConfig(capturedFrame.bitmap)
         currentRoundConfig = roundConfig
         unbindPreview()
         _cameraState.value = readyState(
             isPreviewBound = false,
             statusMessage = roundConfig.statusMessage
         )
-        return CapturedFrame(bitmap = bitmap, cameraConfig = roundConfig)
+        return capturedFrame.copy(cameraConfig = roundConfig)
     }
 
     override suspend fun captureNextFrameForRound(): CapturedFrame {
-        lockPhase = CameraLockPhase.METERING
-        prepareAutoCapture()
-        val bitmap = takePicture()
-        val config = currentRoundConfig ?: buildRoundCameraConfig(bitmap).also {
+        lockPhase = CameraLockPhase.LOCKED
+        lockReason = "沿用首帧已稳定的 zoom 与自动对焦/测光状态直接快拍"
+        val capturedFrame = takePicture()
+        val config = currentRoundConfig ?: buildRoundCameraConfig(capturedFrame.bitmap).also {
             currentRoundConfig = it
         }
-        return CapturedFrame(bitmap = bitmap, cameraConfig = config)
+        return capturedFrame.copy(cameraConfig = config)
     }
 
     override fun endRoundCapture() {
@@ -387,7 +387,7 @@ class CameraXManager : CameraManager {
             afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED
     }
 
-    private suspend fun takePicture(): Bitmap = suspendCancellableCoroutine { continuation ->
+    private suspend fun takePicture(): CapturedFrame = suspendCancellableCoroutine { continuation ->
         val capture = imageCapture
         val executor = cameraExecutor
         if (capture == null || executor == null) {
@@ -400,7 +400,7 @@ class CameraXManager : CameraManager {
             lockPhase = lockPhase,
             statusMessage = when (lockPhase) {
                 CameraLockPhase.METERING -> "正在等待 zoom、生效后的自动对焦和测光"
-                CameraLockPhase.LOCKED -> "自动对焦/测光已稳定，准备拍摄"
+                CameraLockPhase.LOCKED -> lockReason ?: "沿用当前稳定状态直接拍摄"
                 CameraLockPhase.FALLBACK -> lockReason ?: "自动对焦/测光未完全稳定，按当前状态拍摄"
                 CameraLockPhase.IDLE -> "相机拍摄中"
             }
@@ -412,8 +412,14 @@ class CameraXManager : CameraManager {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     try {
                         val bitmap = imageProxyToBitmap(image)
+                        val timestampNs = image.imageInfo.timestamp
                         image.close()
-                        continuation.resume(bitmap)
+                        continuation.resume(
+                            CapturedFrame(
+                                bitmap = bitmap,
+                                timestampNs = timestampNs
+                            )
+                        )
                     } catch (error: Exception) {
                         image.close()
                         continuation.resumeWithException(error)
@@ -439,9 +445,7 @@ class CameraXManager : CameraManager {
 
     private fun buildRoundCameraConfig(bitmap: Bitmap): RoundCameraConfig {
         val roundZoomRatio = lockedZoomRatioForRound ?: currentZoomRatio
-        val statusMessage = "本轮固定 zoom ${formatZoom(roundZoomRatio)}x，${
-            lockReason ?: "自动对焦/测光后拍摄"
-        }"
+        val statusMessage = "本轮固定 zoom ${formatZoom(roundZoomRatio)}x，首帧已完成自动对焦/测光稳定，后续连续拍摄直接快拍"
         return RoundCameraConfig(
             width = bitmap.width,
             height = bitmap.height,

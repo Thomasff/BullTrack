@@ -42,6 +42,7 @@ data class RoundCameraConfig(
 
 data class CapturedFrame(
     val bitmap: android.graphics.Bitmap,
+    val timestampNs: Long,
     val cameraConfig: RoundCameraConfig? = null
 )
 

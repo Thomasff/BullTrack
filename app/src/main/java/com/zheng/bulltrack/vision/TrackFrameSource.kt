@@ -28,21 +28,21 @@ class TrackFrameSource(
         }
         return frames.getOrNull(nextIndex)?.let { bitmap ->
             nextIndex += 1
-            CapturedFrame(bitmap = bitmap)
+            CapturedFrame(bitmap = bitmap, timestampNs = System.nanoTime())
         } ?: throw IllegalStateException("track 目录中没有可用图片")
     }
 
     override suspend fun captureNextFrame(): CapturedFrame? {
         return frames.getOrNull(nextIndex)?.let { bitmap ->
             nextIndex += 1
-            CapturedFrame(bitmap = bitmap)
+            CapturedFrame(bitmap = bitmap, timestampNs = System.nanoTime())
         }
     }
 
     override suspend fun captureRedetectFrame(): CapturedFrame {
         return frames.getOrNull(nextIndex)?.let { bitmap ->
             nextIndex += 1
-            CapturedFrame(bitmap = bitmap)
+            CapturedFrame(bitmap = bitmap, timestampNs = System.nanoTime())
         } ?: throw IllegalStateException("没有可用于重新识别的新图片")
     }
 

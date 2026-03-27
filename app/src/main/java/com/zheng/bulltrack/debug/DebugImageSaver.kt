@@ -2,7 +2,6 @@ package com.zheng.bulltrack.debug
 
 import android.content.ContentValues
 import android.content.Context
-import android.graphics.Bitmap
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
@@ -10,7 +9,6 @@ import com.zheng.bulltrack.BuildConfig
 import com.zheng.bulltrack.vision.DebugImageArtifact
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
 
 class DebugImageSaver(
     context: Context
@@ -23,17 +21,6 @@ class DebugImageSaver(
     }
 
     private val appContext = context.applicationContext
-
-    suspend fun saveRawBitmap(
-        roundId: String,
-        fileName: String,
-        bitmap: Bitmap
-    ) {
-        if (!BuildConfig.ENABLE_DEBUG_IMAGES) {
-            return
-        }
-        saveJpegBytes(roundId, fileName, bitmap.toJpegBytes())
-    }
 
     suspend fun saveArtifacts(
         roundId: String,
@@ -75,9 +62,4 @@ class DebugImageSaver(
         }
     }
 
-    private fun Bitmap.toJpegBytes(): ByteArray {
-        val output = ByteArrayOutputStream()
-        compress(Bitmap.CompressFormat.JPEG, QUALITY_JPEG, output)
-        return output.toByteArray()
-    }
 }
