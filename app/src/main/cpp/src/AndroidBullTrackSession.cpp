@@ -574,12 +574,12 @@ LocalizedDartDetectionResult DetectLocalizedDartTip(
         first_preprocessed_gray,
         before_gray,
         3,
-        "affine");
+        "euclidean");
     PyramidECCResult after_alignment = AlignPyramidEcc(
         first_preprocessed_gray,
         after_gray,
         3,
-        "affine");
+        "euclidean");
 
     cv::Mat before_gray_aligned = before_alignment.aligned_target;
     cv::Mat after_gray_aligned = after_alignment.aligned_target;
@@ -587,7 +587,7 @@ LocalizedDartDetectionResult DetectLocalizedDartTip(
     cv::Mat after_view_aligned = WarpImageWithMatrix(
         after_view,
         after_alignment.warp_matrix,
-        "affine",
+        "euclidean",
         round_board_size);
 #endif
 
