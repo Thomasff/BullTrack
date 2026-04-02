@@ -36,7 +36,8 @@ struct FirstFrameBoardBaseline {
     cv::Mat board_crop_bgr;
     cv::Mat enhanced_board_crop_bgr;
     cv::Mat preprocessed_gray;
-    BoardCircle board_circle;
+    cv::Mat point_rectification_h;
+    float rectified_radius = 1.0f;
     BoardCircleDetectionResult board_detection;
     YoloDetectionResult yolo_detection;
 };
@@ -97,46 +98,52 @@ void AppendDebugImageIfNotEmpty(
 cv::Mat DrawBoardCenterRadiusDebugImage(
     const cv::Mat& image_bgr,
     const BoardCircle& board_circle,
-    bool draw_red_radius_regions,
-    const std::vector<cv::Mat>& red_region_masks) {
+    const std::vector<cv::Mat>& red_region_masks,
+    const std::array<cv::Point2f, 4>& correction_points_src) {
     cv::Mat debug_image = image_bgr.clone();
     cv::circle(debug_image, cv::Point(board_circle.cx, board_circle.cy), board_circle.radius, cv::Scalar(0, 255, 255), 3);
     cv::circle(debug_image, cv::Point(board_circle.cx, board_circle.cy), 8, cv::Scalar(0, 0, 255), -1);
-    if (draw_red_radius_regions) {
-        static const cv::Scalar kRegionColors[3] = {
-            cv::Scalar(0, 165, 255),
-            cv::Scalar(255, 255, 0),
-            cv::Scalar(255, 0, 255)
-        };
-        const size_t draw_count = std::min<size_t>(3, red_region_masks.size());
-        for (size_t i = 0; i < draw_count; ++i) {
-            if (red_region_masks[i].empty()) {
-                continue;
-            }
-            std::vector<std::vector<cv::Point>> contours;
-            cv::findContours(red_region_masks[i], contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-            if (contours.empty()) {
-                continue;
-            }
-            cv::drawContours(debug_image, contours, -1, kRegionColors[i], 2);
-            std::vector<cv::Point> merged_points;
-            for (const auto& contour : contours) {
-                merged_points.insert(merged_points.end(), contour.begin(), contour.end());
-            }
-            if (merged_points.empty()) {
-                continue;
-            }
-            cv::Rect bbox = cv::boundingRect(merged_points);
-            const std::string label = "R" + std::to_string(static_cast<int>(i + 1));
-            cv::putText(
-                debug_image,
-                label,
-                cv::Point(bbox.x, std::max(16, bbox.y - 6)),
-                cv::FONT_HERSHEY_SIMPLEX,
-                0.6,
-                kRegionColors[i],
-                2);
+    for (size_t i = 0; i < red_region_masks.size(); ++i) {
+        if (red_region_masks[i].empty()) {
+            continue;
         }
+        std::vector<std::vector<cv::Point>> contours;
+        cv::findContours(red_region_masks[i], contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+        if (contours.empty()) {
+            continue;
+        }
+        cv::drawContours(debug_image, contours, -1, cv::Scalar(0, 255, 0), 2);
+        std::vector<cv::Point> merged_points;
+        for (const auto& contour : contours) {
+            merged_points.insert(merged_points.end(), contour.begin(), contour.end());
+        }
+        if (merged_points.empty()) {
+            continue;
+        }
+        cv::Rect bbox = cv::boundingRect(merged_points);
+        const std::string label = "D" + std::to_string(static_cast<int>(i + 1));
+        cv::putText(
+            debug_image,
+            label,
+            cv::Point(bbox.x, std::max(16, bbox.y - 6)),
+            cv::FONT_HERSHEY_SIMPLEX,
+            0.55,
+            cv::Scalar(0, 255, 0),
+            2);
+    }
+    for (size_t i = 0; i < correction_points_src.size(); ++i) {
+        const cv::Point point(
+            static_cast<int>(std::lround(correction_points_src[i].x)),
+            static_cast<int>(std::lround(correction_points_src[i].y)));
+        cv::circle(debug_image, point, 8, cv::Scalar(255, 0, 255), -1);
+        cv::putText(
+            debug_image,
+            "P" + std::to_string(static_cast<int>(i + 1)),
+            point + cv::Point(6, -6),
+            cv::FONT_HERSHEY_SIMPLEX,
+            0.55,
+            cv::Scalar(255, 0, 255),
+            2);
     }
     return debug_image;
 }
@@ -148,6 +155,27 @@ cv::Mat DrawTipPointOnBinaryImage(const cv::Mat& binary_img, const std::optional
     } else {
         cv::putText(debug_image, "no_tip", cv::Point(16, 32), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 255), 2);
     }
+    return debug_image;
+}
+
+cv::Mat DrawInnerRemovedBinaryDebugImage(
+    const cv::Mat& binary_img,
+    const BoardCircleDetectionResult& board_detection) {
+    cv::Mat debug_image = EnsureColorForDebug(binary_img);
+    const std::string label = cv::format(
+        "red HSV h=%.1f s=%.1f v=%.1f n=%d",
+        board_detection.adaptive_red_h,
+        board_detection.adaptive_red_s,
+        board_detection.adaptive_red_v,
+        board_detection.adaptive_red_sample_count);
+    cv::putText(
+        debug_image,
+        label,
+        cv::Point(12, 28),
+        cv::FONT_HERSHEY_SIMPLEX,
+        0.55,
+        cv::Scalar(0, 255, 255),
+        2);
     return debug_image;
 }
 #endif
@@ -238,7 +266,9 @@ void AppendBoardDetectionDebugImages(
         frame_index,
         "s08",
         "red_radius_inner_removed_binary",
-        board_detection.red_radius_inner_removed_binary);
+        DrawInnerRemovedBinaryDebugImage(
+            board_detection.red_radius_inner_removed_binary,
+            board_detection));
     AppendDebugImageIfNotEmpty(
         output,
         frame_index,
@@ -257,16 +287,22 @@ void AppendBoardDetectionDebugImages(
         "s09b",
         "red_radius_area_grouped_debug",
         board_detection.red_radius_area_grouped_debug);
+    AppendDebugImageIfNotEmpty(
+        output,
+        frame_index,
+        "s10a",
+        "board_rectified_preview",
+        board_detection.perspective_corrected_preview_debug);
     AppendDebugImage(
         output,
         frame_index,
         "s10",
-        "board_center_radius",
+        "board_center_rectified_points",
         DrawBoardCenterRadiusDebugImage(
             board_crop_bgr,
             board_detection.circle,
-            board_detection.red_radius_correction_succeeded,
-            board_detection.red_radius_selected_component_masks));
+            board_detection.red_radius_selected_component_masks,
+            board_detection.correction_points_src));
 #else
     (void)output;
     (void)frame_index;
@@ -332,6 +368,7 @@ FirstFrameBoardBaseline BuildFirstFrameBoardBaseline(
         pipeline_config.enhancement.contrast_scale);
     BoardCircleDetectionResult board_detection = DetectBoardCircleDetailed(
         enhanced_board_crop_bgr,
+        board_box,
         pipeline_config.edge,
         pipeline_config.circle,
         false);
@@ -343,7 +380,8 @@ FirstFrameBoardBaseline BuildFirstFrameBoardBaseline(
     baseline.preprocessed_gray = PreprocessImage(
         baseline.enhanced_board_crop_bgr,
         pipeline_config.dart.preprocess_blur_kernel);
-    baseline.board_circle = board_detection.circle;
+    baseline.point_rectification_h = board_detection.point_rectification_h.clone();
+    baseline.rectified_radius = board_detection.rectified_radius;
     baseline.board_detection = std::move(board_detection);
     baseline.yolo_detection = std::move(yolo_detection);
     return baseline;
@@ -478,13 +516,27 @@ std::optional<cv::Point> SelectTipPointFromLocalMask(const cv::Mat& filtered_bin
 
 cv::Point2f NormalizePointFromRoundAlignedBoard(
     const cv::Point& point_in_round_board,
-    const BoardCircle& round_circle) {
-    return NormalizePoint(
-        point_in_round_board.x,
-        point_in_round_board.y,
-        round_circle.cx,
-        round_circle.cy,
-        round_circle.radius);
+    const cv::Mat& point_rectification_h,
+    float rectified_radius) {
+    if (point_rectification_h.empty()) {
+        throw std::runtime_error("首帧透视矫正矩阵为空");
+    }
+    if (rectified_radius <= 1e-6f) {
+        throw std::runtime_error("首帧精确半径无效");
+    }
+    std::vector<cv::Point2f> src_points{
+        cv::Point2f(
+            static_cast<float>(point_in_round_board.x),
+            static_cast<float>(point_in_round_board.y))
+    };
+    std::vector<cv::Point2f> dst_points;
+    cv::perspectiveTransform(src_points, dst_points, point_rectification_h);
+    if (dst_points.empty()) {
+        throw std::runtime_error("点坐标透视矫正失败");
+    }
+    return cv::Point2f(
+        dst_points.front().x / rectified_radius,
+        -dst_points.front().y / rectified_radius);
 }
 
 #if BT_ENABLE_DEBUG_IMAGES
@@ -541,7 +593,8 @@ LocalizedDartDetectionResult DetectLocalizedDartTip(
     const cv::Mat& after_board_crop_bgr,
     const cv::Rect& after_board_box,
     const YoloDetectionBox& dart_box,
-    const BoardCircle& board_circle,
+    const cv::Mat& point_rectification_h,
+    float rectified_radius,
     const PipelineConfig& config,
     int frame_index,
     const std::string& debug_prefix) {
@@ -614,7 +667,10 @@ LocalizedDartDetectionResult DetectLocalizedDartTip(
     } else {
         result.has_dart = true;
         result.point_in_round_board = tip_point;
-        result.point_norm = NormalizePointFromRoundAlignedBoard(tip_point.value(), board_circle);
+        result.point_norm = NormalizePointFromRoundAlignedBoard(
+            tip_point.value(),
+            point_rectification_h,
+            rectified_radius);
         result.reason = "local_tip_resolved";
     }
 #if BT_ENABLE_DEBUG_IMAGES
@@ -713,7 +769,8 @@ PreciseDetectionDebugResult DetectSingleDartOnFrames(
     const cv::Rect& before_board_box,
     const cv::Rect& after_board_box,
     const std::optional<YoloDetectionBox>& new_dart_box,
-    const BoardCircle& board_circle,
+    const cv::Mat& point_rectification_h,
+    float rectified_radius,
     const PipelineConfig& config,
     int frame_index) {
     (void)before_board_box;
@@ -728,7 +785,8 @@ PreciseDetectionDebugResult DetectSingleDartOnFrames(
         after_board_crop_bgr,
         after_board_box,
         new_dart_box.value(),
-        board_circle,
+        point_rectification_h,
+        rectified_radius,
         config,
         frame_index,
         "s3");
@@ -749,14 +807,25 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
         throw std::runtime_error("首帧为空");
     }
 
+    AndroidStartRoundResult result;
     first_frame_bgr_ = first_frame_bgr.clone();
     latest_frame_bgr_ = first_frame_bgr.clone();
 
     FirstFrameBoardBaseline baseline = BuildFirstFrameBoardBaseline(first_frame_bgr_, pipeline_config_);
+    AppendBoardDetectionDebugImages(result.debug_images, 1, baseline.board_detection, baseline.board_crop_bgr);
+    if (!baseline.board_detection.success) {
+        result.error_message = baseline.board_detection.error_message;
+        started_ = false;
+        recent_frames_.clear();
+        pending_candidate_.reset();
+        return result;
+    }
+
     first_frame_board_box_ = baseline.board_box;
     first_frame_board_crop_bgr_ = baseline.board_crop_bgr.clone();
     first_frame_preprocessed_for_alignment_ = baseline.preprocessed_gray.clone();
-    gate_board_circle_ = baseline.board_circle;
+    first_frame_point_rectification_h_ = baseline.point_rectification_h.clone();
+    first_frame_rectified_radius_ = baseline.rectified_radius;
     recent_frames_.clear();
     pending_candidate_.reset();
     last_confirmed_dart_count_ = static_cast<int>(SelectTopDartBoxes(baseline.yolo_detection, 3).size());
@@ -771,9 +840,6 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
 
     started_ = true;
     current_frame_index_ = 2;
-
-    AndroidStartRoundResult result;
-    AppendBoardDetectionDebugImages(result.debug_images, 1, baseline.board_detection, first_frame_board_crop_bgr_);
     return result;
 }
 
@@ -870,7 +936,8 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
                     pending_candidate_->base_frame.board_box,
                     stored_current.board_box,
                     new_dart_box,
-                    gate_board_circle_,
+                    first_frame_point_rectification_h_,
+                    first_frame_rectified_radius_,
                     pipeline_config_,
                     current_frame_index_);
                 result.precise_debug_images = std::move(precise_result.debug_images);
@@ -960,7 +1027,8 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
                 after_board_crop_bgr,
                 after_board_box.value(),
                 top_dart_boxes[i],
-                gate_board_circle_,
+                first_frame_point_rectification_h_,
+                first_frame_rectified_radius_,
                 pipeline_config_,
                 current_frame_index_,
                 prefix);

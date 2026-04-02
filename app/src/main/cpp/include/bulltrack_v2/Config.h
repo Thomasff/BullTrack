@@ -18,13 +18,6 @@ struct EdgeDetectionConfig {
 };
 
 struct CircleDetectionConfig {
-    double line_rho = 1.0;
-    double line_theta = CV_PI / 180.0;
-    int line_threshold = 80;
-    int line_min_length = 40;
-    int line_max_gap = 12;
-    double line_intersection_min_length = 60.0;
-    double max_abs_slope = 6.4;
     int red_region_min_area = 400;
     int red_region_open_kernel = 3;
     int red_region_open_iterations = 1;

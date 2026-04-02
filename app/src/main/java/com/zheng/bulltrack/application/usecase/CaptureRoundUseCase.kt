@@ -60,6 +60,11 @@ class CaptureRoundUseCase(
                 debugImageSaver.saveArtifacts(roundId, startUpdate.debugImages)
             }
         }
+        startUpdate.errorMessage?.let { errorMessage ->
+            dartDetector.destroySession(nativeSessionId)
+            frameSource.finishRound()
+            throw RuntimeException(errorMessage)
+        }
         currentSession = RoundSession(
             nativeSessionId = nativeSessionId,
             roundId = roundId

@@ -63,7 +63,8 @@ class NativeDartDetector(
         val frameData = bitmapToByteArray(firstFrame)
         val result = nativeStartRound(sessionId, frameData, firstFrame.width, firstFrame.height)
         return StartRoundDetectionUpdate(
-            debugImages = result.debugImages.orEmpty().map(::toDebugImageArtifact)
+            debugImages = result.debugImages.orEmpty().map(::toDebugImageArtifact),
+            errorMessage = result.errorMessage
         )
     }
 

@@ -20,6 +20,7 @@ struct DebugImageArtifact {
 
 struct AndroidStartRoundResult {
     std::vector<DebugImageArtifact> debug_images;
+    std::string error_message;
 };
 
 struct AndroidFrameProcessResult {
@@ -64,11 +65,12 @@ public:
 
 private:
     PipelineConfig pipeline_config_{};
-    BoardCircle gate_board_circle_{};
     cv::Rect first_frame_board_box_{};
     cv::Mat first_frame_bgr_;
     cv::Mat first_frame_board_crop_bgr_;
     cv::Mat first_frame_preprocessed_for_alignment_;
+    cv::Mat first_frame_point_rectification_h_;
+    float first_frame_rectified_radius_ = 1.0f;
     cv::Mat latest_frame_bgr_;
     std::vector<TrackedYoloFrameState> recent_frames_;
     std::optional<PendingYoloCandidateState> pending_candidate_;
