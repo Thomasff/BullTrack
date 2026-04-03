@@ -20,6 +20,27 @@ constexpr double kInnerRemoveRadiusScale = 0.85;
 constexpr double kAreaKeepScale = 0.5;
 constexpr int kExpectedDoubleRegionCount = 10;
 
+cv::Mat PrepareBoardMeasurementBaseImage(const cv::Mat& image_bgr) {
+    if (image_bgr.empty()) {
+        return cv::Mat();
+    }
+
+    cv::Mat level1;
+    cv::pyrDown(image_bgr, level1);
+    cv::Mat level2;
+    cv::pyrDown(level1, level2);
+    cv::GaussianBlur(level2, level2, cv::Size(5, 5), 0);
+
+    cv::Mat up1;
+    cv::pyrUp(level2, up1, level1.size());
+    cv::Mat up2;
+    cv::pyrUp(up1, up2, image_bgr.size());
+    if (up2.size() != image_bgr.size()) {
+        cv::resize(up2, up2, image_bgr.size(), 0.0, 0.0, cv::INTER_LINEAR);
+    }
+    return up2;
+}
+
 struct ComponentCandidate {
     int area = 0;
     cv::Mat mask;
@@ -322,8 +343,10 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     float rough_radius,
     int blur_kernel,
     const CircleDetectionConfig& circle_config) {
-    AdaptiveRedHsvModel red_hsv_model = EstimateAdaptiveRedHsvModel(img_before);
-    cv::Mat red_only_mask = ExtractRedOnlyMask(img_before, red_hsv_model);
+    (void)blur_kernel;
+    cv::Mat measurement_base_bgr = PrepareBoardMeasurementBaseImage(img_before);
+    AdaptiveRedHsvModel red_hsv_model = EstimateAdaptiveRedHsvModel(measurement_base_bgr);
+    cv::Mat red_only_mask = ExtractRedOnlyMask(measurement_base_bgr, red_hsv_model);
     cv::Mat red_binary_pre = red_only_mask.clone();
     const int inner_remove_radius = std::max(1, static_cast<int>(std::lround(static_cast<double>(rough_radius) * kInnerRemoveRadiusScale)));
     cv::circle(
@@ -333,32 +356,8 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         cv::Scalar(0),
         -1);
     cv::Mat inner_removed_binary = red_binary_pre.clone();
-
-    const int open_kernel = EnsureOddKernel(circle_config.red_region_open_kernel);
-    const int open_iterations = std::max(0, circle_config.red_region_open_iterations);
-    if (open_iterations > 0) {
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(open_kernel, open_kernel));
-        cv::morphologyEx(red_binary_pre, red_binary_pre, cv::MORPH_OPEN, kernel, cv::Point(-1, -1), open_iterations);
-    }
-
     cv::Mat red_only_blurred = red_binary_pre.clone();
-    blur_kernel = EnsureOddKernel(blur_kernel);
-    if (blur_kernel > 1) {
-        for (int i = 0; i < 3; ++i) {
-            cv::GaussianBlur(red_only_blurred, red_only_blurred, cv::Size(blur_kernel, blur_kernel), 0);
-        }
-    }
-
-    cv::Mat red_binary;
-    cv::threshold(red_only_blurred, red_binary, 10, 255, cv::THRESH_BINARY);
-    const int dilate_kernel = EnsureOddKernel(circle_config.red_region_dilate_kernel);
-    const int dilate_iterations = std::max(0, circle_config.red_region_dilate_iterations);
-    if (dilate_iterations > 0) {
-        cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(dilate_kernel, dilate_kernel));
-        cv::dilate(red_binary, red_binary, kernel, cv::Point(-1, -1), dilate_iterations);
-    }
-
-    auto components = ExtractComponentCandidates(red_binary, circle_config.red_region_min_area, rough_center);
+    auto components = ExtractComponentCandidates(red_binary_pre, circle_config.red_region_min_area, rough_center);
     if (components.empty()) {
         return {std::nullopt, red_hsv_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, cv::Mat(), cv::Mat(), cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "无可用红色区域"};
     }
@@ -386,12 +385,12 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     cv::Mat perpendicular_components_binary;
     cv::Mat perpendicular_rotated_boxes_debug;
 #if BT_ENABLE_DEBUG_IMAGES
-    perpendicular_components_binary = cv::Mat::zeros(red_binary.size(), CV_8U);
+    perpendicular_components_binary = cv::Mat::zeros(red_binary_pre.size(), CV_8U);
     for (const auto& component : perpendicular_components) {
         cv::bitwise_or(perpendicular_components_binary, component.mask, perpendicular_components_binary);
     }
     const cv::Mat& rotated_debug_base =
-        perpendicular_components.empty() ? red_binary : perpendicular_components_binary;
+        perpendicular_components.empty() ? red_binary_pre : perpendicular_components_binary;
     perpendicular_rotated_boxes_debug = DrawRotatedBoxesDebugImage(
         rotated_debug_base,
         perpendicular_components,
@@ -427,7 +426,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         cv::Mat area_grouped_debug;
 #if BT_ENABLE_DEBUG_IMAGES
         area_grouped_debug = DrawAreaFilteredDebugImage(
-            red_binary.size(),
+            red_binary_pre.size(),
             rough_candidates,
             area_filtered_candidates,
             area_mean);
@@ -478,12 +477,12 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     cv::Mat perspective_corrected_preview_debug;
 #if BT_ENABLE_DEBUG_IMAGES
     perpendicular_rotated_boxes_debug = DrawRotatedBoxesDebugImage(
-        perpendicular_components_binary.empty() ? red_binary : perpendicular_components_binary,
+        perpendicular_components_binary.empty() ? red_binary_pre : perpendicular_components_binary,
         precise_candidates,
         rough_center,
         correction_points_src);
     area_grouped_debug = DrawAreaFilteredDebugImage(
-        red_binary.size(),
+        red_binary_pre.size(),
         rough_candidates,
         precise_candidates,
         area_mean);
@@ -579,6 +578,9 @@ BoardCircleDetectionResult DetectBoardCircleDetailed(
     detection_result.adaptive_red_s = red_radius_result.red_hsv_model.s;
     detection_result.adaptive_red_v = red_radius_result.red_hsv_model.v;
     detection_result.adaptive_red_sample_count = red_radius_result.red_hsv_model.sample_count;
+    detection_result.adaptive_red_measurement_base_bgr = PrepareBoardMeasurementBaseImage(img_before);
+    detection_result.adaptive_red_sample_rect = red_radius_result.red_hsv_model.sample_rect;
+    detection_result.adaptive_red_sample_points = red_radius_result.red_hsv_model.sample_points;
     detection_result.red_radius_selected_component_masks = red_radius_result.selected_component_masks;
     detection_result.red_radius_inner_removed_binary = red_radius_result.inner_removed_binary;
     detection_result.red_radius_perpendicular_rotated_boxes_debug = red_radius_result.perpendicular_rotated_boxes_debug;

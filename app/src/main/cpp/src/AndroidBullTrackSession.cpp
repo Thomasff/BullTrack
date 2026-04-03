@@ -178,6 +178,53 @@ cv::Mat DrawInnerRemovedBinaryDebugImage(
         2);
     return debug_image;
 }
+
+cv::Mat DrawAdaptiveRedSamplePointsDebugImage(
+    const cv::Mat& board_crop_bgr,
+    const BoardCircleDetectionResult& board_detection) {
+    const cv::Mat& base_image =
+        board_detection.adaptive_red_measurement_base_bgr.empty()
+            ? board_crop_bgr
+            : board_detection.adaptive_red_measurement_base_bgr;
+    if (base_image.empty()) {
+        return cv::Mat();
+    }
+
+    const cv::Rect image_bounds(0, 0, base_image.cols, base_image.rows);
+    const cv::Rect sample_rect = board_detection.adaptive_red_sample_rect & image_bounds;
+    if (sample_rect.area() <= 0) {
+        return cv::Mat();
+    }
+
+    cv::Mat debug_image = base_image(sample_rect).clone();
+    for (const cv::Point& point : board_detection.adaptive_red_sample_points) {
+        if (!sample_rect.contains(point)) {
+            continue;
+        }
+        const int local_x = point.x - sample_rect.x;
+        const int local_y = point.y - sample_rect.y;
+        if (local_x < 0 || local_x >= debug_image.cols || local_y < 0 || local_y >= debug_image.rows) {
+            continue;
+        }
+        debug_image.at<cv::Vec3b>(local_y, local_x) = cv::Vec3b(0, 255, 0);
+    }
+
+    const std::string label = cv::format(
+        "red HSV h=%.1f s=%.1f v=%.1f n=%d",
+        board_detection.adaptive_red_h,
+        board_detection.adaptive_red_s,
+        board_detection.adaptive_red_v,
+        board_detection.adaptive_red_sample_count);
+    cv::putText(
+        debug_image,
+        label,
+        cv::Point(8, 24),
+        cv::FONT_HERSHEY_SIMPLEX,
+        0.5,
+        cv::Scalar(0, 255, 255),
+        1);
+    return debug_image;
+}
 #endif
 
 cv::Rect ClampRectToImage(const cv::Rect2f& rect, const cv::Size& image_size);
@@ -261,6 +308,14 @@ void AppendBoardDetectionDebugImages(
     const BoardCircleDetectionResult& board_detection,
     const cv::Mat& board_crop_bgr) {
 #if BT_ENABLE_DEBUG_IMAGES
+    AppendDebugImageIfNotEmpty(
+        output,
+        frame_index,
+        "s07",
+        "adaptive_red_sample_points",
+        DrawAdaptiveRedSamplePointsDebugImage(
+            board_crop_bgr,
+            board_detection));
     AppendDebugImageIfNotEmpty(
         output,
         frame_index,

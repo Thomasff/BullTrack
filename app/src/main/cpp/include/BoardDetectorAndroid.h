@@ -18,6 +18,9 @@ struct BoardCircleDetectionResult {
     float adaptive_red_s = 0.0f;
     float adaptive_red_v = 0.0f;
     int adaptive_red_sample_count = 0;
+    cv::Mat adaptive_red_measurement_base_bgr;
+    cv::Rect adaptive_red_sample_rect{};
+    std::vector<cv::Point> adaptive_red_sample_points;
     bool perspective_correction_succeeded = false;
     std::vector<cv::Mat> red_radius_selected_component_masks;
     cv::Mat red_radius_inner_removed_binary;

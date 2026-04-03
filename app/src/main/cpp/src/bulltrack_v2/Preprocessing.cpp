@@ -68,11 +68,16 @@ AdaptiveRedHsvModel EstimateAdaptiveRedHsvModel(const cv::Mat& img, int max_samp
     for (int y = sample_rect.y; y < sample_rect.y + sample_rect.height; ++y) {
         for (int x = sample_rect.x; x < sample_rect.x + sample_rect.width; ++x) {
             const cv::Vec3b hsv_pixel = hsv.at<cv::Vec3b>(y, x);
+            const float s = static_cast<float>(hsv_pixel[1]);
+            const float v = static_cast<float>(hsv_pixel[2]);
+            if (s <= 100.0f || v <= 100.0f) {
+                continue;
+            }
             candidates.push_back(SamplePixel{
                 cv::Point(x, y),
                 static_cast<float>(hsv_pixel[0]),
-                static_cast<float>(hsv_pixel[1]),
-                static_cast<float>(hsv_pixel[2]),
+                s,
+                v,
                 HueDistanceToRed(static_cast<float>(hsv_pixel[0]))
             });
         }
@@ -143,7 +148,7 @@ std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractBoardColorMasks(const cv::Mat& img,
             const float h = static_cast<float>(hsv_pixel[0]);
             const float s = static_cast<float>(hsv_pixel[1]);
             const float v = static_cast<float>(hsv_pixel[2]);
-            if (IsWithinAdaptiveHueRange(h, red_model.h, 15.0f) &&
+            if (IsWithinAdaptiveHueRange(h, red_model.h, 20.0f) &&
                 s >= min_s && s <= max_s &&
                 v >= min_v && v <= max_v) {
                 red_mask.at<uchar>(y, x) = 255;
