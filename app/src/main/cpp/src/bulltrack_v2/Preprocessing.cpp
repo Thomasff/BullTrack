@@ -10,21 +10,6 @@
 namespace bulltrack {
 namespace {
 
-float HueDistanceToRed(float hue) {
-    const float dist_to_zero = std::abs(hue);
-    const float dist_to_wrap = std::abs(180.0f - hue);
-    return std::min(dist_to_zero, dist_to_wrap);
-}
-
-float CircularHueDistance(float lhs, float rhs) {
-    const float diff = std::abs(lhs - rhs);
-    return std::min(diff, 180.0f - diff);
-}
-
-bool IsWithinAdaptiveHueRange(float hue, float reference_hue, float tolerance) {
-    return CircularHueDistance(hue, reference_hue) <= tolerance;
-}
-
 cv::Rect BuildCenteredThirdRect(const cv::Size& image_size) {
     const int width = std::max(1, image_size.width / 3);
     const int height = std::max(1, image_size.height / 3);
@@ -33,8 +18,8 @@ cv::Rect BuildCenteredThirdRect(const cv::Size& image_size) {
     return cv::Rect(x, y, width, height);
 }
 
-AdaptiveRedHsvModel BuildFallbackAdaptiveRedHsvModel(const cv::Size& image_size) {
-    AdaptiveRedHsvModel model;
+AdaptiveRedLabModel BuildFallbackAdaptiveRedLabModel(const cv::Size& image_size) {
+    AdaptiveRedLabModel model;
     model.sample_rect = BuildCenteredThirdRect(image_size);
     return model;
 }
@@ -42,115 +27,107 @@ AdaptiveRedHsvModel BuildFallbackAdaptiveRedHsvModel(const cv::Size& image_size)
 }  // namespace
 
 std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractBoardColorMasks(const cv::Mat& img) {
-    AdaptiveRedHsvModel red_model = EstimateAdaptiveRedHsvModel(img);
+    AdaptiveRedLabModel red_model = EstimateAdaptiveRedLabModel(img);
     return ExtractBoardColorMasks(img, red_model);
 }
 
-AdaptiveRedHsvModel EstimateAdaptiveRedHsvModel(const cv::Mat& img, int max_sample_count) {
+AdaptiveRedLabModel EstimateAdaptiveRedLabModel(const cv::Mat& img, int max_sample_count) {
     if (img.empty()) {
-        throw std::runtime_error("图像为空，无法估计红色 HSV");
+        throw std::runtime_error("图像为空，无法估计红色 LAB");
     }
 
-    cv::Mat hsv;
-    cv::cvtColor(img, hsv, cv::COLOR_BGR2HSV);
+    cv::Mat lab;
+    cv::cvtColor(img, lab, cv::COLOR_BGR2Lab);
     const cv::Rect sample_rect = BuildCenteredThirdRect(img.size());
 
     struct SamplePixel {
         cv::Point point;
-        float h = 0.0f;
-        float s = 0.0f;
-        float v = 0.0f;
-        float hue_distance = 0.0f;
+        float l = 0.0f;
+        float a = 0.0f;
+        float b = 0.0f;
     };
 
     std::vector<SamplePixel> candidates;
     candidates.reserve(static_cast<size_t>(sample_rect.area()));
     for (int y = sample_rect.y; y < sample_rect.y + sample_rect.height; ++y) {
         for (int x = sample_rect.x; x < sample_rect.x + sample_rect.width; ++x) {
-            const cv::Vec3b hsv_pixel = hsv.at<cv::Vec3b>(y, x);
-            const float s = static_cast<float>(hsv_pixel[1]);
-            const float v = static_cast<float>(hsv_pixel[2]);
-            if (s <= 100.0f || v <= 100.0f) {
+            const cv::Vec3b lab_pixel = lab.at<cv::Vec3b>(y, x);
+            const float l = static_cast<float>(lab_pixel[0]);
+            const float a = static_cast<float>(lab_pixel[1]);
+            const float b = static_cast<float>(lab_pixel[2]);
+            if (a <= 128.0f || b <= 128.0f) {
                 continue;
             }
             candidates.push_back(SamplePixel{
                 cv::Point(x, y),
-                static_cast<float>(hsv_pixel[0]),
-                s,
-                v,
-                HueDistanceToRed(static_cast<float>(hsv_pixel[0]))
+                l,
+                a,
+                b
             });
         }
     }
 
     if (candidates.empty()) {
-        return BuildFallbackAdaptiveRedHsvModel(img.size());
+        return BuildFallbackAdaptiveRedLabModel(img.size());
     }
 
     std::stable_sort(candidates.begin(), candidates.end(), [](const SamplePixel& lhs, const SamplePixel& rhs) {
-        if (lhs.hue_distance != rhs.hue_distance) {
-            return lhs.hue_distance < rhs.hue_distance;
+        if (lhs.a != rhs.a) {
+            return lhs.a > rhs.a;
         }
-        if (lhs.s != rhs.s) {
-            return lhs.s > rhs.s;
+        if (lhs.l != rhs.l) {
+            return lhs.l > rhs.l;
         }
-        return lhs.v > rhs.v;
+        return lhs.b > rhs.b;
     });
 
     const int selected_count = std::min<int>(std::max(1, max_sample_count), static_cast<int>(candidates.size()));
-    float sum_s = 0.0f;
-    float sum_v = 0.0f;
-    float sum_hx = 0.0f;
-    float sum_hy = 0.0f;
+    float sum_l = 0.0f;
+    float sum_a = 0.0f;
+    float sum_b = 0.0f;
 
-    AdaptiveRedHsvModel model;
+    AdaptiveRedLabModel model;
     model.sample_rect = sample_rect;
     model.sample_count = selected_count;
     model.sample_points.reserve(static_cast<size_t>(selected_count));
     for (int i = 0; i < selected_count; ++i) {
         const SamplePixel& sample = candidates[i];
-        const float angle_rad = (sample.h / 180.0f) * (2.0f * static_cast<float>(CV_PI));
-        sum_hx += std::cos(angle_rad);
-        sum_hy += std::sin(angle_rad);
-        sum_s += sample.s;
-        sum_v += sample.v;
+        sum_l += sample.l;
+        sum_a += sample.a;
+        sum_b += sample.b;
         model.sample_points.push_back(sample.point);
     }
 
-    float mean_angle = std::atan2(sum_hy, sum_hx);
-    if (mean_angle < 0.0f) {
-        mean_angle += 2.0f * static_cast<float>(CV_PI);
-    }
-    model.h = mean_angle * 180.0f / (2.0f * static_cast<float>(CV_PI));
-    model.s = sum_s / static_cast<float>(selected_count);
-    model.v = sum_v / static_cast<float>(selected_count);
+    model.l = sum_l / static_cast<float>(selected_count);
+    model.a = sum_a / static_cast<float>(selected_count);
+    model.b = sum_b / static_cast<float>(selected_count);
     return model;
 }
 
-std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractBoardColorMasks(const cv::Mat& img, const AdaptiveRedHsvModel& red_model) {
-    cv::Mat hsv;
-    cv::cvtColor(img, hsv, cv::COLOR_BGR2HSV);
+std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractBoardColorMasks(const cv::Mat& img, const AdaptiveRedLabModel& red_model) {
+    cv::Mat lab;
+    cv::cvtColor(img, lab, cv::COLOR_BGR2Lab);
 
     cv::Mat red_mask = cv::Mat::zeros(img.size(), CV_8U);
-    cv::Mat blue_mask;
-    cv::Mat green_mask;
+    cv::Mat blue_mask = cv::Mat::zeros(img.size(), CV_8U);
+    cv::Mat green_mask = cv::Mat::zeros(img.size(), CV_8U);
 
-    cv::inRange(hsv, cv::Scalar(100, 40, 40), cv::Scalar(125, 255, 255), blue_mask);
-    cv::inRange(hsv, cv::Scalar(45, 40, 40), cv::Scalar(85, 255, 255), green_mask);
-
-    const float min_s = std::max(0.0f, red_model.s - 30.0f);
-    const float max_s = std::min(255.0f, red_model.s + 30.0f);
-    const float min_v = std::max(0.0f, red_model.v - 30.0f);
-    const float max_v = std::min(255.0f, red_model.v + 30.0f);
-    for (int y = 0; y < hsv.rows; ++y) {
-        for (int x = 0; x < hsv.cols; ++x) {
-            const cv::Vec3b hsv_pixel = hsv.at<cv::Vec3b>(y, x);
-            const float h = static_cast<float>(hsv_pixel[0]);
-            const float s = static_cast<float>(hsv_pixel[1]);
-            const float v = static_cast<float>(hsv_pixel[2]);
-            if (IsWithinAdaptiveHueRange(h, red_model.h, 20.0f) &&
-                s >= min_s && s <= max_s &&
-                v >= min_v && v <= max_v) {
+    const float min_l = std::max(0.0f, red_model.l - 25.0f);
+    const float max_l = std::min(255.0f, red_model.l + 25.0f);
+    const float min_a = std::max(0.0f, red_model.a - 15.0f);
+    const float max_a = std::min(255.0f, red_model.a + 15.0f);
+    const float min_b = std::max(0.0f, red_model.b - 15.0f);
+    const float max_b = std::min(255.0f, red_model.b + 15.0f);
+    for (int y = 0; y < lab.rows; ++y) {
+        for (int x = 0; x < lab.cols; ++x) {
+            const cv::Vec3b lab_pixel = lab.at<cv::Vec3b>(y, x);
+            const float l = static_cast<float>(lab_pixel[0]);
+            const float a = static_cast<float>(lab_pixel[1]);
+            const float b = static_cast<float>(lab_pixel[2]);
+            if (a > 128.0f && b > 128.0f &&
+                l >= min_l && l <= max_l &&
+                a >= min_a && a <= max_a &&
+                b >= min_b && b <= max_b) {
                 red_mask.at<uchar>(y, x) = 255;
             }
         }
@@ -160,11 +137,11 @@ std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractBoardColorMasks(const cv::Mat& img,
 }
 
 cv::Mat ExtractRedOnlyMask(const cv::Mat& img) {
-    AdaptiveRedHsvModel red_model = EstimateAdaptiveRedHsvModel(img);
+    AdaptiveRedLabModel red_model = EstimateAdaptiveRedLabModel(img);
     return ExtractRedOnlyMask(img, red_model);
 }
 
-cv::Mat ExtractRedOnlyMask(const cv::Mat& img, const AdaptiveRedHsvModel& red_model) {
+cv::Mat ExtractRedOnlyMask(const cv::Mat& img, const AdaptiveRedLabModel& red_model) {
     auto [red_mask, blue_mask, green_mask] = ExtractBoardColorMasks(img, red_model);
     (void)blue_mask;
     (void)green_mask;
@@ -172,11 +149,11 @@ cv::Mat ExtractRedOnlyMask(const cv::Mat& img, const AdaptiveRedHsvModel& red_mo
 }
 
 cv::Mat PrepareBoardDetectionImage(const cv::Mat& img) {
-    AdaptiveRedHsvModel red_model = EstimateAdaptiveRedHsvModel(img);
+    AdaptiveRedLabModel red_model = EstimateAdaptiveRedLabModel(img);
     return PrepareBoardDetectionImage(img, red_model);
 }
 
-cv::Mat PrepareBoardDetectionImage(const cv::Mat& img, const AdaptiveRedHsvModel& red_model) {
+cv::Mat PrepareBoardDetectionImage(const cv::Mat& img, const AdaptiveRedLabModel& red_model) {
     auto [red_mask, blue_mask, green_mask] = ExtractBoardColorMasks(img, red_model);
     cv::Mat dark_mask;
     cv::bitwise_or(blue_mask, green_mask, dark_mask);

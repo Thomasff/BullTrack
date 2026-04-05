@@ -163,10 +163,10 @@ cv::Mat DrawInnerRemovedBinaryDebugImage(
     const BoardCircleDetectionResult& board_detection) {
     cv::Mat debug_image = EnsureColorForDebug(binary_img);
     const std::string label = cv::format(
-        "red HSV h=%.1f s=%.1f v=%.1f n=%d",
-        board_detection.adaptive_red_h,
-        board_detection.adaptive_red_s,
-        board_detection.adaptive_red_v,
+        "red LAB l=%.1f a=%.1f b=%.1f n=%d",
+        board_detection.adaptive_red_l,
+        board_detection.adaptive_red_a,
+        board_detection.adaptive_red_b,
         board_detection.adaptive_red_sample_count);
     cv::putText(
         debug_image,
@@ -177,6 +177,67 @@ cv::Mat DrawInnerRemovedBinaryDebugImage(
         cv::Scalar(0, 255, 255),
         2);
     return debug_image;
+}
+
+std::optional<std::tuple<float, float, float>> ComputeAdaptiveRedSampleAStats(
+    const cv::Mat& base_image_bgr,
+    const BoardCircleDetectionResult& board_detection) {
+    if (base_image_bgr.empty() || board_detection.adaptive_red_sample_points.empty()) {
+        return std::nullopt;
+    }
+
+    cv::Mat lab_image;
+    cv::cvtColor(base_image_bgr, lab_image, cv::COLOR_BGR2Lab);
+
+    float min_a = 255.0f;
+    float max_a = 0.0f;
+    float sum_a = 0.0f;
+    int count = 0;
+    for (const cv::Point& point : board_detection.adaptive_red_sample_points) {
+        if (point.x < 0 || point.x >= lab_image.cols || point.y < 0 || point.y >= lab_image.rows) {
+            continue;
+        }
+        const float a = static_cast<float>(lab_image.at<cv::Vec3b>(point.y, point.x)[1]);
+        min_a = std::min(min_a, a);
+        max_a = std::max(max_a, a);
+        sum_a += a;
+        ++count;
+    }
+    if (count <= 0) {
+        return std::nullopt;
+    }
+    return std::make_tuple(min_a, max_a, sum_a / static_cast<float>(count));
+}
+
+std::optional<std::tuple<cv::Point, float, float, float>> ComputeAdaptiveRedSampleCenterLab(
+    const cv::Mat& base_image_bgr,
+    const BoardCircleDetectionResult& board_detection) {
+    if (base_image_bgr.empty()) {
+        return std::nullopt;
+    }
+
+    const cv::Rect image_bounds(0, 0, base_image_bgr.cols, base_image_bgr.rows);
+    const cv::Rect sample_rect = board_detection.adaptive_red_sample_rect & image_bounds;
+    if (sample_rect.area() <= 0) {
+        return std::nullopt;
+    }
+
+    const cv::Point center_point(
+        sample_rect.x + sample_rect.width / 2,
+        sample_rect.y + sample_rect.height / 2);
+    if (center_point.x < 0 || center_point.x >= base_image_bgr.cols ||
+        center_point.y < 0 || center_point.y >= base_image_bgr.rows) {
+        return std::nullopt;
+    }
+
+    cv::Mat lab_image;
+    cv::cvtColor(base_image_bgr, lab_image, cv::COLOR_BGR2Lab);
+    const cv::Vec3b lab_pixel = lab_image.at<cv::Vec3b>(center_point.y, center_point.x);
+    return std::make_tuple(
+        center_point,
+        static_cast<float>(lab_pixel[0]),
+        static_cast<float>(lab_pixel[1]),
+        static_cast<float>(lab_pixel[2]));
 }
 
 cv::Mat DrawAdaptiveRedSamplePointsDebugImage(
@@ -197,6 +258,8 @@ cv::Mat DrawAdaptiveRedSamplePointsDebugImage(
     }
 
     cv::Mat debug_image = base_image(sample_rect).clone();
+    const auto a_stats = ComputeAdaptiveRedSampleAStats(base_image, board_detection);
+    const auto center_lab = ComputeAdaptiveRedSampleCenterLab(base_image, board_detection);
     for (const cv::Point& point : board_detection.adaptive_red_sample_points) {
         if (!sample_rect.contains(point)) {
             continue;
@@ -208,12 +271,28 @@ cv::Mat DrawAdaptiveRedSamplePointsDebugImage(
         }
         debug_image.at<cv::Vec3b>(local_y, local_x) = cv::Vec3b(0, 255, 0);
     }
+    if (center_lab.has_value()) {
+        const auto [center_point, center_l, center_a, center_b] = center_lab.value();
+        const int local_x = center_point.x - sample_rect.x;
+        const int local_y = center_point.y - sample_rect.y;
+        if (local_x >= 0 && local_x < debug_image.cols && local_y >= 0 && local_y < debug_image.rows) {
+            debug_image.at<cv::Vec3b>(local_y, local_x) = cv::Vec3b(0, 255, 0);
+        }
+        cv::putText(
+            debug_image,
+            cv::format("center LAB l=%.1f a=%.1f b=%.1f", center_l, center_a, center_b),
+            cv::Point(8, 60),
+            cv::FONT_HERSHEY_SIMPLEX,
+            0.5,
+            cv::Scalar(0, 255, 0),
+            1);
+    }
 
     const std::string label = cv::format(
-        "red HSV h=%.1f s=%.1f v=%.1f n=%d",
-        board_detection.adaptive_red_h,
-        board_detection.adaptive_red_s,
-        board_detection.adaptive_red_v,
+        "red LAB l=%.1f a=%.1f b=%.1f n=%d",
+        board_detection.adaptive_red_l,
+        board_detection.adaptive_red_a,
+        board_detection.adaptive_red_b,
         board_detection.adaptive_red_sample_count);
     cv::putText(
         debug_image,
@@ -223,8 +302,20 @@ cv::Mat DrawAdaptiveRedSamplePointsDebugImage(
         0.5,
         cv::Scalar(0, 255, 255),
         1);
+    if (a_stats.has_value()) {
+        const auto [min_a, max_a, avg_a] = a_stats.value();
+        cv::putText(
+            debug_image,
+            cv::format("a min=%.1f max=%.1f avg=%.1f", min_a, max_a, avg_a),
+            cv::Point(8, 42),
+            cv::FONT_HERSHEY_SIMPLEX,
+            0.5,
+            cv::Scalar(0, 255, 255),
+            1);
+    }
     return debug_image;
 }
+
 #endif
 
 cv::Rect ClampRectToImage(const cv::Rect2f& rect, const cv::Size& image_size);

@@ -17,7 +17,7 @@ namespace {
 
 constexpr double kAndroidRedRegionMinLongShortRatio = 2.3;
 constexpr double kInnerRemoveRadiusScale = 0.85;
-constexpr double kAreaKeepScale = 0.5;
+constexpr double kLongEdgeKeepScale = 0.5;
 constexpr int kExpectedDoubleRegionCount = 10;
 
 cv::Mat PrepareBoardMeasurementBaseImage(const cv::Mat& image_bgr) {
@@ -51,7 +51,7 @@ struct ComponentCandidate {
 
 struct RedRadiusCorrectionResult {
     std::optional<double> corrected_radius;
-    AdaptiveRedHsvModel red_hsv_model;
+    AdaptiveRedLabModel red_lab_model;
     cv::Mat red_only_mask;
     cv::Mat red_only_blurred;
     std::vector<cv::Mat> selected_component_masks;
@@ -116,6 +116,12 @@ bool HasMinRotatedRectLongShortRatio(
         return false;
     }
     return (long_edge / short_edge) >= min_ratio;
+}
+
+double GetRotatedRectLongEdge(const cv::RotatedRect& rect) {
+    return std::max(
+        static_cast<double>(rect.size.width),
+        static_cast<double>(rect.size.height));
 }
 
 bool IsComponentPerpendicularToCenterVector(
@@ -256,7 +262,7 @@ cv::Mat DrawAreaFilteredDebugImage(
     const cv::Size& image_size,
     const std::vector<ComponentCandidate>& rough_candidates,
     const std::vector<ComponentCandidate>& precise_candidates,
-    double area_mean) {
+    double rough_long_edge_mean) {
     cv::Mat debug_img = cv::Mat::zeros(image_size, CV_8UC3);
     for (const auto& candidate : rough_candidates) {
         std::array<cv::Point2f, 4> box_points{};
@@ -284,7 +290,7 @@ cv::Mat DrawAreaFilteredDebugImage(
     }
     cv::putText(
         debug_img,
-        "S=" + cv::format("%.1f", area_mean),
+        "L=" + cv::format("%.1f", rough_long_edge_mean),
         cv::Point(12, 28),
         cv::FONT_HERSHEY_SIMPLEX,
         0.7,
@@ -292,7 +298,7 @@ cv::Mat DrawAreaFilteredDebugImage(
         2);
     cv::putText(
         debug_img,
-        "orange=rough10 green=precise10",
+        "orange=rough10 green=long-edge precise10",
         cv::Point(12, 56),
         cv::FONT_HERSHEY_SIMPLEX,
         0.55,
@@ -345,8 +351,8 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     const CircleDetectionConfig& circle_config) {
     (void)blur_kernel;
     cv::Mat measurement_base_bgr = PrepareBoardMeasurementBaseImage(img_before);
-    AdaptiveRedHsvModel red_hsv_model = EstimateAdaptiveRedHsvModel(measurement_base_bgr);
-    cv::Mat red_only_mask = ExtractRedOnlyMask(measurement_base_bgr, red_hsv_model);
+    AdaptiveRedLabModel red_lab_model = EstimateAdaptiveRedLabModel(measurement_base_bgr);
+    cv::Mat red_only_mask = ExtractRedOnlyMask(measurement_base_bgr, red_lab_model);
     cv::Mat red_binary_pre = red_only_mask.clone();
     const int inner_remove_radius = std::max(1, static_cast<int>(std::lround(static_cast<double>(rough_radius) * kInnerRemoveRadiusScale)));
     cv::circle(
@@ -359,7 +365,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     cv::Mat red_only_blurred = red_binary_pre.clone();
     auto components = ExtractComponentCandidates(red_binary_pre, circle_config.red_region_min_area, rough_center);
     if (components.empty()) {
-        return {std::nullopt, red_hsv_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, cv::Mat(), cv::Mat(), cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "无可用红色区域"};
+        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, cv::Mat(), cv::Mat(), cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "无可用红色区域"};
     }
 
     std::vector<ComponentCandidate> elongated_components;
@@ -369,7 +375,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         }
     }
     if (elongated_components.empty()) {
-        return {std::nullopt, red_hsv_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, cv::Mat(), cv::Mat(), cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "长宽比筛选后无可用红色区域"};
+        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, cv::Mat(), cv::Mat(), cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "长宽比筛选后无可用红色区域"};
     }
 
     std::vector<ComponentCandidate> perpendicular_components;
@@ -397,7 +403,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         rough_center);
 #endif
     if (perpendicular_components.size() < kExpectedDoubleRegionCount) {
-        return {std::nullopt, red_hsv_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "垂直方向筛选后双倍区不足10个"};
+        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "垂直方向筛选后双倍区不足10个"};
     }
 
     std::sort(perpendicular_components.begin(), perpendicular_components.end(), [](const ComponentCandidate& lhs, const ComponentCandidate& rhs) {
@@ -407,38 +413,43 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     std::vector<ComponentCandidate> rough_candidates(
         perpendicular_components.begin(),
         perpendicular_components.begin() + kExpectedDoubleRegionCount);
-    const double area_mean =
+    const double rough_long_edge_mean =
         std::accumulate(
             rough_candidates.begin(),
             rough_candidates.end(),
             0.0,
             [](double sum, const ComponentCandidate& component) {
-                return sum + static_cast<double>(component.area);
+                return sum + GetRotatedRectLongEdge(component.rect);
             }) / static_cast<double>(rough_candidates.size());
 
-    std::vector<ComponentCandidate> area_filtered_candidates;
-    for (const auto& component : perpendicular_components) {
-        if (static_cast<double>(component.area) > (area_mean * kAreaKeepScale)) {
-            area_filtered_candidates.push_back(component);
+    std::vector<ComponentCandidate> precise_candidates;
+    if (perpendicular_components.size() == kExpectedDoubleRegionCount) {
+        precise_candidates = rough_candidates;
+    } else {
+        std::vector<ComponentCandidate> long_edge_filtered_candidates;
+        for (const auto& component : perpendicular_components) {
+            if (GetRotatedRectLongEdge(component.rect) > (rough_long_edge_mean * kLongEdgeKeepScale)) {
+                long_edge_filtered_candidates.push_back(component);
+            }
         }
-    }
-    if (area_filtered_candidates.size() < kExpectedDoubleRegionCount) {
-        cv::Mat area_grouped_debug;
+        if (long_edge_filtered_candidates.size() < kExpectedDoubleRegionCount) {
+            cv::Mat area_grouped_debug;
 #if BT_ENABLE_DEBUG_IMAGES
-        area_grouped_debug = DrawAreaFilteredDebugImage(
-            red_binary_pre.size(),
-            rough_candidates,
-            area_filtered_candidates,
-            area_mean);
+            area_grouped_debug = DrawAreaFilteredDebugImage(
+                red_binary_pre.size(),
+                rough_candidates,
+                long_edge_filtered_candidates,
+                rough_long_edge_mean);
 #endif
-        return {std::nullopt, red_hsv_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, area_grouped_debug, cv::Mat(), {}, {}, cv::Mat(), "面积筛选后双倍区不足10个"};
+            return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, area_grouped_debug, cv::Mat(), {}, {}, cv::Mat(), "长边筛选后双倍区不足10个"};
+        }
+        std::sort(long_edge_filtered_candidates.begin(), long_edge_filtered_candidates.end(), [](const ComponentCandidate& lhs, const ComponentCandidate& rhs) {
+            return lhs.center_distance < rhs.center_distance;
+        });
+        precise_candidates.assign(
+            long_edge_filtered_candidates.begin(),
+            long_edge_filtered_candidates.begin() + kExpectedDoubleRegionCount);
     }
-    std::sort(area_filtered_candidates.begin(), area_filtered_candidates.end(), [](const ComponentCandidate& lhs, const ComponentCandidate& rhs) {
-        return lhs.center_distance < rhs.center_distance;
-    });
-    std::vector<ComponentCandidate> precise_candidates(
-        area_filtered_candidates.begin(),
-        area_filtered_candidates.begin() + kExpectedDoubleRegionCount);
 
     std::sort(precise_candidates.begin(), precise_candidates.end(), [](const ComponentCandidate& lhs, const ComponentCandidate& rhs) {
         return lhs.angle_from_top_clockwise < rhs.angle_from_top_clockwise;
@@ -463,7 +474,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         correction_points_src_vec,
         correction_points_dst_vec);
     if (point_rectification_h.empty()) {
-        return {std::nullopt, red_hsv_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, cv::Mat(), cv::Mat(), cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "无法计算透视矫正矩阵"};
+        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, cv::Mat(), cv::Mat(), cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "无法计算透视矫正矩阵"};
     }
 
     std::vector<cv::Mat> selected_masks;
@@ -485,7 +496,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         red_binary_pre.size(),
         rough_candidates,
         precise_candidates,
-        area_mean);
+        rough_long_edge_mean);
 
     std::array<cv::Point2f, 4> preview_dst{};
     for (size_t i = 0; i < correction_points_dst.size(); ++i) {
@@ -534,7 +545,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
 
     return {
         corrected_radius,
-        red_hsv_model,
+        red_lab_model,
         red_only_mask,
         red_only_blurred,
         selected_masks,
@@ -574,13 +585,13 @@ BoardCircleDetectionResult DetectBoardCircleDetailed(
     BoardCircleDetectionResult detection_result;
     detection_result.rough_center = rough_center;
     detection_result.rough_radius = rough_radius;
-    detection_result.adaptive_red_h = red_radius_result.red_hsv_model.h;
-    detection_result.adaptive_red_s = red_radius_result.red_hsv_model.s;
-    detection_result.adaptive_red_v = red_radius_result.red_hsv_model.v;
-    detection_result.adaptive_red_sample_count = red_radius_result.red_hsv_model.sample_count;
+    detection_result.adaptive_red_l = red_radius_result.red_lab_model.l;
+    detection_result.adaptive_red_a = red_radius_result.red_lab_model.a;
+    detection_result.adaptive_red_b = red_radius_result.red_lab_model.b;
+    detection_result.adaptive_red_sample_count = red_radius_result.red_lab_model.sample_count;
     detection_result.adaptive_red_measurement_base_bgr = PrepareBoardMeasurementBaseImage(img_before);
-    detection_result.adaptive_red_sample_rect = red_radius_result.red_hsv_model.sample_rect;
-    detection_result.adaptive_red_sample_points = red_radius_result.red_hsv_model.sample_points;
+    detection_result.adaptive_red_sample_rect = red_radius_result.red_lab_model.sample_rect;
+    detection_result.adaptive_red_sample_points = red_radius_result.red_lab_model.sample_points;
     detection_result.red_radius_selected_component_masks = red_radius_result.selected_component_masks;
     detection_result.red_radius_inner_removed_binary = red_radius_result.inner_removed_binary;
     detection_result.red_radius_perpendicular_rotated_boxes_debug = red_radius_result.perpendicular_rotated_boxes_debug;

@@ -14,9 +14,9 @@ struct BoardCircleDetectionResult {
     cv::Point2f rough_center{};
     float rough_radius = 0.0f;
     float rectified_radius = 0.0f;
-    float adaptive_red_h = 0.0f;
-    float adaptive_red_s = 0.0f;
-    float adaptive_red_v = 0.0f;
+    float adaptive_red_l = 0.0f;
+    float adaptive_red_a = 0.0f;
+    float adaptive_red_b = 0.0f;
     int adaptive_red_sample_count = 0;
     cv::Mat adaptive_red_measurement_base_bgr;
     cv::Rect adaptive_red_sample_rect{};

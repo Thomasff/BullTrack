@@ -7,22 +7,22 @@
 
 namespace bulltrack {
 
-struct AdaptiveRedHsvModel {
-    float h = 0.0f;
-    float s = 0.0f;
-    float v = 0.0f;
+struct AdaptiveRedLabModel {
+    float l = 0.0f;
+    float a = 0.0f;
+    float b = 0.0f;
     int sample_count = 0;
     cv::Rect sample_rect{};
     std::vector<cv::Point> sample_points;
 };
 
 std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractBoardColorMasks(const cv::Mat& img);
-std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractBoardColorMasks(const cv::Mat& img, const AdaptiveRedHsvModel& red_model);
-AdaptiveRedHsvModel EstimateAdaptiveRedHsvModel(const cv::Mat& img, int max_sample_count = 40);
+std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractBoardColorMasks(const cv::Mat& img, const AdaptiveRedLabModel& red_model);
+AdaptiveRedLabModel EstimateAdaptiveRedLabModel(const cv::Mat& img, int max_sample_count = 40);
 cv::Mat ExtractRedOnlyMask(const cv::Mat& img);
-cv::Mat ExtractRedOnlyMask(const cv::Mat& img, const AdaptiveRedHsvModel& red_model);
+cv::Mat ExtractRedOnlyMask(const cv::Mat& img, const AdaptiveRedLabModel& red_model);
 cv::Mat PrepareBoardDetectionImage(const cv::Mat& img);
-cv::Mat PrepareBoardDetectionImage(const cv::Mat& img, const AdaptiveRedHsvModel& red_model);
+cv::Mat PrepareBoardDetectionImage(const cv::Mat& img, const AdaptiveRedLabModel& red_model);
 cv::Mat PreprocessImage(const cv::Mat& img, int blur_kernel = 5);
 cv::Mat EnhanceWarpedImage(const cv::Mat& img, double saturation_scale = 1.6, double contrast_scale = 0.92);
 std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractEdgesWithConnectionRepair(

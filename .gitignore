@@ -22,3 +22,5 @@ cpp_dart_detector_v2/build/
 cpp_dart_detector_v2/images/
 cpp_dart_detector_v2/result/
 third_party/
+*.bin
+*.param
