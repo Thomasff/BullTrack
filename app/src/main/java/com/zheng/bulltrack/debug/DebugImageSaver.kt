@@ -5,7 +5,7 @@ import android.content.Context
 import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
-import com.zheng.bulltrack.BuildConfig
+import com.zheng.bulltrack.shared.BuildConfig
 import com.zheng.bulltrack.vision.DebugImageArtifact
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

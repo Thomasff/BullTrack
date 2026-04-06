@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "BullTrack"
 include(":app")
+include(":bulltrack-core")

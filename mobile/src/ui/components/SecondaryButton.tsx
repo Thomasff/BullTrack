@@ -5,12 +5,22 @@ import { colors } from '../theme/colors';
 interface SecondaryButtonProps {
   label: string;
   onPress: () => void;
+  disabled?: boolean;
 }
 
-export const SecondaryButton = ({ label, onPress }: SecondaryButtonProps) => (
+export const SecondaryButton = ({
+  label,
+  onPress,
+  disabled = false,
+}: SecondaryButtonProps) => (
   <Pressable
+    disabled={disabled}
     onPress={onPress}
-    style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
+    style={({ pressed }) => [
+      styles.button,
+      disabled && styles.disabled,
+      pressed && !disabled && styles.pressed,
+    ]}>
     <Text style={styles.label}>{label}</Text>
   </Pressable>
 );
@@ -27,6 +37,9 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.92,
+  },
+  disabled: {
+    opacity: 0.55,
   },
   label: {
     color: colors.textPrimary,

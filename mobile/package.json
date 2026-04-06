@@ -2,6 +2,14 @@
   "name": "com.zheng.bulltrackmobile",
   "version": "0.0.1",
   "private": true,
+  "codegenConfig": {
+    "name": "BullTrackSpecs",
+    "type": "modules",
+    "jsSrcsDir": "src/native-bridge/bulltrack/specs",
+    "android": {
+      "javaPackageName": "com.zheng.bulltrackmobile.specs"
+    }
+  },
   "scripts": {
     "android": "react-native run-android",
     "ios": "react-native run-ios",

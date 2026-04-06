@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Image, StyleSheet, Text, View } from 'react-native';
 import type { DebugArtifact } from '../../domain/vision/types';
 import { colors } from '../theme/colors';
 
@@ -11,6 +11,9 @@ export const DebugImageViewer = ({ artifact }: DebugImageViewerProps) => (
   <View style={styles.container}>
     <Text style={styles.title}>{artifact.title}</Text>
     <Text style={styles.meta}>{artifact.kind}</Text>
+    {artifact.path.startsWith('file://') ? (
+      <Image source={{ uri: artifact.path }} style={styles.preview} />
+    ) : null}
     <Text style={styles.path}>{artifact.path}</Text>
     {artifact.note ? <Text style={styles.note}>{artifact.note}</Text> : null}
   </View>
@@ -35,6 +38,12 @@ const styles = StyleSheet.create({
     color: colors.accent,
     textTransform: 'uppercase',
     fontWeight: '700',
+  },
+  preview: {
+    width: '100%',
+    aspectRatio: 1.4,
+    borderRadius: 12,
+    backgroundColor: '#E9E1D4',
   },
   path: {
     fontSize: 13,

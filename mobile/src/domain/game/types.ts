@@ -11,7 +11,13 @@ export interface ThrowResult {
   id: string;
   label: string;
   score: number;
-  ring: 'single' | 'double' | 'triple' | 'miss';
+  ring:
+    | 'single'
+    | 'double'
+    | 'triple'
+    | 'outerBull'
+    | 'innerBull'
+    | 'miss';
   pointNorm: {
     x: number;
     y: number;

@@ -2,7 +2,7 @@ package com.zheng.bulltrack.application.usecase
 
 import android.os.SystemClock
 import android.graphics.Bitmap
-import com.zheng.bulltrack.BuildConfig
+import com.zheng.bulltrack.shared.BuildConfig
 import com.zheng.bulltrack.application.statemachine.GameStateMachine
 import com.zheng.bulltrack.camera.RoundFrameSource
 import com.zheng.bulltrack.debug.DebugImageSaver

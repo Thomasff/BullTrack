@@ -2,6 +2,9 @@ import React, { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import {
+  CONTROLLED_START_FRAME,
+  finishControlledRound,
+  reloadControlledArtifacts,
   resetMockRoundScenario,
   rerunMockRedetect,
   runMockRoundScenario,
@@ -16,6 +19,7 @@ import { SectionHeader } from '../components/SectionHeader';
 import { StatusCard } from '../components/StatusCard';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
+import { isRealBullTrackNativeBridgeAvailable } from '../../native-bridge/bulltrack/bullTrackNative';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Game'>;
 
@@ -35,31 +39,34 @@ const toneForStatus = (status: string) => {
 };
 
 export const GameScreen = ({ navigation }: Props) => {
-  const [isRunning, setIsRunning] = useState(false);
+  const [runningAction, setRunningAction] = useState<
+    'start' | 'redetect' | 'finish' | 'reload' | null
+  >(null);
   const { selectedMode, players } = useGameStore();
   const { status, statusMessage, throws } = useRoundStore();
   const artifactCount = useVisionDebugStore(state => state.artifacts.length);
 
+  const isRunning = runningAction !== null;
   const totalScore = useMemo(
     () => throws.reduce((sum, item) => sum + item.score, 0),
     [throws],
   );
 
   const handleRunMockRound = async () => {
-    setIsRunning(true);
+    setRunningAction('start');
     try {
       await runMockRoundScenario();
     } finally {
-      setIsRunning(false);
+      setRunningAction(null);
     }
   };
 
   const handleMockRedetect = async () => {
-    setIsRunning(true);
+    setRunningAction('redetect');
     try {
       await rerunMockRedetect();
     } finally {
-      setIsRunning(false);
+      setRunningAction(null);
     }
   };
 
@@ -71,12 +78,30 @@ export const GameScreen = ({ navigation }: Props) => {
     handleMockRedetect().catch(() => undefined);
   };
 
+  const handleFinishRound = async () => {
+    setRunningAction('finish');
+    try {
+      await finishControlledRound();
+    } finally {
+      setRunningAction(null);
+    }
+  };
+
+  const handleReloadArtifacts = async () => {
+    setRunningAction('reload');
+    try {
+      await reloadControlledArtifacts();
+    } finally {
+      setRunningAction(null);
+    }
+  };
+
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
       <SectionHeader
         eyebrow="Game Shell"
-        title="Round flow placeholder"
-        description="This screen defines the UI contract for the future Android Native bridge. Current actions run against a mock service."
+        title="Single-frame controlled detect"
+        description="This screen runs startRound with before.jpg only, to verify board baseline detection and failure reporting without continuous frame flow."
       />
 
       <View style={styles.statusGrid}>
@@ -90,11 +115,15 @@ export const GameScreen = ({ navigation }: Props) => {
       </View>
 
       <Panel>
-        <Text style={styles.panelTitle}>Phase-one notes</Text>
+        <Text style={styles.panelTitle}>Phase-two controlled bridge</Text>
         <Text style={styles.body}>
-          `react-native-vision-camera` is reserved for the Android camera path,
-          but the preview and frame pipeline remain native-integration work for
-          phase two.
+          {isRealBullTrackNativeBridgeAvailable
+            ? 'The Android TurboModule is active. This screen validates the real detection bridge with bundled asset frames before the live camera path is migrated.'
+            : 'The Android TurboModule is not available in this runtime, so the screen has fallen back to the mock bridge.'}
+        </Text>
+        <Text style={styles.body}>Start frame: {CONTROLLED_START_FRAME}</Text>
+        <Text style={styles.body}>
+          Process/redetect: disabled in single-frame mode
         </Text>
         <Text style={styles.statusMessage}>{statusMessage}</Text>
       </Panel>
@@ -134,20 +163,54 @@ export const GameScreen = ({ navigation }: Props) => {
 
       <View style={styles.actionGroup}>
         <PrimaryButton
-          label={isRunning ? 'Running Mock Round...' : 'Run Mock Round'}
+          label={
+            runningAction === 'start'
+              ? 'Starting Controlled Round...'
+              : 'Start Controlled Round'
+          }
           onPress={handleRunMockRoundPress}
+          disabled={isRunning}
         />
         <SecondaryButton
-          label={isRunning ? 'Redetecting...' : 'Run Mock Redetect'}
+          label={
+            runningAction === 'redetect'
+              ? 'Redetecting...'
+              : 'Run Controlled Redetect (Disabled)'
+          }
           onPress={handleMockRedetectPress}
+          disabled={isRunning}
+        />
+        <SecondaryButton
+          label={
+            runningAction === 'finish'
+              ? 'Finishing Round...'
+              : 'Finish Current Round'
+          }
+          onPress={() => {
+            handleFinishRound().catch(() => undefined);
+          }}
+          disabled={isRunning}
+        />
+        <SecondaryButton
+          label={
+            runningAction === 'reload'
+              ? 'Reloading Artifacts...'
+              : 'Reload Debug Artifacts'
+          }
+          onPress={() => {
+            handleReloadArtifacts().catch(() => undefined);
+          }}
+          disabled={isRunning}
         />
         <SecondaryButton
           label="Open Debug Screen"
           onPress={() => navigation.navigate('Debug')}
+          disabled={isRunning}
         />
         <SecondaryButton
           label="Reset Demo State"
           onPress={resetMockRoundScenario}
+          disabled={isRunning}
         />
       </View>
     </ScrollView>

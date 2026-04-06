@@ -69,32 +69,37 @@ const sleep = async (durationMs: number) =>
   });
 
 export class MockBullTrackNativeBridge implements BullTrackNativeBridge {
-  async startRound(_: StartRoundInput): Promise<StartRoundResult> {
+  async startRound(input: StartRoundInput): Promise<StartRoundResult> {
     await sleep(180);
     return {
-      roundId: mockRoundId,
+      roundId: input.roundId ?? mockRoundId,
       status: 'ready',
-      statusMessage: 'Mock native bridge ready for round capture.',
+      statusMessage: `Mock native bridge started with ${input.frameRef}.`,
+      debugArtifacts: mockArtifacts,
     };
   }
 
-  async processFrame(_: ProcessFrameInput): Promise<ProcessFrameResult> {
+  async processFrame(input: ProcessFrameInput): Promise<ProcessFrameResult> {
     await sleep(260);
     return {
-      roundId: mockRoundId,
+      roundId: input.roundId,
       status: 'resultReady',
-      statusMessage: 'Mock detection completed with 3 throws.',
+      statusMessage: `Mock detection completed for ${input.frameRef}.`,
+      gateTriggered: true,
+      gateReason: 'mock_detection_complete',
+      newThrow: mockThrows[2],
       throws: mockThrows,
       debugArtifacts: mockArtifacts,
     };
   }
 
-  async redetectRound(_: RedetectRoundInput): Promise<RedetectRoundResult> {
+  async redetectRound(input: RedetectRoundInput): Promise<RedetectRoundResult> {
     await sleep(220);
     return {
-      roundId: mockRoundId,
+      roundId: input.roundId,
       status: 'resultReady',
-      statusMessage: 'Mock redetect refreshed the current round.',
+      statusMessage: `Mock redetect refreshed ${input.frameRef}.`,
+      yoloStatus: 'mock_redetect_ok',
       throws: mockThrows,
       debugArtifacts: mockArtifacts,
     };
@@ -106,6 +111,7 @@ export class MockBullTrackNativeBridge implements BullTrackNativeBridge {
       roundId: input.roundId,
       status: 'finished',
       statusMessage: 'Mock round finished.',
+      throws: mockThrows,
     };
   }
 

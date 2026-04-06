@@ -8,6 +8,7 @@ import { SecondaryButton } from '../components/SecondaryButton';
 import { SectionHeader } from '../components/SectionHeader';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
+import { isRealBullTrackNativeBridgeAvailable } from '../../native-bridge/bulltrack/bullTrackNative';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Debug'>;
 
@@ -19,14 +20,15 @@ export const DebugScreen = ({ navigation }: Props) => {
       <SectionHeader
         eyebrow="Debug Shell"
         title="Debug artifact contract"
-        description="Phase one keeps debug artifacts as file-path-first records so JS never becomes the transport layer for image bytes."
+        description="Phase two keeps debug artifacts as file-path-first records so JS never becomes the transport layer for image bytes."
       />
 
       <Panel>
         <Text style={styles.panelTitle}>Current strategy</Text>
         <Text style={styles.body}>
-          Native should write debug images to disk and return paths or
-          identifiers. The UI only renders metadata and file references.
+          {isRealBullTrackNativeBridgeAvailable
+            ? 'Native writes debug images into app-private storage and returns file references. The UI only renders metadata and local file paths.'
+            : 'The native bridge is unavailable in this runtime, so this screen only shows mock file references.'}
         </Text>
       </Panel>
 

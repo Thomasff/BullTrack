@@ -3,36 +3,43 @@ import type { DebugArtifact } from '../../domain/vision/types';
 
 export interface StartRoundInput {
   gameMode: 'highScore' | 'x01' | 'cricket';
-  playerIds: string[];
+  frameRef: string;
+  roundId?: string;
 }
 
 export interface StartRoundResult {
   roundId: string;
-  status: 'ready' | 'error';
+  status: 'ready';
   statusMessage: string;
+  debugArtifacts: DebugArtifact[];
 }
 
 export interface ProcessFrameInput {
   roundId: string;
-  frameSource: 'cameraPreview';
+  frameRef: string;
 }
 
 export interface ProcessFrameResult {
   roundId: string;
-  status: 'capturing' | 'resultReady' | 'error';
+  status: 'resultReady';
   statusMessage: string;
+  gateTriggered: boolean;
+  gateReason: string;
+  newThrow: ThrowResult | null;
   throws: ThrowResult[];
   debugArtifacts: DebugArtifact[];
 }
 
 export interface RedetectRoundInput {
   roundId: string;
+  frameRef: string;
 }
 
 export interface RedetectRoundResult {
   roundId: string;
-  status: 'resultReady' | 'error';
+  status: 'resultReady';
   statusMessage: string;
+  yoloStatus?: string | null;
   throws: ThrowResult[];
   debugArtifacts: DebugArtifact[];
 }
@@ -45,6 +52,7 @@ export interface FinishRoundResult {
   roundId: string;
   status: 'finished';
   statusMessage: string;
+  throws: ThrowResult[];
 }
 
 export interface BullTrackNativeBridge {
