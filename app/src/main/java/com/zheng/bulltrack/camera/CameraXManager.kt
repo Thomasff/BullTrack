@@ -7,6 +7,8 @@ import android.graphics.ImageFormat
 import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.YuvImage
+import android.os.Handler
+import android.os.Looper
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
@@ -26,6 +28,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.Observer
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -50,6 +53,8 @@ class CameraXManager : CameraManager {
         private const val AF_AE_POLL_INTERVAL_MS = 50L
         private const val AF_AE_STABLE_REQUIRED_COUNT = 2
         private const val AUTO_FOCUS_SIZE = 0.2f
+        private const val PREVIEW_STREAM_RETRY_DELAY_MS = 600L
+        private const val MAX_PREVIEW_RETRY_COUNT = 1
     }
 
     private val _cameraState = MutableStateFlow<CameraState>(CameraState.Idle)
@@ -63,6 +68,10 @@ class CameraXManager : CameraManager {
     private var cameraExecutor: ExecutorService? = null
     private var previewLifecycleOwner: LifecycleOwner? = null
     private var previewView: PreviewView? = null
+    private var previewStreamObserver: Observer<PreviewView.StreamState>? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var pendingPreviewRetry: Runnable? = null
+    private var previewRetryCount: Int = 0
     private var currentZoomRatio: Float = 1f
     private var lockedZoomRatioForRound: Float? = null
 
@@ -117,10 +126,15 @@ class CameraXManager : CameraManager {
         providerFuture.addListener({
             try {
                 cameraProvider = providerFuture.get()
-                _cameraState.value = readyState(
-                    isPreviewBound = false,
-                    statusMessage = "相机已初始化，等待预览"
-                )
+                Log.d(TAG, "Camera provider initialized. previewAttached=${previewView != null}")
+                if (previewLifecycleOwner != null && previewView != null) {
+                    bindCameraUseCases(bindPreview = true)
+                } else {
+                    _cameraState.value = readyState(
+                        isPreviewBound = false,
+                        statusMessage = "相机已初始化，等待预览"
+                    )
+                }
             } catch (error: Exception) {
                 Log.e(TAG, "Failed to initialize camera", error)
                 _cameraState.value = CameraState.Error(error.message ?: "相机初始化失败")
@@ -131,13 +145,18 @@ class CameraXManager : CameraManager {
     override fun bindPreview(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
         previewLifecycleOwner = lifecycleOwner
         this.previewView = previewView
+        observePreviewStream(lifecycleOwner, previewView)
+        Log.d(TAG, "bindPreview requested. providerReady=${cameraProvider != null}")
         bindCameraUseCases(bindPreview = true)
     }
 
     override fun unbindPreview() {
         val provider = cameraProvider ?: return
+        Log.d(TAG, "unbindPreview requested.")
+        clearPreviewStreamObserver()
         previewUseCase?.let { provider.unbind(it) }
         previewUseCase = null
+        previewRetryCount = 0
         _cameraState.value = readyState(
             isPreviewBound = false,
             statusMessage = currentRoundConfig?.statusMessage ?: "预览已关闭"
@@ -207,6 +226,8 @@ class CameraXManager : CameraManager {
         cameraExecutor = null
         previewLifecycleOwner = null
         previewView = null
+        clearPreviewStreamObserver()
+        previewRetryCount = 0
         currentRoundConfig = null
         lockedZoomRatioForRound = null
         lockPhase = CameraLockPhase.IDLE
@@ -219,8 +240,10 @@ class CameraXManager : CameraManager {
         val provider = cameraProvider ?: return
         val lifecycleOwner = previewLifecycleOwner
         if (bindPreview && lifecycleOwner == null) {
+            Log.d(TAG, "bindCameraUseCases skipped because lifecycleOwner is null.")
             return
         }
+        Log.d(TAG, "bindCameraUseCases(bindPreview=$bindPreview) start.")
 
         val preview = if (bindPreview) {
             buildPreview().also { useCase ->
@@ -248,9 +271,11 @@ class CameraXManager : CameraManager {
             imageCapture = imageCaptureUseCase
             applyZoom()
             _cameraState.value = readyState(
-                isPreviewBound = preview != null,
-                statusMessage = currentRoundConfig?.statusMessage ?: "相机就绪"
+                isPreviewBound = false,
+                statusMessage = currentRoundConfig?.statusMessage
+                    ?: if (preview != null) "预览连接中" else "相机就绪"
             )
+            Log.d(TAG, "bindCameraUseCases success. previewBound=${preview != null}")
         } catch (error: Exception) {
             Log.e(TAG, "Failed to bind camera use cases", error)
             _cameraState.value = CameraState.Error(error.message ?: "绑定相机失败")
@@ -466,6 +491,79 @@ class CameraXManager : CameraManager {
             lockPhase = lockPhase,
             statusMessage = statusMessage
         )
+    }
+
+    private fun observePreviewStream(
+        lifecycleOwner: LifecycleOwner,
+        previewView: PreviewView
+    ) {
+        clearPreviewStreamObserver()
+        val observer = Observer<PreviewView.StreamState> { streamState ->
+            Log.d(TAG, "previewStreamState=$streamState")
+            when (streamState) {
+                PreviewView.StreamState.STREAMING -> {
+                    cancelPendingPreviewRetry()
+                    _cameraState.value = readyState(
+                        isPreviewBound = true,
+                        statusMessage = currentRoundConfig?.statusMessage ?: "相机预览中"
+                    )
+                }
+
+                PreviewView.StreamState.IDLE -> {
+                    _cameraState.value = readyState(
+                        isPreviewBound = false,
+                        statusMessage = currentRoundConfig?.statusMessage ?: "预览流等待中"
+                    )
+                    schedulePreviewRetry()
+                }
+            }
+        }
+        previewStreamObserver = observer
+        previewView.previewStreamState.observe(lifecycleOwner, observer)
+    }
+
+    private fun clearPreviewStreamObserver() {
+        cancelPendingPreviewRetry()
+        val view = previewView
+        val observer = previewStreamObserver
+        if (view != null && observer != null) {
+            view.previewStreamState.removeObserver(observer)
+        }
+        previewStreamObserver = null
+    }
+
+    private fun schedulePreviewRetry() {
+        if (currentRoundConfig != null || previewUseCase == null) {
+            return
+        }
+        if (previewRetryCount >= MAX_PREVIEW_RETRY_COUNT) {
+            return
+        }
+        if (pendingPreviewRetry != null) {
+            return
+        }
+        val owner = previewLifecycleOwner ?: return
+        val view = previewView ?: return
+        val retry = Runnable {
+            pendingPreviewRetry = null
+            if (previewUseCase == null || currentRoundConfig != null) {
+                return@Runnable
+            }
+            if (!view.isAttachedToWindow || view.width <= 0 || view.height <= 0) {
+                return@Runnable
+            }
+            previewRetryCount += 1
+            Log.w(TAG, "Preview stream stayed IDLE. Rebinding preview use case once.")
+            observePreviewStream(owner, view)
+            bindCameraUseCases(bindPreview = true)
+        }
+        pendingPreviewRetry = retry
+        mainHandler.postDelayed(retry, PREVIEW_STREAM_RETRY_DELAY_MS)
+    }
+
+    private fun cancelPendingPreviewRetry() {
+        pendingPreviewRetry?.let(mainHandler::removeCallbacks)
+        pendingPreviewRetry = null
     }
 
     private suspend fun <T> ListenableFuture<T>.await(): T {

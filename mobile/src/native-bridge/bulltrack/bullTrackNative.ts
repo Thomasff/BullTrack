@@ -1,31 +1,37 @@
 import NativeBullTrackModule from './specs/NativeBullTrackModule';
 import { mockBullTrackNativeBridge } from './mockBullTrackNative';
 import type {
+  ActionAcceptedResult,
   BullTrackNativeBridge,
+  CameraReadyState,
   FinishRoundInput,
   FinishRoundResult,
-  ProcessFrameInput,
-  ProcessFrameResult,
-  RedetectRoundInput,
-  RedetectRoundResult,
-  StartRoundInput,
-  StartRoundResult,
+  PreviewDiagnostics,
+  RedetectCurrentRoundInput,
+  StartLiveRoundInput,
+  StartLiveRoundResult,
 } from './types';
 
-const nativeModule = NativeBullTrackModule;
+export const bullTrackNativeModule = NativeBullTrackModule;
 
-const nativeBridge: BullTrackNativeBridge | null = nativeModule
+const nativeBridge: BullTrackNativeBridge | null = bullTrackNativeModule
   ? {
-      startRound: async (input: StartRoundInput) =>
-        nativeModule.startRound(input) as Promise<StartRoundResult>,
-      processFrame: async (input: ProcessFrameInput) =>
-        nativeModule.processFrame(input) as Promise<ProcessFrameResult>,
-      redetectRound: async (input: RedetectRoundInput) =>
-        nativeModule.redetectRound(input) as Promise<RedetectRoundResult>,
+      prepareRoundCamera: async () =>
+        bullTrackNativeModule.prepareRoundCamera() as Promise<CameraReadyState>,
+      startLiveRound: async (input: StartLiveRoundInput) =>
+        bullTrackNativeModule.startLiveRound(input) as Promise<StartLiveRoundResult>,
+      stopLiveRound: async () =>
+        bullTrackNativeModule.stopLiveRound() as Promise<ActionAcceptedResult>,
+      redetectCurrentRound: async (input: RedetectCurrentRoundInput) =>
+        bullTrackNativeModule.redetectCurrentRound(input) as Promise<ActionAcceptedResult>,
       finishRound: async (input: FinishRoundInput) =>
-        nativeModule.finishRound(input) as Promise<FinishRoundResult>,
+        bullTrackNativeModule.finishRound(input) as Promise<FinishRoundResult>,
       loadDebugArtifacts: async (roundId: string) =>
-        nativeModule.loadDebugArtifacts(roundId) as Promise<any>,
+        bullTrackNativeModule.loadDebugArtifacts(roundId) as Promise<any>,
+      setZoomRatio: async (zoomRatio: number) =>
+        bullTrackNativeModule.setZoomRatio(zoomRatio) as Promise<CameraReadyState>,
+      getPreviewDiagnostics: async () =>
+        bullTrackNativeModule.getPreviewDiagnostics() as Promise<PreviewDiagnostics>,
     }
   : null;
 

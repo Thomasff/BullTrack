@@ -4,8 +4,8 @@
   "private": true,
   "codegenConfig": {
     "name": "BullTrackSpecs",
-    "type": "modules",
-    "jsSrcsDir": "src/native-bridge/bulltrack/specs",
+    "type": "all",
+    "jsSrcsDir": "src/native-bridge",
     "android": {
       "javaPackageName": "com.zheng.bulltrackmobile.specs"
     }

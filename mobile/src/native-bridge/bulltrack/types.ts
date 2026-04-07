@@ -1,47 +1,46 @@
-import type { ThrowResult } from '../../domain/game/types';
+import type { CameraLockPhase, GameType, ThrowResult } from '../../domain/game/types';
 import type { DebugArtifact } from '../../domain/vision/types';
 
-export interface StartRoundInput {
-  gameMode: 'highScore' | 'x01' | 'cricket';
-  frameRef: string;
-  roundId?: string;
-}
-
-export interface StartRoundResult {
-  roundId: string;
-  status: 'ready';
+export interface CameraReadyState {
+  isReady: boolean;
+  isPreviewBound: boolean;
+  zoomRatio: number;
   statusMessage: string;
-  debugArtifacts: DebugArtifact[];
+  lockPhase: CameraLockPhase;
+  lockReason?: string | null;
 }
 
-export interface ProcessFrameInput {
-  roundId: string;
-  frameRef: string;
+export interface PreviewDiagnostics {
+  createViewManagersCount: number;
+  createViewInstanceCount: number;
+  viewAttachedCount: number;
+  hostAttachFragmentCount: number;
+  fragmentCreateViewCount: number;
+  fragmentViewCreatedCount: number;
+  fragmentStartCount: number;
+  controllerAttachPreviewCount: number;
+  lastStep: string;
 }
 
-export interface ProcessFrameResult {
-  roundId: string;
-  status: 'resultReady';
+export interface StartLiveRoundInput {
+  gameMode: GameType;
+  playerId: string;
+  imagePath: string;
+}
+
+export interface StartLiveRoundResult {
+  accepted: boolean;
   statusMessage: string;
-  gateTriggered: boolean;
-  gateReason: string;
-  newThrow: ThrowResult | null;
-  throws: ThrowResult[];
-  debugArtifacts: DebugArtifact[];
 }
 
-export interface RedetectRoundInput {
+export interface RedetectCurrentRoundInput {
   roundId: string;
-  frameRef: string;
+  imagePath: string;
 }
 
-export interface RedetectRoundResult {
-  roundId: string;
-  status: 'resultReady';
+export interface ActionAcceptedResult {
+  accepted: boolean;
   statusMessage: string;
-  yoloStatus?: string | null;
-  throws: ThrowResult[];
-  debugArtifacts: DebugArtifact[];
 }
 
 export interface FinishRoundInput {
@@ -53,12 +52,16 @@ export interface FinishRoundResult {
   status: 'finished';
   statusMessage: string;
   throws: ThrowResult[];
+  debugArtifacts: DebugArtifact[];
 }
 
 export interface BullTrackNativeBridge {
-  startRound(input: StartRoundInput): Promise<StartRoundResult>;
-  processFrame(input: ProcessFrameInput): Promise<ProcessFrameResult>;
-  redetectRound(input: RedetectRoundInput): Promise<RedetectRoundResult>;
+  prepareRoundCamera(): Promise<CameraReadyState>;
+  startLiveRound(input: StartLiveRoundInput): Promise<StartLiveRoundResult>;
+  stopLiveRound(): Promise<ActionAcceptedResult>;
+  redetectCurrentRound(input: RedetectCurrentRoundInput): Promise<ActionAcceptedResult>;
   finishRound(input: FinishRoundInput): Promise<FinishRoundResult>;
   loadDebugArtifacts(roundId: string): Promise<DebugArtifact[]>;
+  setZoomRatio(zoomRatio: number): Promise<CameraReadyState>;
+  getPreviewDiagnostics(): Promise<PreviewDiagnostics>;
 }

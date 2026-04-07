@@ -1,124 +1,88 @@
-import type { ThrowResult } from '../../domain/game/types';
 import type { DebugArtifact } from '../../domain/vision/types';
+import type { ThrowResult } from '../../domain/game/types';
 import type {
+  ActionAcceptedResult,
   BullTrackNativeBridge,
+  CameraReadyState,
   FinishRoundInput,
   FinishRoundResult,
-  ProcessFrameInput,
-  ProcessFrameResult,
-  RedetectRoundInput,
-  RedetectRoundResult,
-  StartRoundInput,
-  StartRoundResult,
+  PreviewDiagnostics,
+  RedetectCurrentRoundInput,
+  StartLiveRoundInput,
+  StartLiveRoundResult,
 } from './types';
-
-const mockRoundId = 'mock-round-001';
 
 const mockThrows: ThrowResult[] = [
   {
-    id: 'throw-1',
-    label: 'D20',
-    score: 40,
-    ring: 'double',
-    pointNorm: { x: 0.16, y: -0.74 },
-  },
-  {
-    id: 'throw-2',
-    label: 'T19',
-    score: 57,
+    id: 'mock-1',
+    label: 'T20',
+    score: 60,
     ring: 'triple',
-    pointNorm: { x: -0.43, y: -0.18 },
+    pointNorm: { x: 0.18, y: -0.42 },
   },
   {
-    id: 'throw-3',
-    label: 'S17',
-    score: 17,
-    ring: 'single',
-    pointNorm: { x: 0.52, y: 0.25 },
+    id: 'mock-2',
+    label: 'D16',
+    score: 32,
+    ring: 'double',
+    pointNorm: { x: -0.55, y: 0.3 },
   },
 ];
 
 const mockArtifacts: DebugArtifact[] = [
   {
-    id: 'artifact-1',
-    roundId: mockRoundId,
+    id: 'mock-round:rectified',
+    roundId: 'mock-round',
     kind: 'boardRectifiedPreview',
-    title: 'Board Rectified Preview',
-    path: 'debug/mock/board_rectified_preview.jpg',
-    note: '第一阶段占位图路径，后续替换为 Native 文件路径。',
-  },
-  {
-    id: 'artifact-2',
-    roundId: mockRoundId,
-    kind: 'adaptiveRedSamplePoints',
-    title: 'Adaptive Red Sample Points',
-    path: 'debug/mock/adaptive_red_sample_points.jpg',
-  },
-  {
-    id: 'artifact-3',
-    roundId: mockRoundId,
-    kind: 'yoloRedetectOverlay',
-    title: 'YOLO Redetect Overlay',
-    path: 'debug/mock/yolo_redetect_overlay.jpg',
+    title: 'Mock Rectified Board',
+    path: 'file:///mock/rectified.jpg',
+    note: 'Mock fallback artifact.',
   },
 ];
 
-const sleep = async (durationMs: number) =>
-  new Promise<void>(resolve => {
-    setTimeout(resolve, durationMs);
-  });
+const readyState: CameraReadyState = {
+  isReady: true,
+  isPreviewBound: true,
+  zoomRatio: 1,
+  statusMessage: 'Mock camera ready',
+  lockPhase: 'IDLE',
+  lockReason: null,
+};
 
-export class MockBullTrackNativeBridge implements BullTrackNativeBridge {
-  async startRound(input: StartRoundInput): Promise<StartRoundResult> {
-    await sleep(180);
-    return {
-      roundId: input.roundId ?? mockRoundId,
-      status: 'ready',
-      statusMessage: `Mock native bridge started with ${input.frameRef}.`,
-      debugArtifacts: mockArtifacts,
-    };
-  }
+const previewDiagnostics: PreviewDiagnostics = {
+  createViewManagersCount: 1,
+  createViewInstanceCount: 1,
+  viewAttachedCount: 1,
+  hostAttachFragmentCount: 1,
+  fragmentCreateViewCount: 1,
+  fragmentViewCreatedCount: 1,
+  fragmentStartCount: 1,
+  controllerAttachPreviewCount: 1,
+  lastStep: 'mock.preview.ready',
+};
 
-  async processFrame(input: ProcessFrameInput): Promise<ProcessFrameResult> {
-    await sleep(260);
-    return {
-      roundId: input.roundId,
-      status: 'resultReady',
-      statusMessage: `Mock detection completed for ${input.frameRef}.`,
-      gateTriggered: true,
-      gateReason: 'mock_detection_complete',
-      newThrow: mockThrows[2],
-      throws: mockThrows,
-      debugArtifacts: mockArtifacts,
-    };
-  }
+const accepted = (statusMessage: string): ActionAcceptedResult => ({
+  accepted: true,
+  statusMessage,
+});
 
-  async redetectRound(input: RedetectRoundInput): Promise<RedetectRoundResult> {
-    await sleep(220);
-    return {
-      roundId: input.roundId,
-      status: 'resultReady',
-      statusMessage: `Mock redetect refreshed ${input.frameRef}.`,
-      yoloStatus: 'mock_redetect_ok',
-      throws: mockThrows,
-      debugArtifacts: mockArtifacts,
-    };
-  }
-
-  async finishRound(input: FinishRoundInput): Promise<FinishRoundResult> {
-    await sleep(120);
-    return {
-      roundId: input.roundId,
-      status: 'finished',
-      statusMessage: 'Mock round finished.',
-      throws: mockThrows,
-    };
-  }
-
-  async loadDebugArtifacts(roundId: string): Promise<DebugArtifact[]> {
-    await sleep(80);
-    return mockArtifacts.map(artifact => ({ ...artifact, roundId }));
-  }
-}
-
-export const mockBullTrackNativeBridge = new MockBullTrackNativeBridge();
+export const mockBullTrackNativeBridge: BullTrackNativeBridge = {
+  prepareRoundCamera: async () => readyState,
+  startLiveRound: async (_input: StartLiveRoundInput): Promise<StartLiveRoundResult> => ({
+    accepted: true,
+    statusMessage: 'Mock live round started.',
+  }),
+  stopLiveRound: async () => accepted('Mock round stopped.'),
+  redetectCurrentRound: async (_input: RedetectCurrentRoundInput) =>
+    accepted('Mock redetect accepted.'),
+  finishRound: async (input: FinishRoundInput): Promise<FinishRoundResult> => ({
+    roundId: input.roundId,
+    status: 'finished',
+    statusMessage: 'Mock round finished.',
+    throws: mockThrows,
+    debugArtifacts: mockArtifacts,
+  }),
+  loadDebugArtifacts: async () => mockArtifacts,
+  setZoomRatio: async () => readyState,
+  getPreviewDiagnostics: async () => previewDiagnostics,
+};

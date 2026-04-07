@@ -1,11 +1,17 @@
-export type GameMode = 'highScore' | 'x01' | 'cricket';
+export type GameType = 'highScore' | 'game301' | 'game501' | 'cricket';
 
-export type RoundStatus =
+export type GameStatus =
   | 'idle'
-  | 'ready'
-  | 'capturing'
-  | 'resultReady'
-  | 'error';
+  | 'modeSelected'
+  | 'playerSetup'
+  | 'waitingForThrow'
+  | 'roundInProgress'
+  | 'showingResult'
+  | 'gameOver';
+
+export type RoundStatus = 'idle' | 'ready' | 'capturing' | 'resultReady' | 'error';
+
+export type CameraLockPhase = 'IDLE' | 'METERING' | 'LOCKED' | 'FALLBACK';
 
 export interface ThrowResult {
   id: string;
@@ -28,4 +34,26 @@ export interface PlayerSummary {
   id: string;
   name: string;
   score: number;
+  roundScores: number[];
+  marks?: Record<string, number>;
+}
+
+export interface ScoreBoard {
+  players: PlayerSummary[];
+}
+
+export interface RoundResult {
+  playerId: string;
+  playerName: string;
+  throws: ThrowResult[];
+  roundScore: number;
+}
+
+export interface CameraStatus {
+  isReady: boolean;
+  isPreviewBound: boolean;
+  zoomRatio: number;
+  statusMessage: string;
+  lockPhase: CameraLockPhase;
+  lockReason?: string | null;
 }

@@ -1,6 +1,8 @@
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { HomeScreen } from '../../ui/screens/HomeScreen';
+import { ModeSelectScreen } from '../../ui/screens/ModeSelectScreen';
+import { PlayerSetupScreen } from '../../ui/screens/PlayerSetupScreen';
 import { GameScreen } from '../../ui/screens/GameScreen';
 import { DebugScreen } from '../../ui/screens/DebugScreen';
 import { colors } from '../../ui/theme/colors';
@@ -26,14 +28,16 @@ export const RootNavigator = () => (
       options={{ title: 'BullTrack Mobile' }}
     />
     <Stack.Screen
-      name="Game"
-      component={GameScreen}
-      options={{ title: 'Game Shell' }}
+      name="ModeSelect"
+      component={ModeSelectScreen}
+      options={{ title: '选择模式' }}
     />
     <Stack.Screen
-      name="Debug"
-      component={DebugScreen}
-      options={{ title: 'Debug Shell' }}
+      name="PlayerSetup"
+      component={PlayerSetupScreen}
+      options={{ title: '玩家设置' }}
     />
+    <Stack.Screen name="Game" component={GameScreen} options={{ title: '对局' }} />
+    <Stack.Screen name="Debug" component={DebugScreen} options={{ title: '调试图' }} />
   </Stack.Navigator>
 );
