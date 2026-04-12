@@ -127,8 +127,8 @@ class CameraXManager : CameraManager {
             try {
                 cameraProvider = providerFuture.get()
                 Log.d(TAG, "Camera provider initialized. previewAttached=${previewView != null}")
-                if (previewLifecycleOwner != null && previewView != null) {
-                    bindCameraUseCases(bindPreview = true)
+                if (previewLifecycleOwner != null) {
+                    bindCameraUseCases(bindPreview = previewView != null)
                 } else {
                     _cameraState.value = readyState(
                         isPreviewBound = false,
@@ -148,6 +148,14 @@ class CameraXManager : CameraManager {
         observePreviewStream(lifecycleOwner, previewView)
         Log.d(TAG, "bindPreview requested. providerReady=${cameraProvider != null}")
         bindCameraUseCases(bindPreview = true)
+    }
+
+    fun bindCaptureOnly(lifecycleOwner: LifecycleOwner) {
+        previewLifecycleOwner = lifecycleOwner
+        clearPreviewStreamObserver()
+        previewView = null
+        Log.d(TAG, "bindCaptureOnly requested. providerReady=${cameraProvider != null}")
+        bindCameraUseCases(bindPreview = false)
     }
 
     override fun unbindPreview() {
@@ -214,6 +222,23 @@ class CameraXManager : CameraManager {
         } else {
             bindCameraUseCases(bindPreview = false)
         }
+    }
+
+    fun releaseRoundOwnership() {
+        val provider = cameraProvider ?: return
+        provider.unbindAll()
+        previewUseCase = null
+        imageCapture = null
+        boundCamera = null
+        currentRoundConfig = null
+        lockedZoomRatioForRound = null
+        lockPhase = CameraLockPhase.IDLE
+        lockReason = null
+        reset3AState()
+        _cameraState.value = readyState(
+            isPreviewBound = false,
+            statusMessage = "原生 round capture 已释放，等待 VisionCamera 恢复预览"
+        )
     }
 
     override fun release() {

@@ -26,9 +26,7 @@ class BullTrackModule(
 
     override fun startLiveRound(request: ReadableMap, promise: Promise) {
         resolvePromise(promise) {
-            val imagePath = request.getString("imagePath")
-                ?: error("Missing required string field: imagePath")
-            controller.startLiveRound(imagePath)
+            controller.startLiveRound()
         }
     }
 
@@ -43,9 +41,7 @@ class BullTrackModule(
             runCatching {
                 val roundId = request.getString("roundId")
                     ?: error("Missing required string field: roundId")
-                val imagePath = request.getString("imagePath")
-                    ?: error("Missing required string field: imagePath")
-                controller.redetectCurrentRound(roundId, imagePath)
+                controller.redetectCurrentRound(roundId)
             }.onSuccess(promise::resolve)
                 .onFailure { error -> promise.reject("BT_REDETECT_FAILED", error.message, error) }
         }

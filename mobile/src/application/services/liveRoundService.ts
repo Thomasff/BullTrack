@@ -168,7 +168,12 @@ export const prepareLiveCamera = async () => {
 
 export const getPreviewDiagnostics = async () => bullTrackNativeBridge.getPreviewDiagnostics();
 
-export const startLiveRound = async (imagePath: string) => {
+export const updateLiveZoomRatio = async (zoomRatio: number) => {
+  const readyState = await bullTrackNativeBridge.setZoomRatio(zoomRatio);
+  useGameStore.getState().setCameraStatus(readyState);
+};
+
+export const startLiveRound = async () => {
   const state = useGameStore.getState();
   if (!state.selectedMode || !state.currentPlayerId) {
     throw new Error('Game session has not been configured.');
@@ -176,7 +181,6 @@ export const startLiveRound = async (imagePath: string) => {
   await bullTrackNativeBridge.startLiveRound({
     gameMode: state.selectedMode,
     playerId: state.currentPlayerId,
-    imagePath,
   });
 };
 
@@ -184,12 +188,12 @@ export const stopLiveRound = async () => {
   await bullTrackNativeBridge.stopLiveRound();
 };
 
-export const redetectCurrentRound = async (imagePath: string) => {
+export const redetectCurrentRound = async () => {
   const roundId = useGameStore.getState().roundId;
   if (!roundId) {
     throw new Error('No active round to redetect.');
   }
-  await bullTrackNativeBridge.redetectCurrentRound({ roundId, imagePath });
+  await bullTrackNativeBridge.redetectCurrentRound({ roundId });
 };
 
 export const confirmCurrentRound = async () => {

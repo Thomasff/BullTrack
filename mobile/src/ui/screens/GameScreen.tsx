@@ -14,6 +14,7 @@ import {
   resetLiveGameSession,
   startLiveRound,
   stopLiveRound,
+  updateLiveZoomRatio,
 } from '../../application/services/liveRoundService';
 import { useGameStore } from '../../application/stores/gameStore';
 import { useVisionDebugStore } from '../../application/stores/visionDebugStore';
@@ -41,8 +42,10 @@ const toneForStatus = (status: string) => {
   }
 };
 
-const normalizePhotoPath = (path: string) =>
-  path.startsWith('file://') ? path : `file://${path}`;
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 4;
+const ZOOM_SLIDER_HEIGHT = 220;
+const ZOOM_THUMB_SIZE = 26;
 
 export const GameScreen = ({ navigation }: Props) => {
   const [runningAction, setRunningAction] = useState<
@@ -50,7 +53,13 @@ export const GameScreen = ({ navigation }: Props) => {
   >(null);
   const [previewDiagnosticsText, setPreviewDiagnosticsText] = useState('vision-camera');
   const [previewReady, setPreviewReady] = useState(false);
-  const cameraRef = useRef<Camera>(null);
+  const [handoffInProgress, setHandoffInProgress] = useState(false);
+  const [scrollEnabled, setScrollEnabled] = useState(true);
+  const [previewInstanceKey, setPreviewInstanceKey] = useState(0);
+  const [zoomTrackHeight, setZoomTrackHeight] = useState(ZOOM_SLIDER_HEIGHT);
+  const [previewZoomRatio, setPreviewZoomRatio] = useState(ZOOM_MIN);
+  const zoomTrackRef = useRef<View>(null);
+  const latestZoomRef = useRef(ZOOM_MIN);
   const isFocused = useIsFocused();
   const device = useCameraDevice('back');
 
@@ -72,6 +81,10 @@ export const GameScreen = ({ navigation }: Props) => {
     canRedetect,
     setCameraStatus,
   } = useGameStore();
+  const previousStatusRef = useRef(status);
+  const isZoomDraggingRef = useRef(false);
+  const zoomTrackTopRef = useRef(0);
+  const zoomDragOffsetRef = useRef(0);
   const artifactCount = useVisionDebugStore(state => state.artifacts.length);
 
   useEffect(() => {
@@ -100,7 +113,6 @@ export const GameScreen = ({ navigation }: Props) => {
       setCameraStatus({
         isReady: false,
         isPreviewBound: false,
-        zoomRatio: 1,
         statusMessage: '需要相机权限才能显示预览',
         lockPhase: 'IDLE',
         lockReason: null,
@@ -113,7 +125,6 @@ export const GameScreen = ({ navigation }: Props) => {
       setCameraStatus({
         isReady: false,
         isPreviewBound: false,
-        zoomRatio: 1,
         statusMessage: '未找到后置相机设备',
         lockPhase: 'FALLBACK',
         lockReason: 'Back camera device unavailable',
@@ -125,7 +136,6 @@ export const GameScreen = ({ navigation }: Props) => {
       setCameraStatus({
         isReady: false,
         isPreviewBound: false,
-        zoomRatio: 1,
         statusMessage: '相机已初始化，等待预览',
         lockPhase: 'IDLE',
         lockReason: null,
@@ -136,7 +146,6 @@ export const GameScreen = ({ navigation }: Props) => {
     setCameraStatus({
       isReady: true,
       isPreviewBound: true,
-      zoomRatio: 1,
       statusMessage: '相机预览已就绪',
       lockPhase: 'IDLE',
       lockReason: null,
@@ -156,20 +165,122 @@ export const GameScreen = ({ navigation }: Props) => {
     [currentThrows],
   );
   const isBusy = runningAction !== null;
+  const shouldShowVisionPreview =
+    isFocused &&
+    cameraPermissionGranted &&
+    !!device &&
+    status === 'waitingForThrow' &&
+    !handoffInProgress;
+  const zoomRange = useMemo(() => {
+    const maxZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, device?.maxZoom ?? ZOOM_MAX));
+    return {
+      min: ZOOM_MIN,
+      max: maxZoom,
+    };
+  }, [device]);
+  const canAdjustZoom =
+    cameraPermissionGranted &&
+    !!device &&
+    previewReady &&
+    status === 'waitingForThrow' &&
+    !isBusy &&
+    !handoffInProgress;
 
-  const capturePhoto = async () => {
-    const camera = cameraRef.current;
-    if (!camera) {
-      throw new Error('Camera reference is not ready.');
+  useEffect(() => {
+    const clamped = Math.min(zoomRange.max, Math.max(zoomRange.min, cameraStatus.zoomRatio || ZOOM_MIN));
+    if (isZoomDraggingRef.current) {
+      return;
     }
-    const photo = await camera.takePhoto({
-      enableShutterSound: false,
-    });
-    return normalizePhotoPath(photo.path);
+    setPreviewZoomRatio(clamped);
+    latestZoomRef.current = clamped;
+  }, [cameraStatus.zoomRatio, zoomRange.max, zoomRange.min]);
+
+  useEffect(() => {
+    if (status !== 'waitingForThrow') {
+      setHandoffInProgress(false);
+    }
+  }, [status]);
+
+  useEffect(() => {
+    const previousStatus = previousStatusRef.current;
+    if (status === 'waitingForThrow' && previousStatus !== 'waitingForThrow') {
+      setPreviewReady(false);
+      setPreviewInstanceKey(current => current + 1);
+    }
+    previousStatusRef.current = status;
+  }, [status]);
+
+  const commitZoomRatio = (nextZoomRatio: number) => {
+    const clamped = Math.min(zoomRange.max, Math.max(zoomRange.min, nextZoomRatio));
+    latestZoomRef.current = clamped;
+    setPreviewZoomRatio(clamped);
+    setCameraStatus({ zoomRatio: clamped });
   };
 
+  const persistZoomRatio = () => {
+    updateLiveZoomRatio(latestZoomRef.current).catch(() => undefined);
+  };
+
+  const refreshZoomTrackMetrics = () => {
+    zoomTrackRef.current?.measureInWindow((_x, y, _width, height) => {
+      zoomTrackTopRef.current = y;
+      const nextHeight = Math.round(height);
+      if (nextHeight > 0) {
+        setZoomTrackHeight(current => (current === nextHeight ? current : nextHeight));
+      }
+    });
+  };
+
+  const resolveZoomRatioFromPageY = (pageY: number) => {
+    const trackHeight = Math.max(1, zoomTrackHeight);
+    const relativeY = pageY - zoomTrackTopRef.current - zoomDragOffsetRef.current;
+    const progress = 1 - Math.min(1, Math.max(0, relativeY / trackHeight));
+    return zoomRange.min + progress * (zoomRange.max - zoomRange.min);
+  };
+
+  const beginZoomDrag = (locationY: number, pageY: number) => {
+    if (!canAdjustZoom) {
+      return;
+    }
+    isZoomDraggingRef.current = true;
+    setScrollEnabled(false);
+    refreshZoomTrackMetrics();
+    const trackHeight = Math.max(1, zoomTrackHeight);
+    const usableHeight = Math.max(1, trackHeight - ZOOM_THUMB_SIZE);
+    const zoomSpan = Math.max(0.0001, zoomRange.max - zoomRange.min);
+    const normalized = (previewZoomRatio - zoomRange.min) / zoomSpan;
+    const thumbTop = (1 - normalized) * usableHeight;
+    const thumbCenter = thumbTop + ZOOM_THUMB_SIZE / 2;
+    zoomDragOffsetRef.current = locationY - thumbCenter;
+    commitZoomRatio(resolveZoomRatioFromPageY(pageY));
+  };
+
+  const moveZoomDrag = (pageY: number) => {
+    if (!canAdjustZoom) {
+      return;
+    }
+    commitZoomRatio(resolveZoomRatioFromPageY(pageY));
+  };
+
+  const endZoomDrag = () => {
+    isZoomDraggingRef.current = false;
+    zoomDragOffsetRef.current = 0;
+    setScrollEnabled(true);
+    persistZoomRatio();
+  };
+
+  const thumbOffset = useMemo(() => {
+    const usableHeight = Math.max(1, zoomTrackHeight - ZOOM_THUMB_SIZE);
+    const zoomSpan = Math.max(0.0001, zoomRange.max - zoomRange.min);
+    const normalized = (previewZoomRatio - zoomRange.min) / zoomSpan;
+    return (1 - normalized) * usableHeight;
+  }, [previewZoomRatio, zoomRange.max, zoomRange.min, zoomTrackHeight]);
+
   return (
-    <ScrollView contentContainerStyle={styles.screenContent} style={styles.screen}>
+    <ScrollView
+      contentContainerStyle={styles.screenContent}
+      style={styles.screen}
+      scrollEnabled={scrollEnabled}>
       <View style={styles.headerBlock}>
         <SectionHeader
           eyebrow="Game"
@@ -183,10 +294,11 @@ export const GameScreen = ({ navigation }: Props) => {
         <View style={styles.previewFrame} collapsable={false}>
           {cameraPermissionGranted && device ? (
             <Camera
-              ref={cameraRef}
+              key={`preview-${previewInstanceKey}`}
               style={styles.preview}
               device={device}
-              isActive={isFocused}
+              isActive={shouldShowVisionPreview}
+              zoom={previewZoomRatio}
               photo
               resizeMode="cover"
               androidPreviewViewType="texture-view"
@@ -198,7 +310,6 @@ export const GameScreen = ({ navigation }: Props) => {
                 setCameraStatus({
                   isReady: false,
                   isPreviewBound: false,
-                  zoomRatio: 1,
                   statusMessage: `相机预览失败: ${error.message}`,
                   lockPhase: 'FALLBACK',
                   lockReason: error.code,
@@ -212,18 +323,55 @@ export const GameScreen = ({ navigation }: Props) => {
               </Text>
             </View>
           )}
+          <View style={styles.zoomOverlay} pointerEvents="box-none">
+            <Text style={styles.zoomCurrentLabel}>{previewZoomRatio.toFixed(2)}x</Text>
+            <View
+              style={[
+                styles.zoomTrackShell,
+                !canAdjustZoom && styles.zoomTrackShellDisabled,
+              ]}
+              onStartShouldSetResponderCapture={() => canAdjustZoom}
+              onMoveShouldSetResponderCapture={() => canAdjustZoom}
+              onStartShouldSetResponder={() => canAdjustZoom}
+              onMoveShouldSetResponder={() => canAdjustZoom}
+              onResponderTerminationRequest={() => false}
+              onResponderGrant={event => {
+                beginZoomDrag(event.nativeEvent.locationY, event.nativeEvent.pageY);
+              }}
+              onResponderMove={event => {
+                moveZoomDrag(event.nativeEvent.pageY);
+              }}
+              onResponderRelease={endZoomDrag}
+              onResponderTerminate={endZoomDrag}
+            >
+              <Text style={styles.zoomScaleLabel}>{zoomRange.max.toFixed(1)}x</Text>
+              <View
+                ref={zoomTrackRef}
+                style={styles.zoomTrack}
+                onLayout={event => {
+                  const nextHeight = Math.round(event.nativeEvent.layout.height);
+                  setZoomTrackHeight(current => (current === nextHeight ? current : nextHeight));
+                  refreshZoomTrackMetrics();
+                }}>
+                <View style={styles.zoomTrackFill} />
+                <View
+                  style={[
+                    styles.zoomThumb,
+                    {
+                      top: thumbOffset,
+                    },
+                  ]}
+                />
+              </View>
+              <Text style={styles.zoomScaleLabel}>{zoomRange.min.toFixed(1)}x</Text>
+            </View>
+          </View>
         </View>
         <Text style={styles.body}>{cameraStatus.statusMessage}</Text>
         <Text style={styles.body}>
           Zoom {cameraStatus.zoomRatio.toFixed(2)}x · {cameraStatus.lockPhase} · Preview{' '}
-          {cameraStatus.isPreviewBound ? 'BOUND' : 'UNBOUND'}
+          {shouldShowVisionPreview ? 'VISION' : cameraStatus.isPreviewBound ? 'NATIVE' : 'UNBOUND'}
         </Text>
-        <Text style={styles.body}>
-          Preview host: VisionCamera · Device {device?.name ?? 'missing'} ·{' '}
-          {previewReady ? 'INITIALIZED' : 'PENDING'}
-        </Text>
-        <Text style={styles.body}>Legacy preview diagnostics: {previewDiagnosticsText}</Text>
-        {cameraStatus.lockReason ? <Text style={styles.body}>{cameraStatus.lockReason}</Text> : null}
       </View>
 
       <View style={styles.content}>
@@ -246,7 +394,7 @@ export const GameScreen = ({ navigation }: Props) => {
           <View style={styles.rowBetween}>
             <Text style={styles.bodyStrong}>Bridge</Text>
             <Text style={styles.body}>
-              {isRealBullTrackNativeBridgeAvailable ? 'Native single-photo round' : 'Mock fallback'}
+              {isRealBullTrackNativeBridgeAvailable ? 'Native continuous live round' : 'Mock fallback'}
             </Text>
           </View>
           <Text style={styles.statusMessage}>{statusMessage}</Text>
@@ -303,12 +451,22 @@ export const GameScreen = ({ navigation }: Props) => {
             label={runningAction === 'start' ? 'Starting Round...' : '开始本轮'}
             onPress={() => {
               setRunningAction('start');
-              capturePhoto()
-                .then(photoPath => startLiveRound(photoPath))
+              setHandoffInProgress(true);
+              Promise.resolve()
+                .then(() => updateLiveZoomRatio(latestZoomRef.current))
+                .then(
+                  () =>
+                    new Promise<void>(resolve => {
+                      setTimeout(() => resolve(), 180);
+                    }),
+                )
+                .then(() => startLiveRound())
                 .finally(() => {
                   setRunningAction(null);
                 })
-                .catch(() => undefined);
+                .catch(() => {
+                  setHandoffInProgress(false);
+                });
             }}
             disabled={
               isBusy ||
@@ -335,8 +493,7 @@ export const GameScreen = ({ navigation }: Props) => {
             label={runningAction === 'redetect' ? 'Redetecting...' : '重新识别'}
             onPress={() => {
               setRunningAction('redetect');
-              capturePhoto()
-                .then(photoPath => redetectCurrentRound(photoPath))
+              redetectCurrentRound()
                 .finally(() => {
                   setRunningAction(null);
                 })
@@ -385,6 +542,24 @@ export const GameScreen = ({ navigation }: Props) => {
             disabled={isBusy}
           />
         </View>
+
+        <Panel>
+          <Text style={styles.panelTitle}>Live diagnostics</Text>
+          <Text style={styles.body}>
+            Preview host: VisionCamera · Device {device?.name ?? 'missing'} ·{' '}
+            {shouldShowVisionPreview
+              ? previewReady
+                ? 'ACTIVE'
+                : 'PENDING'
+              : status === 'roundInProgress'
+                ? 'NATIVE ROUND CAPTURE'
+                : previewReady
+                  ? 'STANDBY'
+                  : 'PENDING'}
+          </Text>
+          <Text style={styles.body}>Legacy preview diagnostics: {previewDiagnosticsText}</Text>
+          {cameraStatus.lockReason ? <Text style={styles.body}>{cameraStatus.lockReason}</Text> : null}
+        </Panel>
       </View>
     </ScrollView>
   );
@@ -432,6 +607,80 @@ const styles = StyleSheet.create({
   preview: {
     width: '100%',
     height: 320,
+  },
+  zoomOverlay: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    bottom: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 20,
+    elevation: 20,
+  },
+  zoomTrackShell: {
+    width: 52,
+    height: ZOOM_SLIDER_HEIGHT,
+    borderRadius: 24,
+    backgroundColor: 'rgba(12, 16, 24, 0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    zIndex: 21,
+    elevation: 21,
+  },
+  zoomTrackShellDisabled: {
+    opacity: 0.56,
+  },
+  zoomCurrentLabel: {
+    marginBottom: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(12, 16, 24, 0.82)',
+    color: '#F7F8FA',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  zoomScaleLabel: {
+    color: '#D7DBE2',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  zoomTrack: {
+    flex: 1,
+    width: 8,
+    marginVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255, 255, 255, 0.16)',
+    position: 'relative',
+    justifyContent: 'center',
+  },
+  zoomTrackFill: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    borderRadius: 999,
+    backgroundColor: 'rgba(242, 168, 61, 0.34)',
+  },
+  zoomThumb: {
+    position: 'absolute',
+    left: -9,
+    width: ZOOM_THUMB_SIZE,
+    height: ZOOM_THUMB_SIZE,
+    borderRadius: 999,
+    backgroundColor: '#F2A83D',
+    borderWidth: 2,
+    borderColor: '#FFF7E6',
+    shadowColor: '#000',
+    shadowOpacity: 0.24,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
   },
   previewFallback: {
     minHeight: 280,

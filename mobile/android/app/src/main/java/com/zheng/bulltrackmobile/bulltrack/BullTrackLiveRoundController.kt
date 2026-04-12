@@ -1,7 +1,9 @@
 package com.zheng.bulltrackmobile.bulltrack
 
 import android.os.Build
+import android.os.SystemClock
 import androidx.camera.view.PreviewView
+import androidx.lifecycle.LifecycleOwner
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.WritableArray
@@ -9,6 +11,8 @@ import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.facebook.react.uimanager.ThemedReactContext
 import com.zheng.bulltrack.camera.CameraLockPhase
+import com.zheng.bulltrack.camera.CameraState
+import com.zheng.bulltrack.camera.CameraXManager
 import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.RingType
 import com.zheng.bulltrack.domain.model.ThrowResult
@@ -19,11 +23,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.util.UUID
 import java.util.concurrent.Executors
+import kotlin.math.hypot
 
 class BullTrackLiveRoundController(
     private val reactContext: ReactApplicationContext
@@ -31,24 +38,75 @@ class BullTrackLiveRoundController(
 
     private val appContext = reactContext.applicationContext
     private val detector = NativeDartDetector(appContext.assets)
-    private val imageLoader = BullTrackImageLoader(appContext)
     private val artifactStore = BullTrackArtifactStore(reactContext)
+    private val cameraManager = CameraXManager()
     private val bridgeDispatcher: CoroutineDispatcher =
         Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val sessions = LinkedHashMap<String, RoundSession>()
     private var roundJob: Job? = null
+    private var currentSession: RoundSession? = null
     private var zoomRatio: Float = 1f
+
     @Volatile
     private var detectorInitialized = false
 
+    @Volatile
+    private var stopRequested = false
+
+    init {
+        cameraManager.initialize(appContext)
+        scope.launch {
+            cameraManager.cameraState.collect { state ->
+                when (state) {
+                    CameraState.Idle -> emitCameraStatus(
+                        isReady = false,
+                        isPreviewBound = false,
+                        zoomRatio = zoomRatio,
+                        statusMessage = "原生相机未初始化",
+                        lockPhase = CameraLockPhase.IDLE,
+                        lockReason = null,
+                    )
+
+                    is CameraState.Ready -> emitCameraStatus(
+                        isReady = true,
+                        isPreviewBound = state.isPreviewBound,
+                        zoomRatio = state.zoomRatio,
+                        statusMessage = state.statusMessage,
+                        lockPhase = state.lockPhase,
+                        lockReason = null,
+                    )
+
+                    is CameraState.Capturing -> emitCameraStatus(
+                        isReady = false,
+                        isPreviewBound = false,
+                        zoomRatio = state.zoomRatio,
+                        statusMessage = state.statusMessage,
+                        lockPhase = state.lockPhase,
+                        lockReason = state.statusMessage,
+                    )
+
+                    is CameraState.Error -> emitCameraStatus(
+                        isReady = false,
+                        isPreviewBound = false,
+                        zoomRatio = cameraManager.getZoomRatio(),
+                        statusMessage = state.message,
+                        lockPhase = CameraLockPhase.FALLBACK,
+                        lockReason = state.message,
+                    )
+                }
+            }
+        }
+    }
+
     suspend fun prepareRoundCamera(): WritableMap {
-        return currentCameraReadyState()
+        cameraManager.initialize(appContext)
+        return currentCameraReadyState("预览由 VisionCamera 管理，原生连续检测待命")
     }
 
     suspend fun setZoomRatio(zoomRatio: Double): WritableMap {
         this.zoomRatio = zoomRatio.toFloat()
-        return currentCameraReadyState()
+        cameraManager.setZoomRatio(this.zoomRatio)
+        return currentCameraReadyState("已更新原生 round zoom")
     }
 
     fun attachPreview(view: PreviewView, themedContext: ThemedReactContext) {
@@ -77,18 +135,20 @@ class BullTrackLiveRoundController(
         )
     }
 
-    fun startLiveRound(imagePath: String): WritableMap {
+    fun startLiveRound(): WritableMap {
         ensureSupportedRuntime()
         ensureDetectorInitialized()
-        if (roundJob?.isActive == true || sessions.isNotEmpty()) {
-            error("A live round is already running.")
+        if (roundJob?.isActive == true || currentSession != null) {
+            error("A live round is already running or awaiting confirmation.")
         }
+        stopRequested = false
         val roundId = createRoundId()
         roundJob = scope.launch(bridgeDispatcher) {
             runCatching {
-                runSingleImageRound(roundId, imagePath)
+                runContinuousRound(roundId)
             }.onFailure { error ->
-                cleanupRound(roundId, destroySession = true)
+                cleanupCurrentSession(destroySession = true)
+                runCatching { cameraManager.endRoundCapture() }
                 emitNativeError("BT_LIVE_ROUND_FAILED", error.message ?: "Unknown native round error")
                 emitRoundState(
                     phase = "finished",
@@ -97,66 +157,90 @@ class BullTrackLiveRoundController(
                     throws = emptyList(),
                     canRedetect = false,
                 )
+            }.also {
+                roundJob = null
             }
         }
-        return Arguments.createMap().apply {
-            putBoolean("accepted", true)
-            putString("statusMessage", "Single-photo round accepted.")
-        }
+        return accepted("Native live round accepted.")
     }
 
     fun stopLiveRound(): WritableMap {
-        roundJob?.cancel()
-        roundJob = null
-        return Arguments.createMap().apply {
-            putBoolean("accepted", true)
-            putString("statusMessage", "Stop requested for current round.")
-        }
+        stopRequested = true
+        return accepted("Manual stop requested for current round.")
     }
 
-    suspend fun redetectCurrentRound(roundId: String, imagePath: String): WritableMap {
+    suspend fun redetectCurrentRound(roundId: String): WritableMap {
         ensureSupportedRuntime()
         ensureDetectorInitialized()
-        val session = sessions[roundId] ?: error("Round session not found: $roundId")
-        val bitmap = withContext(Dispatchers.IO) {
-            imageLoader.loadBitmap(imagePath)
+        val session = currentSession ?: error("Round session not found: $roundId")
+        if (session.roundId != roundId) {
+            error("Round session mismatch: $roundId")
         }
-        val update = withTimeout(NATIVE_CALL_TIMEOUT_MS) {
-            withContext(Dispatchers.Default) {
-                detector.redetect(session.nativeSessionId, bitmap)
-            }
-        }
-        session.throws.clear()
-        session.throws += update.throws.take(MAX_DARTS)
-        session.lastImagePath = imagePath
-        val artifacts = artifactStore.saveArtifacts(roundId, update.debugImages)
-        emitThrowsUpdated(
-            roundId = roundId,
-            throws = session.throws,
-            statusMessage = buildRedetectStatusMessage(session.throws, update.yoloStatus),
-            canRedetect = true,
-        )
+
         emitRoundState(
-            phase = "showingResult",
+            phase = "starting",
             roundId = roundId,
-            statusMessage = if (session.throws.isEmpty()) {
-                "重新识别失败，未识别到有效飞镖"
-            } else {
-                "重新识别完成"
-            },
+            statusMessage = "使用首帧与新拍图片重新识别",
             throws = session.throws,
-            canRedetect = true,
+            canRedetect = false,
         )
-        return Arguments.createMap().apply {
-            putBoolean("accepted", true)
-            putString("statusMessage", "Redetect requested.")
-            putArray("debugArtifacts", artifacts.toWritableArray())
+
+        return runCatching {
+            bindNativeCaptureOnly()
+            val redetectFrame = cameraManager.captureNextFrameForRound()
+            val update = withTimeout(NATIVE_CALL_TIMEOUT_MS) {
+                withContext(Dispatchers.Default) {
+                    detector.redetect(session.nativeSessionId, redetectFrame.bitmap)
+                }
+            }
+            artifactStore.saveArtifacts(roundId, update.debugImages)
+            session.consumedFrameCount += 1
+            val normalized = update.throws.take(MAX_DARTS).toMutableList()
+            session.throws.clear()
+            session.throws.addAll(normalized)
+            emitThrowsUpdated(
+                roundId = roundId,
+                throws = session.throws,
+                statusMessage = buildRedetectStatusMessage(session.throws, update.yoloStatus),
+                canRedetect = true,
+            )
+            emitRoundState(
+                phase = "showingResult",
+                roundId = roundId,
+                statusMessage = if (session.throws.isEmpty()) {
+                    "重新识别失败，未识别到有效飞镖"
+                } else {
+                    "重新识别完成，可重检或确认结果"
+                },
+                throws = session.throws,
+                canRedetect = true,
+            )
+            accepted("Redetect requested.").apply {
+                putArray("debugArtifacts", artifactStore.listArtifactsArray(roundId))
+            }
+        }.getOrElse { error ->
+            emitRoundState(
+                phase = "showingResult",
+                roundId = roundId,
+                statusMessage = "重新识别失败，已保留当前结果",
+                throws = session.throws,
+                canRedetect = true,
+            )
+            emitNativeError("BT_REDETECT_FAILED", error.message ?: "Unknown redetect error")
+            accepted("Redetect failed but session kept.")
+        }.also {
+            runCatching { cameraManager.releaseRoundOwnership() }
         }
     }
 
     suspend fun finishRound(roundId: String): WritableMap {
-        val session = sessions.remove(roundId) ?: error("Round session not found: $roundId")
+        val session = currentSession ?: error("Round session not found: $roundId")
+        if (session.roundId != roundId) {
+            error("Round session mismatch: $roundId")
+        }
+        currentSession = null
         detector.destroySession(session.nativeSessionId)
+        runCatching { cameraManager.releaseRoundOwnership() }
         val artifacts = artifactStore.listArtifacts(roundId)
         emitRoundState(
             phase = "finished",
@@ -180,10 +264,8 @@ class BullTrackLiveRoundController(
 
     fun invalidate() {
         roundJob?.cancel()
-        sessions.values.forEach { session ->
-            runCatching { detector.destroySession(session.nativeSessionId) }
-        }
-        sessions.clear()
+        cleanupCurrentSession(destroySession = true)
+        runCatching { cameraManager.release() }
         runCatching {
             if (detectorInitialized) {
                 detector.release()
@@ -191,18 +273,17 @@ class BullTrackLiveRoundController(
         }
     }
 
-    private suspend fun runSingleImageRound(roundId: String, imagePath: String) {
+    private suspend fun runContinuousRound(roundId: String) {
         emitRoundState(
             phase = "starting",
             roundId = roundId,
-            statusMessage = "准备处理拍摄图片",
+            statusMessage = "原生相机接管中，准备拍摄首帧",
             throws = emptyList(),
             canRedetect = false,
         )
 
-        val bitmap = withContext(Dispatchers.IO) {
-            imageLoader.loadBitmap(imagePath)
-        }
+        bindNativeCaptureOnly()
+        val firstFrame = cameraManager.captureFirstFrameForRound()
         val sessionId = withTimeout(NATIVE_CALL_TIMEOUT_MS) {
             withContext(Dispatchers.Default) {
                 detector.createSession()
@@ -212,7 +293,7 @@ class BullTrackLiveRoundController(
         val startUpdate = runCatching {
             withTimeout(NATIVE_CALL_TIMEOUT_MS) {
                 withContext(Dispatchers.Default) {
-                    detector.startRound(sessionId, bitmap)
+                    detector.startRound(sessionId, firstFrame.bitmap)
                 }
             }
         }.getOrElse { error ->
@@ -229,64 +310,177 @@ class BullTrackLiveRoundController(
             roundId = roundId,
             nativeSessionId = sessionId,
             throws = mutableListOf(),
-            lastImagePath = imagePath,
+            consumedFrameCount = 1,
         )
-        sessions[roundId] = session
+        currentSession = session
 
         emitRoundState(
             phase = "capturing",
             roundId = roundId,
-            statusMessage = "首张图片已拍摄，正在识别飞镖",
+            statusMessage = firstFrame.cameraConfig?.statusMessage ?: "已拍摄第 1 张图片，开始连续检测",
             throws = emptyList(),
             canRedetect = false,
         )
 
-        val redetectUpdate = withTimeout(NATIVE_CALL_TIMEOUT_MS) {
-            withContext(Dispatchers.Default) {
-                detector.redetect(session.nativeSessionId, bitmap)
+        var frameIndex = 2
+        var lastCaptureTimestampNs = firstFrame.timestampNs
+        var captureNextImmediately = false
+        while (!stopRequested) {
+            if (!captureNextImmediately) {
+                waitUntilNextFrameWindow(lastCaptureTimestampNs)
+            }
+            if (stopRequested) {
+                break
+            }
+            val frame = cameraManager.captureNextFrameForRound()
+            lastCaptureTimestampNs = frame.timestampNs
+            val decision = processNextFrame(frameIndex = frameIndex, frameBitmap = frame.bitmap)
+            captureNextImmediately = decision.captureNextImmediately
+            if (decision.shouldStop) {
+                break
+            }
+            frameIndex += 1
+        }
+
+        finalizeRound(manualStop = stopRequested)
+        stopRequested = false
+        cameraManager.releaseRoundOwnership()
+    }
+
+    private suspend fun bindNativeCaptureOnly() {
+        val lifecycleOwner = reactContext.currentActivity as? LifecycleOwner
+            ?: error("Current activity is not available for native camera capture.")
+        withContext(Dispatchers.Main.immediate) {
+            cameraManager.bindCaptureOnly(lifecycleOwner)
+        }
+        val readyState = withTimeout(CAMERA_READY_TIMEOUT_MS) {
+            cameraManager.cameraState.first { state ->
+                state is CameraState.Ready || state is CameraState.Error
             }
         }
-        artifactStore.saveArtifacts(roundId, redetectUpdate.debugImages)
-        session.throws += redetectUpdate.throws.take(MAX_DARTS)
+        if (readyState is CameraState.Error) {
+            error(readyState.message)
+        }
+    }
 
+    private suspend fun waitUntilNextFrameWindow(lastCaptureTimestampNs: Long) {
+        val nowNs = SystemClock.elapsedRealtimeNanos()
+        val elapsedNs = nowNs - lastCaptureTimestampNs
+        if (elapsedNs < 0L) {
+            return
+        }
+        var remainingMs = FRAME_INTERVAL_MS - (elapsedNs / NANOS_PER_MILLISECOND)
+        while (!stopRequested && remainingMs > 0) {
+            val stepMs = remainingMs.coerceAtMost(FRAME_WAIT_SLICE_MS)
+            delay(stepMs)
+            remainingMs -= stepMs
+        }
+    }
+
+    private suspend fun processNextFrame(
+        frameIndex: Int,
+        frameBitmap: android.graphics.Bitmap,
+    ): FrameLoopDecision {
+        val session = currentSession ?: return FrameLoopDecision(shouldStop = true)
+        session.consumedFrameCount = frameIndex
+
+        val frameUpdate = runCatching {
+            withTimeout(NATIVE_CALL_TIMEOUT_MS) {
+                withContext(Dispatchers.Default) {
+                    detector.processFrame(session.nativeSessionId, frameBitmap)
+                }
+            }
+        }.getOrElse { error ->
+            emitThrowsUpdated(
+                roundId = session.roundId,
+                throws = session.throws,
+                statusMessage = "第 $frameIndex 张图片处理失败: ${error.message}",
+                canRedetect = false,
+            )
+            return FrameLoopDecision(shouldStop = false)
+        }
+
+        artifactStore.saveArtifacts(session.roundId, frameUpdate.gateDebugImages)
+        artifactStore.saveArtifacts(session.roundId, frameUpdate.preciseDebugImages)
+
+        if (!frameUpdate.gateTriggered) {
+            emitThrowsUpdated(
+                roundId = session.roundId,
+                throws = session.throws,
+                statusMessage = "第 $frameIndex 张图片未触发精检: ${describeGateReason(frameUpdate.gateReason)}",
+                canRedetect = false,
+            )
+            return FrameLoopDecision(
+                shouldStop = false,
+                captureNextImmediately = frameUpdate.gateReason == "yolo_count_increased_wait_next_frame",
+            )
+        }
+
+        val addedCount = mergeNewThrows(
+            existing = session.throws,
+            detected = listOfNotNull(frameUpdate.newThrow),
+        )
+        val statusMessage = if (frameUpdate.newThrow == null) {
+            "第 $frameIndex 张图片触发精检，但未识别到新飞镖: ${frameUpdate.gateReason}"
+        } else if (addedCount > 0) {
+            "第 $frameIndex 张图片识别到新飞镖，当前共 ${session.throws.size} 支"
+        } else {
+            "第 $frameIndex 张图片触发精检，但结果与已有飞镖重复"
+        }
         emitThrowsUpdated(
-            roundId = roundId,
+            roundId = session.roundId,
             throws = session.throws,
-            statusMessage = buildRedetectStatusMessage(session.throws, redetectUpdate.yoloStatus),
+            statusMessage = statusMessage,
+            canRedetect = false,
+        )
+        return FrameLoopDecision(shouldStop = session.throws.size >= MAX_DARTS)
+    }
+
+    private fun finalizeRound(manualStop: Boolean) {
+        val session = currentSession ?: return
+        val finalThrows = session.throws.toMutableList()
+        if (manualStop) {
+            while (finalThrows.size < MAX_DARTS) {
+                finalThrows += createMissThrow(finalThrows.size)
+            }
+        }
+        session.throws.clear()
+        session.throws.addAll(finalThrows)
+        emitThrowsUpdated(
+            roundId = session.roundId,
+            throws = session.throws,
+            statusMessage = if (manualStop) "本轮已手动结束" else "本轮检测结束",
             canRedetect = true,
         )
         emitRoundState(
             phase = "showingResult",
-            roundId = roundId,
-            statusMessage = if (session.throws.isEmpty()) {
-                "识别失败，未识别到有效飞镖，可重新识别"
-            } else {
-                "识别完成，可重检或确认结果"
+            roundId = session.roundId,
+            statusMessage = when {
+                manualStop -> "本轮已手动结束"
+                finalThrows.size >= MAX_DARTS -> "已识别满 3 支飞镖，自动结束"
+                else -> "本轮检测结束"
             },
-            throws = session.throws,
+            throws = finalThrows,
             canRedetect = true,
         )
-        roundJob = null
     }
 
-    private suspend fun cleanupRound(
-        roundId: String,
-        destroySession: Boolean,
-    ) {
-        sessions.remove(roundId)?.let { session ->
+    private fun cleanupCurrentSession(destroySession: Boolean) {
+        currentSession?.let { session ->
             if (destroySession) {
                 runCatching { detector.destroySession(session.nativeSessionId) }
             }
         }
-        roundJob = null
+        currentSession = null
+        stopRequested = false
     }
 
-    private fun currentCameraReadyState(): WritableMap {
+    private fun currentCameraReadyState(statusMessage: String): WritableMap {
         return Arguments.createMap().apply {
-            putBoolean("isReady", false)
+            putBoolean("isReady", true)
             putBoolean("isPreviewBound", false)
             putDouble("zoomRatio", zoomRatio.toDouble())
-            putString("statusMessage", "预览由 VisionCamera 管理，原生检测待命")
+            putString("statusMessage", statusMessage)
             putString("lockPhase", CameraLockPhase.IDLE.name)
             putString("lockReason", null)
         }
@@ -307,7 +501,7 @@ class BullTrackLiveRoundController(
                 putString("statusMessage", statusMessage)
                 putArray("throws", throws.toWritableThrows(roundId))
                 putBoolean("canRedetect", canRedetect)
-            }
+            },
         )
     }
 
@@ -324,7 +518,7 @@ class BullTrackLiveRoundController(
                 putString("statusMessage", statusMessage)
                 putArray("throws", throws.toWritableThrows(roundId))
                 putBoolean("canRedetect", canRedetect)
-            }
+            },
         )
     }
 
@@ -334,7 +528,7 @@ class BullTrackLiveRoundController(
             Arguments.createMap().apply {
                 putString("code", code)
                 putString("message", message)
-            }
+            },
         )
     }
 
@@ -355,7 +549,7 @@ class BullTrackLiveRoundController(
                 putString("statusMessage", statusMessage)
                 putString("lockPhase", lockPhase.name)
                 putString("lockReason", lockReason)
-            }
+            },
         )
     }
 
@@ -363,6 +557,13 @@ class BullTrackLiveRoundController(
         reactContext
             .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
             .emit(eventName, payload)
+    }
+
+    private fun accepted(statusMessage: String): WritableMap {
+        return Arguments.createMap().apply {
+            putBoolean("accepted", true)
+            putString("statusMessage", statusMessage)
+        }
     }
 
     private fun buildRedetectStatusMessage(
@@ -378,6 +579,57 @@ class BullTrackLiveRoundController(
             baseMessage
         } else {
             "$baseMessage（YOLO: $yoloStatus）"
+        }
+    }
+
+    private fun mergeNewThrows(
+        existing: MutableList<ThrowResult>,
+        detected: List<ThrowResult>,
+    ): Int {
+        var added = 0
+        detected.forEach { throwResult ->
+            if (existing.size >= MAX_DARTS) {
+                return@forEach
+            }
+            val position = throwResult.position ?: return@forEach
+            val duplicate = existing.any { existingThrow ->
+                val existingPosition = existingThrow.position ?: return@any false
+                hypot(
+                    (existingPosition.x - position.x).toDouble(),
+                    (existingPosition.y - position.y).toDouble(),
+                ) < DUPLICATE_DISTANCE_THRESHOLD
+            }
+            if (!duplicate) {
+                existing += throwResult
+                added += 1
+            }
+        }
+        return added
+    }
+
+    private fun createMissThrow(index: Int): ThrowResult {
+        val position = when (index) {
+            0 -> DartPosition(1.08f, 0f)
+            1 -> DartPosition(-1.08f, 0.08f)
+            else -> DartPosition(0f, -1.08f)
+        }
+        return ThrowResult(
+            sector = 0,
+            ring = RingType.MISS,
+            score = 0,
+            position = position,
+        )
+    }
+
+    private fun describeGateReason(gateReason: String): String {
+        return when {
+            gateReason == "yolo_count_not_increased" -> "YOLO 飞镖数量未增加"
+            gateReason == "yolo_count_increased_wait_next_frame" -> "YOLO 飞镖数量增加，等待下一张确认"
+            gateReason == "yolo_count_not_stable" -> "YOLO 飞镖数量未稳定"
+            gateReason == "yolo_new_dart_box_not_resolved" -> "YOLO 未能唯一确定新增飞镖框"
+            gateReason.startsWith("yolo_detect_failed:") -> "YOLO 检测失败"
+            gateReason.isBlank() -> "未知原因"
+            else -> gateReason
         }
     }
 
@@ -398,7 +650,7 @@ class BullTrackLiveRoundController(
                             putDouble("y", point.y.toDouble())
                         },
                     )
-                }
+                },
             )
         }
         return array
@@ -450,7 +702,7 @@ class BullTrackLiveRoundController(
         if (isProbablyEmulator()) {
             error(
                 "Real BullTrack native detection is disabled on Android emulators. " +
-                    "Use a physical Android device for JNI/C++/YOLO validation."
+                    "Use a physical Android device for JNI/C++/YOLO validation.",
             )
         }
     }
@@ -465,11 +717,16 @@ class BullTrackLiveRoundController(
             "google_sdk" == Build.PRODUCT
     }
 
+    private data class FrameLoopDecision(
+        val shouldStop: Boolean,
+        val captureNextImmediately: Boolean = false,
+    )
+
     private data class RoundSession(
         val roundId: String,
         val nativeSessionId: Long,
         val throws: MutableList<ThrowResult>,
-        var lastImagePath: String,
+        var consumedFrameCount: Int,
     )
 
     companion object {
@@ -479,5 +736,10 @@ class BullTrackLiveRoundController(
         const val EVENT_NATIVE_ERROR = "onNativeError"
         private const val MAX_DARTS = 3
         private const val NATIVE_CALL_TIMEOUT_MS = 12_000L
+        private const val CAMERA_READY_TIMEOUT_MS = 4_000L
+        private const val FRAME_INTERVAL_MS = 333L
+        private const val FRAME_WAIT_SLICE_MS = 50L
+        private const val NANOS_PER_MILLISECOND = 1_000_000L
+        private const val DUPLICATE_DISTANCE_THRESHOLD = 0.08
     }
 }

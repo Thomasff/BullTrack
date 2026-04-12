@@ -25,7 +25,6 @@ export interface PreviewDiagnostics {
 export interface StartLiveRoundInput {
   gameMode: GameType;
   playerId: string;
-  imagePath: string;
 }
 
 export interface StartLiveRoundResult {
@@ -35,7 +34,6 @@ export interface StartLiveRoundResult {
 
 export interface RedetectCurrentRoundInput {
   roundId: string;
-  imagePath: string;
 }
 
 export interface ActionAcceptedResult {
