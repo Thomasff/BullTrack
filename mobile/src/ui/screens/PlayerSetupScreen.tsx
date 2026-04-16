@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Panel } from '../components/Panel';
 import { PrimaryButton } from '../components/PrimaryButton';
@@ -8,64 +8,50 @@ import { SectionHeader } from '../components/SectionHeader';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { startGameSession } from '../../application/services/liveRoundService';
+import { getModeOption } from '../../domain/game/modeCatalog';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PlayerSetup'>;
 
 export const PlayerSetupScreen = ({ navigation, route }: Props) => {
-  const [playerNames, setPlayerNames] = useState(['', '']);
-  const playerCount = playerNames.length;
-  const title = useMemo(() => {
-    switch (route.params.gameType) {
-      case 'highScore':
-        return '高分赛';
-      case 'game301':
-        return '301';
-      case 'game501':
-        return '501';
-      case 'cricket':
-        return 'Cricket';
-    }
-  }, [route.params.gameType]);
-
-  const updatePlayerName = (index: number, value: string) => {
-    const next = [...playerNames];
-    next[index] = value;
-    setPlayerNames(next);
-  };
+  const [playerCount, setPlayerCount] = useState(1);
+  const selectedOption = useMemo(
+    () => getModeOption(route.params.modeOptionId),
+    [route.params.modeOptionId],
+  );
 
   const addPlayer = () => {
-    if (playerNames.length < 4) {
-      setPlayerNames([...playerNames, '']);
+    if (playerCount < 4) {
+      setPlayerCount(current => current + 1);
     }
   };
 
   const removePlayer = () => {
-    if (playerNames.length > 1) {
-      setPlayerNames(playerNames.slice(0, -1));
+    if (playerCount > 1) {
+      setPlayerCount(current => current - 1);
     }
   };
 
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
       <SectionHeader
-        eyebrow="Step 2"
-        title={`${title} 玩家设置`}
-        description="设置 1 到 4 位玩家，空名字会自动回退为默认名。"
+        eyebrow="信息设置"
+        title={selectedOption?.title ?? '信息设置'}
+        description="先设置参赛人数，当前支持 1 到 4 人，点击开始后进入现有相机预览与倍率调整流程。"
       />
 
       <Panel>
         <View style={styles.rowBetween}>
-          <Text style={styles.panelTitle}>玩家数量</Text>
+          <Text style={styles.panelTitle}>人数</Text>
           <Text style={styles.count}>{playerCount}</Text>
         </View>
         <View style={styles.inlineActions}>
           <SecondaryButton
-            label="减少 1 人"
+            label="减少"
             onPress={removePlayer}
             disabled={playerCount <= 1}
           />
           <SecondaryButton
-            label="增加 1 人"
+            label="增加"
             onPress={addPlayer}
             disabled={playerCount >= 4}
           />
@@ -73,31 +59,29 @@ export const PlayerSetupScreen = ({ navigation, route }: Props) => {
       </Panel>
 
       <Panel>
-        <Text style={styles.panelTitle}>玩家名单</Text>
-        <View style={styles.inputList}>
-          {playerNames.map((playerName, index) => (
-            <View key={`player-${index + 1}`} style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Player {index + 1}</Text>
-              <TextInput
-                value={playerName}
-                onChangeText={value => updatePlayerName(index, value)}
-                placeholder="输入名字，可留空"
-                placeholderTextColor={colors.textSecondary}
-                style={styles.input}
-              />
-            </View>
-          ))}
-        </View>
+        <Text style={styles.panelTitle}>当前模式</Text>
+        <Text style={styles.bodyStrong}>{selectedOption?.title ?? '未选择'}</Text>
+        <Text style={styles.body}>
+          该入口当前先接入现有对局逻辑，后续再补真实玩法规则与专属结算表现。
+        </Text>
       </Panel>
 
       <View style={styles.actionGroup}>
-        <SecondaryButton label="返回模式选择" onPress={() => navigation.goBack()} />
+        <SecondaryButton label="返回选项" onPress={() => navigation.goBack()} />
         <PrimaryButton
-          label="进入对局"
+          label="开始"
           onPress={() => {
-            startGameSession(route.params.gameType, playerNames);
+            if (!selectedOption) {
+              return;
+            }
+            startGameSession(
+              selectedOption.runtimeGameType,
+              Array.from({ length: playerCount }, (_, index) => `Player ${index + 1}`),
+              selectedOption.title,
+            );
             navigation.navigate('Game');
           }}
+          disabled={!selectedOption}
         />
       </View>
     </ScrollView>
@@ -129,28 +113,18 @@ const styles = StyleSheet.create({
     color: colors.accent,
   },
   inlineActions: {
+    flexDirection: 'row',
     gap: 12,
   },
-  inputList: {
-    gap: 14,
-  },
-  inputGroup: {
-    gap: 6,
-  },
-  inputLabel: {
-    fontSize: 13,
-    fontWeight: '700',
+  body: {
+    fontSize: 14,
+    lineHeight: 20,
     color: colors.textSecondary,
   },
-  input: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.background,
+  bodyStrong: {
+    fontSize: 18,
+    fontWeight: '800',
     color: colors.textPrimary,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
   },
   actionGroup: {
     gap: 12,

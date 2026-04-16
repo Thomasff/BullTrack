@@ -66,6 +66,7 @@ export const GameScreen = ({ navigation }: Props) => {
   const {
     status,
     selectedMode,
+    selectedModeLabel,
     players,
     currentPlayerId,
     scoreBoard,
@@ -376,7 +377,7 @@ export const GameScreen = ({ navigation }: Props) => {
 
       <View style={styles.content}>
         <View style={styles.statusGrid}>
-          <StatusCard label="Mode" value={selectedMode ?? 'unselected'} />
+          <StatusCard label="Mode" value={selectedModeLabel ?? selectedMode ?? 'unselected'} />
           <StatusCard label="State" value={status} tone={toneForStatus(status)} />
           <StatusCard
             label="Round / Throw"

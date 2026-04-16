@@ -144,8 +144,12 @@ export const requestCameraPermission = async (): Promise<boolean> => {
   return isGranted;
 };
 
-export const startGameSession = (mode: GameType, playerNames: string[]) => {
-  useGameStore.getState().selectMode(mode);
+export const startGameSession = (
+  mode: GameType,
+  playerNames: string[],
+  modeLabel: string,
+) => {
+  useGameStore.getState().selectMode(mode, modeLabel);
   useGameStore.getState().configurePlayers(playerNames);
   const players = useGameStore.getState().players;
   createGameEngine(mode, players);

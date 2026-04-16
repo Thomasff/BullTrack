@@ -12,6 +12,7 @@ import type {
 interface GameStoreState {
   status: GameStatus;
   selectedMode: GameType | null;
+  selectedModeLabel: string | null;
   players: PlayerSummary[];
   currentPlayerId: string | null;
   scoreBoard: ScoreBoard | null;
@@ -26,7 +27,7 @@ interface GameStoreState {
   cameraStatus: CameraStatus;
   roundId: string | null;
   canRedetect: boolean;
-  selectMode: (mode: GameType) => void;
+  selectMode: (mode: GameType, label: string) => void;
   configurePlayers: (playerNames: string[]) => void;
   setCurrentPlayer: (playerId: string | null) => void;
   setScoreBoard: (scoreBoard: ScoreBoard | null) => void;
@@ -60,6 +61,7 @@ const initialCameraStatus: CameraStatus = {
 const initialState = {
   status: 'idle' as GameStatus,
   selectedMode: null as GameType | null,
+  selectedModeLabel: null as string | null,
   players: [] as PlayerSummary[],
   currentPlayerId: null as string | null,
   scoreBoard: null as ScoreBoard | null,
@@ -78,9 +80,10 @@ const initialState = {
 
 export const useGameStore = create<GameStoreState>(set => ({
   ...initialState,
-  selectMode: selectedMode =>
+  selectMode: (selectedMode, selectedModeLabel) =>
     set({
       selectedMode,
+      selectedModeLabel,
       status: 'modeSelected',
       statusMessage: '已选择模式，继续设置玩家',
       errorMessage: null,

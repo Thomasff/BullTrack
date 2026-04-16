@@ -1,9 +1,9 @@
-import type { GameType } from '../../domain/game/types';
+import type { ModeCategoryId, ModeOptionId } from '../../domain/game/modeCatalog';
 
 export type RootStackParamList = {
   Home: undefined;
-  ModeSelect: undefined;
-  PlayerSetup: { gameType: GameType };
+  ModeSelect: { categoryId: ModeCategoryId };
+  PlayerSetup: { modeOptionId: ModeOptionId };
   Game: undefined;
   Debug: undefined;
 };
