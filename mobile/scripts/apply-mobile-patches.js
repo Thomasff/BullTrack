@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const filePath = path.join(
+const visionCameraBuildGradlePath = path.join(
   __dirname,
   '..',
   'node_modules',
@@ -15,19 +15,42 @@ const pluginPortalBlock = `    maven {
     }
 `;
 
-if (!fs.existsSync(filePath)) {
-  process.exit(0);
-}
+const patchFile = (filePath, searchValue, replaceValue, message) => {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
 
-const original = fs.readFileSync(filePath, 'utf8');
+  const original = fs.readFileSync(filePath, 'utf8');
 
-if (!original.includes(pluginPortalBlock)) {
-  process.exit(0);
-}
+  if (!original.includes(searchValue)) {
+    return;
+  }
 
-const updated = original.replace(pluginPortalBlock, '');
-fs.writeFileSync(filePath, updated, 'utf8');
+  const updated = original.replace(searchValue, replaceValue);
+  fs.writeFileSync(filePath, updated, 'utf8');
+  console.log(message);
+};
 
-console.log(
+patchFile(
+  visionCameraBuildGradlePath,
+  pluginPortalBlock,
+  '',
   'Applied BullTrack mobile patch: removed plugins.gradle.org from Vision Camera buildscript repositories.',
+);
+
+const sqliteStorageBuildGradlePath = path.join(
+  __dirname,
+  '..',
+  'node_modules',
+  'react-native-sqlite-storage',
+  'platforms',
+  'android',
+  'build.gradle',
+);
+
+patchFile(
+  sqliteStorageBuildGradlePath,
+  '        jcenter()\n',
+  '        mavenCentral()\n',
+  'Applied BullTrack mobile patch: replaced SQLite Storage jcenter() repository with mavenCentral().',
 );

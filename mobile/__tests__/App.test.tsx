@@ -6,6 +6,11 @@ import React from 'react';
 import ReactTestRenderer from 'react-test-renderer';
 import App from '../App';
 
+jest.mock('react-native-vision-camera', () => ({
+  Camera: {},
+  useCameraDevice: jest.fn(() => null),
+}));
+
 jest.mock('@react-navigation/native', () => {
   return {
     NavigationContainer: ({ children }: { children: React.ReactNode }) =>

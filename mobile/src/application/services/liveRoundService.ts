@@ -10,6 +10,7 @@ import {
 import { useGameStore } from '../stores/gameStore';
 import { useVisionDebugStore } from '../stores/visionDebugStore';
 import { createGameEngine, getGameEngine, resetGameEngine } from './gameRules';
+import { saveCompletedMatch } from './historyRepository';
 import type {
   CameraStatus,
   GameType,
@@ -27,19 +28,20 @@ const eventEmitter =
 const applyRoundResult = (throws: ThrowResult[]) => {
   const engine = getGameEngine();
   if (!engine) {
-    return;
+    return null;
   }
 
   const result = engine.applyRound(throws);
   const scoreBoard = engine.getScoreBoard();
   const nextPlayerId = engine.getCurrentPlayerId();
   const winnerId = engine.getWinnerId();
+  const isGameOver = engine.isGameOver();
 
   useGameStore.getState().setScoreBoard(scoreBoard);
   useGameStore.getState().setRoundResult(result);
   useGameStore.setState({ currentRoundNumber: engine.getCurrentRoundNumber() });
 
-  if (engine.isGameOver()) {
+  if (isGameOver) {
     useGameStore.getState().setWinner(
       winnerId,
       winnerId
@@ -50,6 +52,7 @@ const applyRoundResult = (throws: ThrowResult[]) => {
   }
 
   useGameStore.getState().setCurrentPlayer(nextPlayerId);
+  return { result, isGameOver, winnerId };
 };
 
 export const ensureBullTrackSubscriptions = () => {
@@ -205,12 +208,53 @@ export const confirmCurrentRound = async () => {
   if (!state.roundId) {
     throw new Error('No round result to confirm.');
   }
+  const roundIndex = state.currentRoundNumber;
 
   const finishResult = await bullTrackNativeBridge.finishRound({
     roundId: state.roundId,
   });
   useVisionDebugStore.getState().setArtifacts(finishResult.debugArtifacts);
-  applyRoundResult(finishResult.throws);
+  const appliedRound = applyRoundResult(finishResult.throws);
+  if (!appliedRound) {
+    return;
+  }
+
+  const completedRound = {
+    playerId: appliedRound.result.playerId,
+    roundIndex,
+    throws: appliedRound.result.throws,
+  };
+  useGameStore.getState().addCompletedRound(completedRound);
+
+  if (appliedRound.isGameOver) {
+    const latestState = useGameStore.getState();
+    const mode = latestState.selectedMode ?? state.selectedMode;
+    try {
+      if (!mode) {
+        throw new Error('Game mode is missing.');
+      }
+      await saveCompletedMatch({
+        mode,
+        modeLabel: latestState.selectedModeLabel,
+        createdAt: latestState.gameStartedAt ?? Date.now(),
+        players: latestState.players.map(player => ({
+          id: player.id,
+          name: player.name,
+        })),
+        winnerId: appliedRound.winnerId,
+        rounds: latestState.completedRounds,
+      });
+      useGameStore.setState({ errorMessage: null });
+    } catch (error) {
+      useGameStore.setState({
+        errorMessage:
+          error instanceof Error
+            ? `保存历史失败: ${error.message}`
+            : '保存历史失败',
+      });
+    }
+    return;
+  }
 
   const engine = getGameEngine();
   if (!engine?.isGameOver()) {

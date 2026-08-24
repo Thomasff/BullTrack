@@ -8,6 +8,8 @@ import { SectionHeader } from '../components/SectionHeader';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { modeCategories } from '../../domain/game/modeCatalog';
+import { listRecentMatches } from '../../application/services/historyRepository';
+import type { RecentMatchSummary } from '../../domain/history/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
@@ -21,6 +23,42 @@ const tabs: Array<{ id: RootTabId; title: string }> = [
 
 export const HomeScreen = ({ navigation }: Props) => {
   const [activeTab, setActiveTab] = React.useState<RootTabId>('home');
+  const [recentMatches, setRecentMatches] = React.useState<RecentMatchSummary[]>([]);
+  const [isHistoryLoading, setIsHistoryLoading] = React.useState(false);
+  const [historyError, setHistoryError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (activeTab !== 'stats') {
+      return;
+    }
+
+    let isMounted = true;
+    setIsHistoryLoading(true);
+    setHistoryError(null);
+    listRecentMatches()
+      .then(matches => {
+        if (isMounted) {
+          setRecentMatches(matches);
+        }
+      })
+      .catch(error => {
+        if (isMounted) {
+          setHistoryError(error instanceof Error ? error.message : '读取历史失败');
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsHistoryLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [activeTab]);
+
+  const formatMatchTime = (createdAt: number) =>
+    new Date(createdAt).toLocaleString();
 
   const renderHomeTab = () => (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
@@ -54,6 +92,44 @@ export const HomeScreen = ({ navigation }: Props) => {
     </ScrollView>
   );
 
+  const renderStatsTab = () => (
+    <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
+      <SectionHeader
+        eyebrow="统计"
+        title="最近比赛"
+        description="当前先展示本机已完成并保存的对局，后续再扩展玩家统计和比赛详情。"
+      />
+      {isHistoryLoading ? (
+        <Panel>
+          <Text style={styles.body}>正在读取历史...</Text>
+        </Panel>
+      ) : historyError ? (
+        <Panel>
+          <Text style={styles.errorText}>读取历史失败：{historyError}</Text>
+        </Panel>
+      ) : recentMatches.length === 0 ? (
+        <Panel>
+          <Text style={styles.body}>暂无已保存的完整对局。</Text>
+        </Panel>
+      ) : (
+        <View style={styles.matchList}>
+          {recentMatches.map(match => (
+            <Panel key={match.id}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.panelTitle}>{match.modeLabel ?? match.mode}</Text>
+                <Text style={styles.body}>{match.playerCount} 人</Text>
+              </View>
+              <Text style={styles.body}>{formatMatchTime(match.createdAt)}</Text>
+              <Text style={styles.bodyStrong}>
+                Winner: {match.winnerName ?? '未记录'}
+              </Text>
+            </Panel>
+          ))}
+        </View>
+      )}
+    </ScrollView>
+  );
+
   const renderPlaceholderTab = (title: string, description: string) => (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
       <SectionHeader eyebrow={title} title={title} description={description} />
@@ -74,7 +150,7 @@ export const HomeScreen = ({ navigation }: Props) => {
           {activeTab === 'home'
             ? renderHomeTab()
             : activeTab === 'stats'
-              ? renderPlaceholderTab('统计', '统计页先保留为空白占位。')
+              ? renderStatsTab()
               : renderPlaceholderTab('设置', '设置页先保留为空白占位。')}
         </View>
 
@@ -134,6 +210,31 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     color: colors.textSecondary,
+  },
+  bodyStrong: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  errorText: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: colors.danger,
+  },
+  rowBetween: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
+  matchList: {
+    gap: 12,
+  },
+  panelTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: colors.textPrimary,
   },
   categoryList: {
     gap: 14,

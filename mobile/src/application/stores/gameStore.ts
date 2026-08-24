@@ -8,6 +8,7 @@ import type {
   ScoreBoard,
   ThrowResult,
 } from '../../domain/game/types';
+import type { CompletedRoundRecord } from '../../domain/history/types';
 
 interface GameStoreState {
   status: GameStatus;
@@ -20,7 +21,9 @@ interface GameStoreState {
   currentThrowNumber: number;
   currentThrows: ThrowResult[];
   currentRoundResult: RoundResult | null;
+  completedRounds: CompletedRoundRecord[];
   winnerId: string | null;
+  gameStartedAt: number | null;
   statusMessage: string;
   errorMessage: string | null;
   cameraPermissionGranted: boolean;
@@ -41,6 +44,7 @@ interface GameStoreState {
     errorMessage?: string | null;
   }) => void;
   setRoundResult: (result: RoundResult) => void;
+  addCompletedRound: (round: CompletedRoundRecord) => void;
   setWinner: (winnerId: string | null, statusMessage: string) => void;
   setCameraPermissionGranted: (granted: boolean) => void;
   setCameraStatus: (status: Partial<CameraStatus>) => void;
@@ -69,7 +73,9 @@ const initialState = {
   currentThrowNumber: 0,
   currentThrows: [] as ThrowResult[],
   currentRoundResult: null as RoundResult | null,
+  completedRounds: [] as CompletedRoundRecord[],
   winnerId: null as string | null,
+  gameStartedAt: null as number | null,
   statusMessage: '选择模式并开始新游戏',
   errorMessage: null as string | null,
   cameraPermissionGranted: false,
@@ -103,7 +109,9 @@ export const useGameStore = create<GameStoreState>(set => ({
       currentThrowNumber: 0,
       currentThrows: [],
       currentRoundResult: null,
+      completedRounds: [],
       winnerId: null,
+      gameStartedAt: Date.now(),
       status: 'waitingForThrow',
       statusMessage: '准备开始第一轮',
       errorMessage: null,
@@ -136,6 +144,10 @@ export const useGameStore = create<GameStoreState>(set => ({
       errorMessage: null,
       statusMessage: '本轮结果已确认',
     }),
+  addCompletedRound: round =>
+    set(state => ({
+      completedRounds: [...state.completedRounds, round],
+    })),
   setWinner: (winnerId, statusMessage) =>
     set({
       winnerId,
