@@ -27,3 +27,31 @@ third_party/
 */caches/
 *.bin
 *.param
+before.jpg
+
+# Local third-party SDKs and developer secrets
+/app/src/main/cpp/opencv-sdk/
+/mobile/android/app/debug.keystore
+/mobile/metro-*.log
+*.log
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+
+# Local database artifacts
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Local repository-maintenance artifacts
+/Docs/GitRepositorySanitizationDesign.md
+/Docs/GitRepositorySanitizationPlan.md
+/scripts/git-history/
