@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { AppState, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Camera, useCameraDevice, useCameraFormat } from 'react-native-vision-camera';
@@ -10,6 +10,7 @@ import {
   getPreviewDiagnostics,
   prepareLiveCamera,
   redetectCurrentRound,
+  refreshCameraPermission,
   reloadDebugArtifacts,
   requestCameraPermission,
   resetLiveGameSession,
@@ -26,6 +27,7 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { SecondaryButton } from '../components/SecondaryButton';
 import { Scoreboard } from '../components/Scoreboard';
 import { ThrowEditor } from '../components/ThrowEditor';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { DART_MARKER_COLORS, DartBoard } from '../components/DartBoard';
 import { LiveSnapshot } from '../components/LiveSnapshot';
 import { colors } from '../theme/colors';
@@ -54,7 +56,11 @@ export const GameScreen = ({ navigation }: Props) => {
   const [previewZoomRatio, setPreviewZoomRatio] = useState(ZOOM_MIN);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [frameWidth, setFrameWidth] = useState(0);
+  const [leaveDialog, setLeaveDialog] = useState<'roundInProgress' | 'confirm' | null>(null);
+  // Set once an in-app re-request was denied too; the next tap opens system settings.
+  const [permissionDenied, setPermissionDenied] = useState(false);
   const allowLeaveRef = useRef(false);
+  const pendingLeaveRef = useRef<(() => void) | null>(null);
   const zoomTrackRef = useRef<View>(null);
   const latestZoomRef = useRef(ZOOM_MIN);
   const isFocused = useIsFocused();
@@ -117,6 +123,21 @@ export const GameScreen = ({ navigation }: Props) => {
         setRunningAction(null);
       });
   }, []);
+
+  // After being sent to system settings, pick up a newly granted permission on return.
+  useEffect(() => {
+    if (cameraPermissionGranted || !permissionDenied) {
+      return;
+    }
+    const subscription = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') {
+        refreshCameraPermission()
+          .then(granted => (granted ? prepareLiveCamera() : undefined))
+          .catch(() => undefined);
+      }
+    });
+    return () => subscription.remove();
+  }, [cameraPermissionGranted, permissionDenied]);
 
   useEffect(() => {
     if (!cameraPermissionGranted) {
@@ -230,6 +251,8 @@ export const GameScreen = ({ navigation }: Props) => {
 
   const persistZoomRatio = () => {
     updateLiveZoomRatio(latestZoomRef.current).catch(() => undefined);
+    // Remembered across games, since the phone mount usually stays put.
+    useSettingsStore.getState().setZoomRatio(latestZoomRef.current).catch(() => undefined);
   };
 
   const refreshZoomTrackMetrics = () => {
@@ -299,6 +322,20 @@ export const GameScreen = ({ navigation }: Props) => {
       });
   };
 
+  const retryCameraPermission = () => {
+    if (permissionDenied) {
+      Linking.openSettings().catch(() => undefined);
+      return;
+    }
+    runAction('permission', async () => {
+      if (await requestCameraPermission()) {
+        await prepareLiveCamera();
+      } else {
+        setPermissionDenied(true);
+      }
+    });
+  };
+
   const startRound = () => {
     setRunningAction('start');
     setHandoffInProgress(true);
@@ -349,13 +386,24 @@ export const GameScreen = ({ navigation }: Props) => {
 
   const confirmLeave = (leave: () => void) => {
     if (useGameStore.getState().status === 'roundInProgress') {
-      Alert.alert('正在识别', '请先点「结束本轮」，再退出对局。');
+      setLeaveDialog('roundInProgress');
       return;
     }
-    Alert.alert('退出对局', '未完成的对局不会保存。', [
-      { text: '取消', style: 'cancel' },
-      { text: '退出', style: 'destructive', onPress: () => leaveGame(leave) },
-    ]);
+    pendingLeaveRef.current = leave;
+    setLeaveDialog('confirm');
+  };
+
+  const closeLeaveDialog = () => {
+    pendingLeaveRef.current = null;
+    setLeaveDialog(null);
+  };
+
+  const confirmLeaveDialog = () => {
+    const leave = pendingLeaveRef.current;
+    closeLeaveDialog();
+    if (leave) {
+      leaveGame(leave);
+    }
   };
 
   const confirmExit = () => confirmLeave(goHome);
@@ -371,7 +419,6 @@ export const GameScreen = ({ navigation }: Props) => {
         confirmLeave(() => navigation.dispatch(event.data.action));
       }),
     // confirmLeave only reads fresh store state, so subscribing once is enough.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [navigation],
   );
 
@@ -459,6 +506,17 @@ export const GameScreen = ({ navigation }: Props) => {
             <Text style={styles.fallbackText}>
               {cameraPermissionGranted ? '未找到可用的后置相机' : '需要相机权限才能识别飞镖'}
             </Text>
+            {!cameraPermissionGranted && runningAction !== 'permission' ? (
+              <>
+                <PrimaryButton
+                  label={permissionDenied ? '打开系统设置' : '允许使用相机'}
+                  onPress={retryCameraPermission}
+                />
+                {permissionDenied ? (
+                  <Text style={styles.fallbackHint}>在系统设置的「权限」里允许相机，返回后自动生效</Text>
+                ) : null}
+              </>
+            ) : null}
           </View>
         )}
         {showBoard ? (
@@ -653,6 +711,25 @@ export const GameScreen = ({ navigation }: Props) => {
           setEditingIndex(null);
         }}
       />
+
+      <ConfirmDialog
+        visible={leaveDialog === 'roundInProgress'}
+        title="正在识别"
+        message="请先点「结束本轮」，再退出对局。"
+        confirmLabel="知道了"
+        onConfirm={closeLeaveDialog}
+        onCancel={closeLeaveDialog}
+      />
+      <ConfirmDialog
+        visible={leaveDialog === 'confirm'}
+        title="退出对局"
+        message="未完成的对局不会保存。"
+        confirmLabel="退出"
+        cancelLabel="取消"
+        danger
+        onConfirm={confirmLeaveDialog}
+        onCancel={closeLeaveDialog}
+      />
     </ScrollView>
   );
 };
@@ -806,11 +883,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: 20,
+    gap: 14,
   },
   fallbackText: {
     fontSize: 15,
     fontWeight: '700',
     color: '#F7F8FA',
+  },
+  fallbackHint: {
+    fontSize: 13,
+    color: '#D7DBE2',
+    textAlign: 'center',
   },
   turnBlock: {
     gap: 8,

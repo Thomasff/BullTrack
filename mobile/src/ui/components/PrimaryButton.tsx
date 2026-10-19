@@ -6,18 +6,21 @@ interface PrimaryButtonProps {
   label: string;
   onPress: () => void;
   disabled?: boolean;
+  danger?: boolean;
 }
 
 export const PrimaryButton = ({
   label,
   onPress,
   disabled = false,
+  danger = false,
 }: PrimaryButtonProps) => (
   <Pressable
     disabled={disabled}
     onPress={onPress}
     style={({ pressed }) => [
       styles.button,
+      danger && styles.danger,
       disabled && styles.disabled,
       pressed && !disabled && styles.pressed,
     ]}>
@@ -32,6 +35,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     borderRadius: 14,
     alignItems: 'center',
+  },
+  danger: {
+    backgroundColor: colors.danger,
   },
   pressed: {
     opacity: 0.9,

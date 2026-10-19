@@ -10,6 +10,7 @@ import {
 import { useGameStore } from '../stores/gameStore';
 import { useVisionDebugStore } from '../stores/visionDebugStore';
 import { useLiveFrameStore } from '../stores/liveFrameStore';
+import { useSettingsStore } from '../stores/settingsStore';
 import { createGameEngine, getGameEngine, resetGameEngine } from './gameRules';
 import { saveCompletedMatch } from './historyRepository';
 import { toFriendlyErrorText } from './nativeErrorText';
@@ -160,6 +161,13 @@ export const requestCameraPermission = async (): Promise<boolean> => {
   return isGranted;
 };
 
+// Re-reads the permission without prompting, e.g. after returning from system settings.
+export const refreshCameraPermission = async (): Promise<boolean> => {
+  const isGranted = (await Camera.getCameraPermissionStatus()) === 'granted';
+  useGameStore.getState().setCameraPermissionGranted(isGranted);
+  return isGranted;
+};
+
 export const startGameSession = (
   mode: GameType,
   playerNames: string[],
@@ -178,7 +186,7 @@ export const prepareLiveCamera = async () => {
   useGameStore.getState().setCameraStatus({
     isReady: false,
     isPreviewBound: false,
-    zoomRatio: 1,
+    zoomRatio: useSettingsStore.getState().zoomRatio,
     statusMessage: '预览由 VisionCamera 管理，等待预览初始化',
     lockPhase: 'IDLE',
     lockReason: null,

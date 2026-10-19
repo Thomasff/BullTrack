@@ -42,7 +42,12 @@ export const ThrowEditor = ({ visible, initialThrow, onCancel, onSave }: ThrowEd
   const currentSector = initialThrow ? getThrowSector(initialThrow) : -1;
 
   return (
-    <Modal transparent animationType="fade" visible={visible} onRequestClose={onCancel}>
+    <Modal
+      transparent
+      statusBarTranslucent
+      animationType="fade"
+      visible={visible}
+      onRequestClose={onCancel}>
       <Pressable style={styles.backdrop} onPress={onCancel}>
         <Pressable style={styles.sheet} onPress={() => undefined}>
           <Text style={styles.title}>修改这一镖</Text>

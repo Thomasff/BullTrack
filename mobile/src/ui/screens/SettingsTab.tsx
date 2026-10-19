@@ -1,28 +1,21 @@
-import React from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { colors } from '../theme/colors';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { useSettingsStore } from '../../application/stores/settingsStore';
 import { clearHistory } from '../../application/services/historyRepository';
 
 export const SettingsTab = () => {
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
   const setShowDebugInfo = useSettingsStore(state => state.setShowDebugInfo);
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const [clearResult, setClearResult] = useState<'done' | 'failed' | null>(null);
 
-  const confirmClearHistory = () => {
-    Alert.alert('清空历史记录', '所有比赛和玩家统计都会被删除，且无法恢复。', [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '清空',
-        style: 'destructive',
-        onPress: () => {
-          clearHistory()
-            .then(() => Alert.alert('已清空'))
-            .catch(error =>
-              Alert.alert('清空失败', error instanceof Error ? error.message : undefined),
-            );
-        },
-      },
-    ]);
+  const clearAllHistory = () => {
+    setConfirmingClear(false);
+    clearHistory()
+      .then(() => setClearResult('done'))
+      .catch(() => setClearResult('failed'));
   };
 
   return (
@@ -39,19 +32,41 @@ export const SettingsTab = () => {
               setShowDebugInfo(value).catch(() => undefined);
             }}
             trackColor={{ true: colors.accent, false: colors.border }}
+            thumbColor={colors.panel}
           />
         </View>
       </View>
 
       <View style={styles.card}>
         <Pressable
-          onPress={confirmClearHistory}
+          onPress={() => {
+            setClearResult(null);
+            setConfirmingClear(true);
+          }}
           style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
-          <Text style={[styles.label, styles.danger]}>清空历史记录</Text>
+          <View style={styles.rowText}>
+            <Text style={[styles.label, styles.danger]}>清空历史记录</Text>
+            {clearResult ? (
+              <Text style={[styles.description, clearResult === 'failed' && styles.danger]}>
+                {clearResult === 'done' ? '已清空' : '清空失败，请重试'}
+              </Text>
+            ) : null}
+          </View>
         </Pressable>
       </View>
 
       <Text style={styles.footer}>BullTrack · 飞镖自动计分</Text>
+
+      <ConfirmDialog
+        visible={confirmingClear}
+        title="清空历史记录"
+        message="所有比赛和玩家统计都会被删除，且无法恢复。"
+        confirmLabel="清空"
+        cancelLabel="取消"
+        danger
+        onConfirm={clearAllHistory}
+        onCancel={() => setConfirmingClear(false)}
+      />
     </ScrollView>
   );
 };
