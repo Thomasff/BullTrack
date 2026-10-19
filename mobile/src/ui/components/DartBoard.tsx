@@ -264,8 +264,15 @@ export const DartBoard = ({ size, throws, editable, onThrowChange }: DartBoardPr
           }}
         />
       ))}
-      {hovered ? (
-        <View style={styles.hoverBadge} pointerEvents="none">
+      {hovered && drag ? (
+        // Corner badge stays off the board numbers; it drops to the bottom
+        // corner while the finger is in the upper-right quarter so it is not covered.
+        <View
+          style={[
+            styles.hoverBadge,
+            drag.point.x > 0 && drag.point.y < 0 ? styles.hoverBadgeBottom : styles.hoverBadgeTop,
+          ]}
+          pointerEvents="none">
           <Text style={styles.hoverLabel}>
             {hovered.ring === 'miss' ? '脱靶' : hovered.label} · {hovered.score}
           </Text>
@@ -303,12 +310,17 @@ const styles = StyleSheet.create({
   },
   hoverBadge: {
     position: 'absolute',
-    top: 0,
-    alignSelf: 'center',
+    right: 0,
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 999,
     backgroundColor: 'rgba(12, 16, 24, 0.82)',
+  },
+  hoverBadgeTop: {
+    top: 0,
+  },
+  hoverBadgeBottom: {
+    bottom: 0,
   },
   hoverLabel: {
     color: '#F7F8FA',

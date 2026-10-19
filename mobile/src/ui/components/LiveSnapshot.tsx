@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
 import { useLiveFrameStore } from '../../application/stores/liveFrameStore';
 
@@ -11,6 +11,7 @@ export const LiveSnapshot = () => {
   const uri = useLiveFrameStore(state => state.uri);
   const [shown, setShown] = useState<string | null>(null);
   const pendingOpacity = useRef(new Animated.Value(0)).current;
+  const pendingStyle = useMemo(() => [styles.image, { opacity: pendingOpacity }], [pendingOpacity]);
 
   useEffect(() => {
     if (uri === null) {
@@ -32,7 +33,7 @@ export const LiveSnapshot = () => {
           <Animated.Image
             key={frameUri}
             source={{ uri: frameUri }}
-            style={[styles.image, { opacity: frameUri === pending ? pendingOpacity : 1 }]}
+            style={frameUri === pending ? pendingStyle : styles.image}
             resizeMode="cover"
             fadeDuration={0}
             onLoad={
