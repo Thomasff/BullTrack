@@ -27,6 +27,7 @@ import {
   startGameSession,
 } from '../src/application/services/liveRoundService';
 import { useGameStore } from '../src/application/stores/gameStore';
+import { useVisionDebugStore } from '../src/application/stores/visionDebugStore';
 
 const darts = [createThrow('single', 4), createThrow('double', 4), createThrow('miss')];
 
@@ -48,13 +49,14 @@ test('capture readiness follows starting -> capturing', () => {
 
 test('a failed live round clears stale darts and keeps the error visible', () => {
   emit('onRoundStateChanged', { roundId: 'r1', phase: 'showingResult', statusMessage: '', throws: darts, canRedetect: true });
-  emit('onNativeError', { message: 'boom' });
+  emit('onNativeError', { message: '首帧未检测到 board' });
   emit('onRoundStateChanged', { roundId: 'r1', phase: 'finished', statusMessage: '', throws: [] });
 
   const state = useGameStore.getState();
   expect(state.status).toBe('waitingForThrow');
   expect(state.currentThrows).toEqual([]);
-  expect(state.errorMessage).toContain('boom');
+  expect(state.errorMessage).toBe('没看到完整的靶盘，请把手机对准飞镖盘后重试');
+  expect(useVisionDebugStore.getState().lastNativeError).toBe('首帧未检测到 board');
 });
 
 test('a failed redetect keeps the round confirmable', () => {
@@ -64,5 +66,5 @@ test('a failed redetect keeps the round confirmable', () => {
   const state = useGameStore.getState();
   expect(state.status).toBe('showingResult');
   expect(state.currentThrows).toHaveLength(3);
-  expect(state.errorMessage).toContain('redetect failed');
+  expect(state.errorMessage).toBe('识别出错了，请重试');
 });

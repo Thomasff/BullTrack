@@ -4,6 +4,7 @@ import { useIsFocused } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Camera, useCameraDevice } from 'react-native-vision-camera';
 import {
+  abandonCurrentRound,
   confirmCurrentRound,
   ensureBullTrackSubscriptions,
   getPreviewDiagnostics,
@@ -25,6 +26,7 @@ import { PrimaryButton } from '../components/PrimaryButton';
 import { SecondaryButton } from '../components/SecondaryButton';
 import { Scoreboard } from '../components/Scoreboard';
 import { ThrowEditor } from '../components/ThrowEditor';
+import { DART_MARKER_COLORS, DartBoard } from '../components/DartBoard';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { isRealBullTrackNativeBridgeAvailable } from '../../native-bridge/bulltrack/bullTrackNative';
@@ -35,6 +37,7 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Game'>;
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 4;
 const ZOOM_SLIDER_HEIGHT = 220;
+const PREVIEW_HEIGHT = 320;
 const ZOOM_THUMB_SIZE = 26;
 
 export const GameScreen = ({ navigation }: Props) => {
@@ -49,6 +52,8 @@ export const GameScreen = ({ navigation }: Props) => {
   const [zoomTrackHeight, setZoomTrackHeight] = useState(ZOOM_SLIDER_HEIGHT);
   const [previewZoomRatio, setPreviewZoomRatio] = useState(ZOOM_MIN);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [frameWidth, setFrameWidth] = useState(0);
+  const allowLeaveRef = useRef(false);
   const zoomTrackRef = useRef<View>(null);
   const latestZoomRef = useRef(ZOOM_MIN);
   const isFocused = useIsFocused();
@@ -80,6 +85,7 @@ export const GameScreen = ({ navigation }: Props) => {
   const zoomTrackTopRef = useRef(0);
   const zoomDragOffsetRef = useRef(0);
   const artifactCount = useVisionDebugStore(state => state.artifacts.length);
+  const lastNativeError = useVisionDebugStore(state => state.lastNativeError);
 
   useEffect(() => {
     ensureBullTrackSubscriptions();
@@ -314,22 +320,63 @@ export const GameScreen = ({ navigation }: Props) => {
     );
   };
 
-  const exitGame = () => {
-    resetLiveGameSession();
+  const leaveGame = (leave: () => void) => {
+    allowLeaveRef.current = true;
+    abandonCurrentRound().finally(() => {
+      resetLiveGameSession();
+      leave();
+    });
+  };
+
+  const goHome = () =>
     navigation.reset({
       index: 0,
       routes: [{ name: 'Home' }],
     });
-  };
 
-  const confirmExit = () => {
+  const exitGame = () => leaveGame(goHome);
+
+  const confirmLeave = (leave: () => void) => {
+    if (useGameStore.getState().status === 'roundInProgress') {
+      Alert.alert('正在识别', '请先点「结束本轮」，再退出对局。');
+      return;
+    }
     Alert.alert('退出对局', '未完成的对局不会保存。', [
       { text: '取消', style: 'cancel' },
-      { text: '退出', style: 'destructive', onPress: exitGame },
+      { text: '退出', style: 'destructive', onPress: () => leaveGame(leave) },
     ]);
   };
 
+  const confirmExit = () => confirmLeave(goHome);
+
+  useEffect(
+    () =>
+      navigation.addListener('beforeRemove', event => {
+        const currentStatus = useGameStore.getState().status;
+        if (allowLeaveRef.current || currentStatus === 'gameOver' || currentStatus === 'idle') {
+          return;
+        }
+        event.preventDefault();
+        confirmLeave(() => navigation.dispatch(event.data.action));
+      }),
+    // confirmLeave only reads fresh store state, so subscribing once is enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [navigation],
+  );
+
   const canEditThrows = status === 'showingResult' && !isBusy;
+  const showBoard = status !== 'waitingForThrow';
+  const boardSize = Math.max(0, Math.min(frameWidth, PREVIEW_HEIGHT) - 12);
+  const boardBadge =
+    status === 'roundInProgress'
+      ? captureReady
+        ? '可以投镖了'
+        : '准备中…'
+      : status === 'showingResult'
+        ? '拖动标记可修正'
+        : status === 'gameOver'
+          ? '比赛结束'
+          : null;
   const turnHeadline =
     status === 'gameOver'
       ? `${winner?.name ?? '比赛'} 获胜`
@@ -363,7 +410,10 @@ export const GameScreen = ({ navigation }: Props) => {
         winnerId={winnerId}
       />
 
-      <View style={styles.previewFrame} collapsable={false}>
+      <View
+        style={styles.previewFrame}
+        collapsable={false}
+        onLayout={event => setFrameWidth(Math.round(event.nativeEvent.layout.width))}>
         {cameraPermissionGranted && device ? (
           <Camera
             key={`preview-${previewInstanceKey}`}
@@ -395,23 +445,26 @@ export const GameScreen = ({ navigation }: Props) => {
             </Text>
           </View>
         )}
-        {!shouldShowVisionPreview && cameraPermissionGranted && device ? (
-          <View style={styles.previewCover} pointerEvents="none">
-            <Text style={styles.coverTitle}>
-              {status === 'roundInProgress'
-                ? captureReady
-                  ? '可以投镖了'
-                  : '准备中…'
-                : status === 'gameOver'
-                  ? '比赛结束'
-                  : '本轮已结束'}
-            </Text>
-            {status === 'roundInProgress' ? (
-              <Text style={styles.coverHint}>识别期间暂停预览以省电</Text>
+        {showBoard ? (
+          <View style={styles.boardLayer}>
+            {boardSize > 0 ? (
+              <DartBoard
+                size={boardSize}
+                throws={currentThrows}
+                editable={canEditThrows}
+                onThrowChange={replaceThrow}
+              />
+            ) : null}
+            {boardBadge ? (
+              <View style={styles.boardBadge} pointerEvents="none">
+                <Text style={styles.boardBadgeLabel}>{boardBadge}</Text>
+              </View>
             ) : null}
           </View>
         ) : null}
-        <View style={styles.zoomOverlay} pointerEvents="box-none">
+        <View
+          style={[styles.zoomOverlay, showBoard && styles.hidden]}
+          pointerEvents={showBoard ? 'none' : 'box-none'}>
           <Text style={styles.zoomCurrentLabel}>{previewZoomRatio.toFixed(1)}x</Text>
           <View
             style={[
@@ -476,6 +529,14 @@ export const GameScreen = ({ navigation }: Props) => {
                   canEditThrows && item && styles.dartSlotEditable,
                   pressed && styles.dartSlotPressed,
                 ]}>
+                <View
+                  style={[
+                    styles.dartDot,
+                    { backgroundColor: DART_MARKER_COLORS[index] },
+                    !item && styles.dartDotEmpty,
+                  ]}>
+                  <Text style={styles.dartDotLabel}>{index + 1}</Text>
+                </View>
                 <Text style={styles.dartLabel}>{item ? formatThrowLabel(item) : '—'}</Text>
                 <Text style={styles.dartScore}>{item ? item.score : ''}</Text>
               </Pressable>
@@ -517,7 +578,10 @@ export const GameScreen = ({ navigation }: Props) => {
           />
         )}
         {status !== 'gameOver' ? (
-          <Pressable onPress={confirmExit} disabled={isBusy} style={styles.exitButton}>
+          <Pressable
+            onPress={confirmExit}
+            disabled={isBusy || status === 'roundInProgress'}
+            style={styles.exitButton}>
             <Text style={styles.exitLabel}>退出对局</Text>
           </Pressable>
         ) : null}
@@ -527,6 +591,9 @@ export const GameScreen = ({ navigation }: Props) => {
         <Panel>
           <Text style={styles.panelTitle}>调试信息</Text>
           <Text style={styles.debugText}>{statusMessage}</Text>
+          {lastNativeError ? (
+            <Text style={styles.debugText}>原生错误：{lastNativeError}</Text>
+          ) : null}
           <Text style={styles.debugText}>{cameraStatus.statusMessage}</Text>
           <Text style={styles.debugText}>
             {status} · Zoom {cameraStatus.zoomRatio.toFixed(2)}x · {cameraStatus.lockPhase} ·{' '}
@@ -603,17 +670,34 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     overflow: 'hidden',
     backgroundColor: '#000',
-    height: 320,
+    height: PREVIEW_HEIGHT,
   },
   preview: {
     width: '100%',
-    height: 320,
+    height: PREVIEW_HEIGHT,
   },
-  previewCover: {
+  boardLayer: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    backgroundColor: '#15120F',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  boardBadge: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(242, 168, 61, 0.92)',
+  },
+  boardBadgeLabel: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#1E1A16',
+  },
+  hidden: {
+    opacity: 0,
   },
   zoomOverlay: {
     position: 'absolute',
@@ -700,16 +784,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#F7F8FA',
   },
-  coverTitle: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: '#F7F8FA',
-  },
-  coverHint: {
-    marginTop: 6,
-    fontSize: 13,
-    color: '#D7DBE2',
-  },
   turnBlock: {
     gap: 8,
   },
@@ -755,7 +829,22 @@ const styles = StyleSheet.create({
   },
   dartSlotEditable: {
     borderColor: colors.accent,
-    borderStyle: 'dashed',
+    borderWidth: 1.5,
+  },
+  dartDot: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dartDotEmpty: {
+    opacity: 0.35,
+  },
+  dartDotLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#1E1A16',
   },
   dartSlotPressed: {
     backgroundColor: colors.panelStrong,

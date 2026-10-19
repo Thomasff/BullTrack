@@ -163,6 +163,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: colors.textPrimary,
+    // Android adds extra top padding to text, which pushes digits below center.
+    includeFontPadding: false,
+    textAlignVertical: 'center',
   },
   specialRow: {
     flexDirection: 'row',

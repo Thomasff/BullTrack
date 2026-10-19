@@ -11,6 +11,7 @@ import { useGameStore } from '../stores/gameStore';
 import { useVisionDebugStore } from '../stores/visionDebugStore';
 import { createGameEngine, getGameEngine, resetGameEngine } from './gameRules';
 import { saveCompletedMatch } from './historyRepository';
+import { toFriendlyErrorText } from './nativeErrorText';
 import type {
   CameraStatus,
   GameType,
@@ -124,8 +125,9 @@ export const ensureBullTrackSubscriptions = () => {
         message: string;
       };
       // Status transitions come from onRoundStateChanged; only surface the error here.
+      useVisionDebugStore.getState().setLastNativeError(event.message);
       useGameStore.getState().setRoundState({
-        errorMessage: `识别出错：${event.message}`,
+        errorMessage: toFriendlyErrorText(event.message),
       });
     }),
   ];
@@ -278,4 +280,12 @@ export const resetLiveGameSession = () => {
   resetGameEngine();
   useVisionDebugStore.getState().clearArtifacts();
   useGameStore.getState().resetGame();
+};
+
+// Releases a native round that is waiting for confirmation, so a later game can start a new one.
+export const abandonCurrentRound = async () => {
+  const { roundId, status } = useGameStore.getState();
+  if (roundId && status === 'showingResult') {
+    await bullTrackNativeBridge.finishRound({ roundId }).catch(() => undefined);
+  }
 };
