@@ -68,3 +68,18 @@ test('a failed redetect keeps the round confirmable', () => {
   expect(state.currentThrows).toHaveLength(3);
   expect(state.errorMessage).toBe('识别出错了，请重试');
 });
+
+test('live frames show only while a round is running', () => {
+  const { useLiveFrameStore } = require('../src/application/stores/liveFrameStore');
+  emit('onRoundStateChanged', { roundId: 'r1', phase: 'starting', statusMessage: '' });
+  emit('onRoundStateChanged', { roundId: 'r1', phase: 'capturing', statusMessage: '' });
+  emit('onLiveFrame', { roundId: 'r1', uri: 'file:///frame_1.jpg' });
+  expect(useLiveFrameStore.getState().uri).toBe('file:///frame_1.jpg');
+
+  emit('onRoundStateChanged', { roundId: 'r1', phase: 'showingResult', statusMessage: '', throws: darts, canRedetect: true });
+  emit('onLiveFrame', { roundId: 'r1', uri: 'file:///frame_2.jpg' });
+  expect(useLiveFrameStore.getState().uri).toBe('file:///frame_1.jpg');
+
+  emit('onRoundStateChanged', { roundId: 'r2', phase: 'starting', statusMessage: '' });
+  expect(useLiveFrameStore.getState().uri).toBeNull();
+});

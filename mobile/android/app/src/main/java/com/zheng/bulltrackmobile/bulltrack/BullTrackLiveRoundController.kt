@@ -1,5 +1,6 @@
 package com.zheng.bulltrackmobile.bulltrack
 
+import android.graphics.Bitmap
 import android.os.Build
 import android.os.SystemClock
 import androidx.camera.view.PreviewView
@@ -28,6 +29,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import java.io.File
+import java.io.FileOutputStream
 import java.util.UUID
 import java.util.concurrent.Executors
 import kotlin.math.hypot
@@ -46,6 +49,10 @@ class BullTrackLiveRoundController(
     private var roundJob: Job? = null
     private var currentSession: RoundSession? = null
     private var zoomRatio: Float = 1f
+    private val liveFrameDir: File by lazy {
+        File(reactContext.cacheDir, "BullTrackLive").apply { mkdirs() }
+    }
+    private var liveFrameCounter = 0L
 
     @Volatile
     private var detectorInitialized = false
@@ -148,7 +155,7 @@ class BullTrackLiveRoundController(
                 runContinuousRound(roundId)
             }.onFailure { error ->
                 cleanupCurrentSession(destroySession = true)
-                endRoundCaptureOnMain()
+                releaseRoundOwnershipOnMain()
                 emitNativeError("BT_LIVE_ROUND_FAILED", error.message ?: "Unknown native round error")
                 emitRoundState(
                     phase = "finished",
@@ -284,6 +291,8 @@ class BullTrackLiveRoundController(
 
         bindNativeCaptureOnly()
         val firstFrame = cameraManager.captureFirstFrameForRound()
+        clearLiveFrames()
+        publishLiveFrame(roundId, firstFrame.bitmap)
         val sessionId = withTimeout(NATIVE_CALL_TIMEOUT_MS) {
             withContext(Dispatchers.Default) {
                 detector.createSession()
@@ -333,6 +342,7 @@ class BullTrackLiveRoundController(
                 break
             }
             val frame = cameraManager.captureNextFrameForRound()
+            publishLiveFrame(roundId, frame.bitmap)
             lastCaptureTimestampNs = frame.timestampNs
             val decision = processNextFrame(frameIndex = frameIndex, frameBitmap = frame.bitmap)
             captureNextImmediately = decision.captureNextImmediately
@@ -349,18 +359,12 @@ class BullTrackLiveRoundController(
     }
 
     // CameraX unbind/bind calls must run on the main thread; the round loop runs on bridgeDispatcher.
+    // Always unbind (never endRoundCapture, which rebinds use cases) so the camera closes
+    // and VisionCamera can take it back.
     private suspend fun releaseRoundOwnershipOnMain() {
         runCatching {
             withContext(Dispatchers.Main.immediate) {
                 cameraManager.releaseRoundOwnership()
-            }
-        }
-    }
-
-    private suspend fun endRoundCaptureOnMain() {
-        runCatching {
-            withContext(Dispatchers.Main.immediate) {
-                cameraManager.endRoundCapture()
             }
         }
     }
@@ -481,6 +485,39 @@ class BullTrackLiveRoundController(
             throws = finalThrows,
             canRedetect = true,
         )
+    }
+
+    // Small JPEG of a frame the round already captured, so RN can show a near-live view
+    // without a second camera stream. Files rotate; only the latest few are kept.
+    private fun publishLiveFrame(roundId: String, frame: Bitmap) {
+        val scaled = runCatching {
+            val height = frame.height * LIVE_FRAME_WIDTH / frame.width
+            Bitmap.createScaledBitmap(frame, LIVE_FRAME_WIDTH, height, true)
+        }.getOrNull() ?: return
+        val index = liveFrameCounter++
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                val file = File(liveFrameDir, "frame_$index.jpg")
+                FileOutputStream(file).use { stream ->
+                    scaled.compress(Bitmap.CompressFormat.JPEG, LIVE_FRAME_QUALITY, stream)
+                }
+                File(liveFrameDir, "frame_${index - LIVE_FRAMES_KEPT}.jpg").delete()
+                emit(
+                    EVENT_LIVE_FRAME,
+                    Arguments.createMap().apply {
+                        putString("roundId", roundId)
+                        putString("uri", "file://${file.absolutePath}")
+                    },
+                )
+            }
+            scaled.recycle()
+        }
+    }
+
+    private fun clearLiveFrames() {
+        runCatching {
+            liveFrameDir.listFiles()?.forEach { it.delete() }
+        }
     }
 
     private fun cleanupCurrentSession(destroySession: Boolean) {
@@ -756,6 +793,10 @@ class BullTrackLiveRoundController(
         const val EVENT_THROWS_UPDATED = "onThrowsUpdated"
         const val EVENT_CAMERA_STATUS_CHANGED = "onCameraStatusChanged"
         const val EVENT_NATIVE_ERROR = "onNativeError"
+        const val EVENT_LIVE_FRAME = "onLiveFrame"
+        private const val LIVE_FRAME_WIDTH = 360
+        private const val LIVE_FRAME_QUALITY = 70
+        private const val LIVE_FRAMES_KEPT = 3
         private const val MAX_DARTS = 3
         private const val NATIVE_CALL_TIMEOUT_MS = 12_000L
         private const val CAMERA_READY_TIMEOUT_MS = 4_000L

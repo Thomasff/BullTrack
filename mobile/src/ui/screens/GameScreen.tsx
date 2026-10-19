@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { Camera, useCameraDevice } from 'react-native-vision-camera';
+import { Camera, useCameraDevice, useCameraFormat } from 'react-native-vision-camera';
 import {
   abandonCurrentRound,
   confirmCurrentRound,
@@ -27,6 +27,7 @@ import { SecondaryButton } from '../components/SecondaryButton';
 import { Scoreboard } from '../components/Scoreboard';
 import { ThrowEditor } from '../components/ThrowEditor';
 import { DART_MARKER_COLORS, DartBoard } from '../components/DartBoard';
+import { LiveSnapshot } from '../components/LiveSnapshot';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { isRealBullTrackNativeBridgeAvailable } from '../../native-bridge/bulltrack/bullTrackNative';
@@ -58,6 +59,16 @@ export const GameScreen = ({ navigation }: Props) => {
   const latestZoomRef = useRef(ZOOM_MIN);
   const isFocused = useIsFocused();
   const device = useCameraDevice('back');
+  // Native round capture is a 16:9 frame center-cropped to 9:16 portrait. Using the
+  // same 16:9 output here keeps everything visible in the preview inside the analyzed
+  // frame (the default would be the max-resolution, usually 4:3, format), and a
+  // 1080p preview is cheaper than the sensor maximum. With video disabled, VisionCamera
+  // sizes the preview from the format's photo size, so filter on the photo fields.
+  const format = useCameraFormat(device, [
+    { photoAspectRatio: 16 / 9 },
+    { photoResolution: { width: 1920, height: 1080 } },
+    { fps: 30 },
+  ]);
 
   const {
     status,
@@ -366,7 +377,12 @@ export const GameScreen = ({ navigation }: Props) => {
 
   const canEditThrows = status === 'showingResult' && !isBusy;
   const showBoard = status !== 'waitingForThrow';
-  const boardSize = Math.max(0, Math.min(frameWidth, PREVIEW_HEIGHT) - 12);
+  // During a round the frame is split: near-live snapshot left, board right.
+  const splitView = status === 'roundInProgress';
+  const boardSize = Math.max(
+    0,
+    Math.min(splitView ? frameWidth / 2 : frameWidth, PREVIEW_HEIGHT) - 12,
+  );
   const boardBadge =
     status === 'roundInProgress'
       ? captureReady
@@ -421,7 +437,7 @@ export const GameScreen = ({ navigation }: Props) => {
             device={device}
             isActive={shouldShowVisionPreview}
             zoom={previewZoomRatio}
-            photo
+            format={format}
             resizeMode="cover"
             androidPreviewViewType="texture-view"
             onInitialized={() => {
@@ -446,15 +462,18 @@ export const GameScreen = ({ navigation }: Props) => {
           </View>
         )}
         {showBoard ? (
-          <View style={styles.boardLayer}>
-            {boardSize > 0 ? (
-              <DartBoard
-                size={boardSize}
-                throws={currentThrows}
-                editable={canEditThrows}
-                onThrowChange={replaceThrow}
-              />
-            ) : null}
+          <View style={[styles.boardLayer, splitView && styles.boardLayerSplit]}>
+            {splitView ? <LiveSnapshot /> : null}
+            <View style={splitView ? styles.boardHalf : null}>
+              {boardSize > 0 ? (
+                <DartBoard
+                  size={boardSize}
+                  throws={currentThrows}
+                  editable={canEditThrows}
+                  onThrowChange={replaceThrow}
+                />
+              ) : null}
+            </View>
             {boardBadge ? (
               <View style={styles.boardBadge} pointerEvents="none">
                 <Text style={styles.boardBadgeLabel}>{boardBadge}</Text>
@@ -679,6 +698,15 @@ const styles = StyleSheet.create({
   boardLayer: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#15120F',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  boardLayerSplit: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  boardHalf: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },

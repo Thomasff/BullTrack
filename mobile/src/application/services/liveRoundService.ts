@@ -9,6 +9,7 @@ import {
 } from '../../native-bridge/bulltrack/bullTrackNative';
 import { useGameStore } from '../stores/gameStore';
 import { useVisionDebugStore } from '../stores/visionDebugStore';
+import { useLiveFrameStore } from '../stores/liveFrameStore';
 import { createGameEngine, getGameEngine, resetGameEngine } from './gameRules';
 import { saveCompletedMatch } from './historyRepository';
 import { toFriendlyErrorText } from './nativeErrorText';
@@ -74,6 +75,9 @@ export const ensureBullTrackSubscriptions = () => {
         canRedetect?: boolean;
       };
 
+      if (event.phase === 'starting') {
+        useLiveFrameStore.getState().clear();
+      }
       if (event.phase === 'starting' || event.phase === 'capturing') {
         useGameStore.getState().setRoundState({
           roundId: event.roundId ?? null,
@@ -119,6 +123,13 @@ export const ensureBullTrackSubscriptions = () => {
         canRedetect: event.canRedetect,
         errorMessage: null,
       });
+    }),
+    eventEmitter.addListener('onLiveFrame', payload => {
+      const event = payload as { roundId: string; uri: string };
+      // Frames encoded after the round ended are stale; ignore them.
+      if (useGameStore.getState().status === 'roundInProgress') {
+        useLiveFrameStore.getState().setFrame(event.roundId, event.uri);
+      }
     }),
     eventEmitter.addListener('onNativeError', payload => {
       const event = payload as {
