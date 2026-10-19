@@ -148,7 +148,7 @@ class BullTrackLiveRoundController(
                 runContinuousRound(roundId)
             }.onFailure { error ->
                 cleanupCurrentSession(destroySession = true)
-                runCatching { cameraManager.endRoundCapture() }
+                endRoundCaptureOnMain()
                 emitNativeError("BT_LIVE_ROUND_FAILED", error.message ?: "Unknown native round error")
                 emitRoundState(
                     phase = "finished",
@@ -229,7 +229,7 @@ class BullTrackLiveRoundController(
             emitNativeError("BT_REDETECT_FAILED", error.message ?: "Unknown redetect error")
             accepted("Redetect failed but session kept.")
         }.also {
-            runCatching { cameraManager.releaseRoundOwnership() }
+            releaseRoundOwnershipOnMain()
         }
     }
 
@@ -240,7 +240,7 @@ class BullTrackLiveRoundController(
         }
         currentSession = null
         detector.destroySession(session.nativeSessionId)
-        runCatching { cameraManager.releaseRoundOwnership() }
+        releaseRoundOwnershipOnMain()
         val artifacts = artifactStore.listArtifacts(roundId)
         emitRoundState(
             phase = "finished",
@@ -344,7 +344,25 @@ class BullTrackLiveRoundController(
 
         finalizeRound(manualStop = stopRequested)
         stopRequested = false
-        cameraManager.releaseRoundOwnership()
+        // The result is already emitted; a camera release failure must not fail the round.
+        releaseRoundOwnershipOnMain()
+    }
+
+    // CameraX unbind/bind calls must run on the main thread; the round loop runs on bridgeDispatcher.
+    private suspend fun releaseRoundOwnershipOnMain() {
+        runCatching {
+            withContext(Dispatchers.Main.immediate) {
+                cameraManager.releaseRoundOwnership()
+            }
+        }
+    }
+
+    private suspend fun endRoundCaptureOnMain() {
+        runCatching {
+            withContext(Dispatchers.Main.immediate) {
+                cameraManager.endRoundCapture()
+            }
+        }
     }
 
     private suspend fun bindNativeCaptureOnly() {
@@ -714,7 +732,11 @@ class BullTrackLiveRoundController(
             Build.MODEL.contains("Android SDK built for") ||
             Build.MANUFACTURER.contains("Genymotion") ||
             Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic") ||
-            "google_sdk" == Build.PRODUCT
+            "google_sdk" == Build.PRODUCT ||
+            // Newer Google emulator images (e.g. sdk_gphone64_x86_64 on ranchu).
+            Build.PRODUCT.startsWith("sdk_gphone") ||
+            Build.HARDWARE == "ranchu" ||
+            Build.HARDWARE == "goldfish"
     }
 
     private data class FrameLoopDecision(

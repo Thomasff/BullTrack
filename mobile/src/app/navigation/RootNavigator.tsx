@@ -5,6 +5,7 @@ import { ModeSelectScreen } from '../../ui/screens/ModeSelectScreen';
 import { PlayerSetupScreen } from '../../ui/screens/PlayerSetupScreen';
 import { GameScreen } from '../../ui/screens/GameScreen';
 import { DebugScreen } from '../../ui/screens/DebugScreen';
+import { MatchDetailScreen } from '../../ui/screens/MatchDetailScreen';
 import { colors } from '../../ui/theme/colors';
 import type { RootStackParamList } from './types';
 import { getModeCategory, getModeOption } from '../../domain/game/modeCatalog';
@@ -26,7 +27,7 @@ export const RootNavigator = () => (
     <Stack.Screen
       name="Home"
       component={HomeScreen}
-      options={{ title: 'BullTrack Mobile', headerShown: false }}
+      options={{ title: 'BullTrack', headerShown: false }}
     />
     <Stack.Screen
       name="ModeSelect"
@@ -44,5 +45,10 @@ export const RootNavigator = () => (
     />
     <Stack.Screen name="Game" component={GameScreen} options={{ title: '对局' }} />
     <Stack.Screen name="Debug" component={DebugScreen} options={{ title: '调试图' }} />
+    <Stack.Screen
+      name="MatchDetail"
+      component={MatchDetailScreen}
+      options={{ title: '比赛详情' }}
+    />
   </Stack.Navigator>
 );

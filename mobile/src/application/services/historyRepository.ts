@@ -5,15 +5,20 @@ import SQLite, {
 } from 'react-native-sqlite-storage';
 import type {
   CompletedMatchInput,
+  MatchDetail,
+  MatchDetailRound,
+  PlayerStats,
   RecentMatchSummary,
 } from '../../domain/history/types';
 import type { ThrowResult } from '../../domain/game/types';
+import { getDefaultPlayerName } from '../../domain/game/players';
 
 SQLite.DEBUG(false);
 SQLite.enablePromise(true);
 
 const DATABASE_NAME = 'bulltrack_history.db';
-const SCHEMA_VERSION = 1;
+// All schema statements are idempotent, so older versions simply re-run them.
+const SCHEMA_VERSION = 2;
 
 let databasePromise: Promise<SQLiteDatabase> | null = null;
 
@@ -96,6 +101,14 @@ const initializeDatabase = async (database: SQLiteDatabase) => {
       FOREIGN KEY(match_id) REFERENCES matches(id),
       FOREIGN KEY(player_id) REFERENCES players(id),
       UNIQUE(match_id, player_id, round_index, dart_index)
+    )`,
+  );
+  // Schema v2: small key-value store for app settings.
+  await execute(
+    database,
+    `CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
     )`,
   );
   await execute(
@@ -217,7 +230,7 @@ export const saveCompletedMatch = async (input: CompletedMatchInput) => {
             return;
           }
 
-          const name = player.name.trim() || `Player ${index + 1}`;
+          const name = player.name.trim() || getDefaultPlayerName(index);
           executeTransactionSql(
             transaction,
             'INSERT OR IGNORE INTO players (name, created_at) VALUES (?, ?)',
@@ -257,6 +270,26 @@ export const saveCompletedMatch = async (input: CompletedMatchInput) => {
   });
 };
 
+// Returns known player names, most recently played first.
+export const listKnownPlayerNames = async (limit = 30): Promise<string[]> => {
+  const database = await getDatabase();
+  const result = await execute(
+    database,
+    `SELECT players.name, MAX(matches.created_at) AS last_played_at
+    FROM players
+    LEFT JOIN match_players ON match_players.player_id = players.id
+    LEFT JOIN matches ON matches.id = match_players.match_id
+    GROUP BY players.id
+    ORDER BY last_played_at DESC, players.created_at DESC
+    LIMIT ?`,
+    [limit],
+  );
+
+  return Array.from({ length: result.rows.length }, (_, index) =>
+    String(result.rows.item(index).name),
+  );
+};
+
 export const listRecentMatches = async (limit = 20): Promise<RecentMatchSummary[]> => {
   const database = await getDatabase();
   const result = await execute(
@@ -288,4 +321,145 @@ export const listRecentMatches = async (limit = 20): Promise<RecentMatchSummary[
       winnerName: row.winner_name === null ? null : String(row.winner_name),
     };
   });
+};
+
+const X01_MODES = ['game301', 'game501', 'game701'];
+
+const toNullableNumber = (value: unknown) =>
+  value === null || value === undefined ? null : Number(value);
+
+export const getMatchDetail = async (matchId: number): Promise<MatchDetail | null> => {
+  const database = await getDatabase();
+  const matchResult = await execute(
+    database,
+    'SELECT id, mode, mode_label, created_at FROM matches WHERE id = ?',
+    [matchId],
+  );
+  if (matchResult.rows.length === 0) {
+    return null;
+  }
+  const match = matchResult.rows.item(0);
+
+  const playerResult = await execute(
+    database,
+    `SELECT match_players.player_id, match_players.seat_index, match_players.is_winner, players.name
+    FROM match_players
+    JOIN players ON players.id = match_players.player_id
+    WHERE match_players.match_id = ?
+    ORDER BY match_players.seat_index`,
+    [matchId],
+  );
+  const throwResult = await execute(
+    database,
+    `SELECT player_id, round_index, dart_index, score, multiplier, target
+    FROM throws
+    WHERE match_id = ?
+    ORDER BY round_index, player_id, dart_index`,
+    [matchId],
+  );
+
+  const rounds: MatchDetailRound[] = [];
+  for (let index = 0; index < throwResult.rows.length; index += 1) {
+    const row = throwResult.rows.item(index);
+    const playerId = Number(row.player_id);
+    const roundIndex = Number(row.round_index);
+    let round = rounds[rounds.length - 1];
+    if (!round || round.playerId !== playerId || round.roundIndex !== roundIndex) {
+      round = { playerId, roundIndex, throws: [] };
+      rounds.push(round);
+    }
+    round.throws.push({
+      dartIndex: Number(row.dart_index),
+      score: Number(row.score ?? 0),
+      multiplier: Number(row.multiplier ?? 0),
+      target: String(row.target ?? 'miss'),
+    });
+  }
+
+  return {
+    id: Number(match.id),
+    mode: String(match.mode),
+    modeLabel: match.mode_label === null ? null : String(match.mode_label),
+    createdAt: Number(match.created_at),
+    players: Array.from({ length: playerResult.rows.length }, (_, index) => {
+      const row = playerResult.rows.item(index);
+      return {
+        playerId: Number(row.player_id),
+        name: String(row.name),
+        seatIndex: Number(row.seat_index),
+        isWinner: Number(row.is_winner) === 1,
+      };
+    }),
+    rounds,
+  };
+};
+
+export const listPlayerStats = async (): Promise<PlayerStats[]> => {
+  const database = await getDatabase();
+  const x01Placeholders = X01_MODES.map(() => '?').join(', ');
+  const result = await execute(
+    database,
+    `WITH round_totals AS (
+      SELECT throws.player_id, matches.mode, SUM(throws.score) AS total
+      FROM throws
+      JOIN matches ON matches.id = throws.match_id
+      GROUP BY throws.player_id, throws.match_id, throws.round_index
+    ),
+    round_stats AS (
+      SELECT
+        player_id,
+        AVG(CASE WHEN mode IN (${x01Placeholders}) THEN total END) AS x01_average,
+        MAX(total) AS best_round
+      FROM round_totals
+      GROUP BY player_id
+    ),
+    match_stats AS (
+      SELECT player_id, COUNT(*) AS matches_played, SUM(is_winner) AS wins
+      FROM match_players
+      GROUP BY player_id
+    )
+    SELECT players.id, players.name, match_stats.matches_played, match_stats.wins,
+      round_stats.x01_average, round_stats.best_round
+    FROM players
+    JOIN match_stats ON match_stats.player_id = players.id
+    LEFT JOIN round_stats ON round_stats.player_id = players.id
+    ORDER BY match_stats.matches_played DESC, players.name`,
+    X01_MODES,
+  );
+
+  return Array.from({ length: result.rows.length }, (_, index) => {
+    const row = result.rows.item(index);
+    return {
+      playerId: Number(row.id),
+      name: String(row.name),
+      matchesPlayed: Number(row.matches_played),
+      wins: Number(row.wins ?? 0),
+      x01Average: toNullableNumber(row.x01_average),
+      bestRound: toNullableNumber(row.best_round),
+    };
+  });
+};
+
+export const getSetting = async (key: string): Promise<string | null> => {
+  const database = await getDatabase();
+  const result = await execute(database, 'SELECT value FROM settings WHERE key = ?', [key]);
+  return result.rows.length > 0 ? String(result.rows.item(0).value) : null;
+};
+
+export const setSetting = async (key: string, value: string) => {
+  const database = await getDatabase();
+  await execute(
+    database,
+    'INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)',
+    [key, value],
+  );
+};
+
+// Deletes all saved matches and players; settings are kept.
+export const clearHistory = async () => {
+  const database = await getDatabase();
+  await execute(database, 'DELETE FROM throws');
+  await execute(database, 'DELETE FROM match_players');
+  await execute(database, 'DELETE FROM matches');
+  await execute(database, 'DELETE FROM players');
 };

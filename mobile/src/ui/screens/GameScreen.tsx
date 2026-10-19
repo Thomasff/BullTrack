@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Camera, useCameraDevice } from 'react-native-vision-camera';
@@ -12,35 +12,25 @@ import {
   reloadDebugArtifacts,
   requestCameraPermission,
   resetLiveGameSession,
+  startGameSession,
   startLiveRound,
   stopLiveRound,
   updateLiveZoomRatio,
 } from '../../application/services/liveRoundService';
 import { useGameStore } from '../../application/stores/gameStore';
 import { useVisionDebugStore } from '../../application/stores/visionDebugStore';
+import { useSettingsStore } from '../../application/stores/settingsStore';
 import { Panel } from '../components/Panel';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SecondaryButton } from '../components/SecondaryButton';
-import { SectionHeader } from '../components/SectionHeader';
-import { StatusCard } from '../components/StatusCard';
+import { Scoreboard } from '../components/Scoreboard';
+import { ThrowEditor } from '../components/ThrowEditor';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { isRealBullTrackNativeBridgeAvailable } from '../../native-bridge/bulltrack/bullTrackNative';
+import type { ThrowResult } from '../../domain/game/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Game'>;
-
-const toneForStatus = (status: string) => {
-  switch (status) {
-    case 'gameOver':
-      return 'success' as const;
-    case 'showingResult':
-      return 'warning' as const;
-    case 'roundInProgress':
-      return 'info' as const;
-    default:
-      return 'default' as const;
-  }
-};
 
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 4;
@@ -58,6 +48,7 @@ export const GameScreen = ({ navigation }: Props) => {
   const [previewInstanceKey, setPreviewInstanceKey] = useState(0);
   const [zoomTrackHeight, setZoomTrackHeight] = useState(ZOOM_SLIDER_HEIGHT);
   const [previewZoomRatio, setPreviewZoomRatio] = useState(ZOOM_MIN);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const zoomTrackRef = useRef<View>(null);
   const latestZoomRef = useRef(ZOOM_MIN);
   const isFocused = useIsFocused();
@@ -73,7 +64,6 @@ export const GameScreen = ({ navigation }: Props) => {
     currentRoundNumber,
     currentThrowNumber,
     currentThrows,
-    currentRoundResult,
     winnerId,
     statusMessage,
     errorMessage,
@@ -81,7 +71,10 @@ export const GameScreen = ({ navigation }: Props) => {
     cameraStatus,
     canRedetect,
     setCameraStatus,
+    replaceThrow,
+    captureReady,
   } = useGameStore();
+  const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
   const previousStatusRef = useRef(status);
   const isZoomDraggingRef = useRef(false);
   const zoomTrackTopRef = useRef(0);
@@ -277,293 +270,318 @@ export const GameScreen = ({ navigation }: Props) => {
     return (1 - normalized) * usableHeight;
   }, [previewZoomRatio, zoomRange.max, zoomRange.min, zoomTrackHeight]);
 
+  const runAction = (
+    action: NonNullable<typeof runningAction>,
+    task: () => Promise<unknown>,
+  ) => {
+    setRunningAction(action);
+    task()
+      .catch(() => undefined)
+      .finally(() => {
+        setRunningAction(null);
+      });
+  };
+
+  const startRound = () => {
+    setRunningAction('start');
+    setHandoffInProgress(true);
+    Promise.resolve()
+      .then(() => updateLiveZoomRatio(latestZoomRef.current))
+      .then(
+        () =>
+          new Promise<void>(resolve => {
+            setTimeout(() => resolve(), 180);
+          }),
+      )
+      .then(() => startLiveRound())
+      .finally(() => {
+        setRunningAction(null);
+      })
+      .catch(() => {
+        setHandoffInProgress(false);
+      });
+  };
+
+  const playAgain = () => {
+    if (!selectedMode) {
+      return;
+    }
+    resetLiveGameSession();
+    startGameSession(
+      selectedMode,
+      players.map(player => player.name),
+      selectedModeLabel ?? selectedMode,
+    );
+  };
+
+  const exitGame = () => {
+    resetLiveGameSession();
+    navigation.reset({
+      index: 0,
+      routes: [{ name: 'Home' }],
+    });
+  };
+
+  const confirmExit = () => {
+    Alert.alert('退出对局', '未完成的对局不会保存。', [
+      { text: '取消', style: 'cancel' },
+      { text: '退出', style: 'destructive', onPress: exitGame },
+    ]);
+  };
+
+  const canEditThrows = status === 'showingResult' && !isBusy;
+  const turnHeadline =
+    status === 'gameOver'
+      ? `${winner?.name ?? '比赛'} 获胜`
+      : status === 'roundInProgress'
+        ? captureReady
+          ? `请投镖 · 已识别 ${currentThrowNumber} 镖`
+          : '准备中，先别投镖'
+        : status === 'showingResult'
+          ? '确认本轮结果'
+          : `轮到 ${currentPlayer?.name ?? '玩家'} · 第 ${currentRoundNumber} 轮`;
+  const turnHint =
+    status === 'showingResult'
+      ? '识别不对可以点飞镖修改'
+      : status === 'roundInProgress'
+        ? captureReady
+          ? '投满 3 镖自动结束，也可以手动结束'
+          : '正在拍摄空靶作为对照'
+        : status === 'waitingForThrow'
+          ? '拔下飞镖后开始本轮'
+          : null;
+
   return (
     <ScrollView
       contentContainerStyle={styles.screenContent}
       style={styles.screen}
       scrollEnabled={scrollEnabled}>
-      <View style={styles.headerBlock}>
-        <SectionHeader
-          eyebrow="Game"
-          title="RN live round flow"
-          description="第三阶段由 RN 管理整局流程；实时预览改由 VisionCamera 提供，识别继续复用原生 JNI / C++ / YOLO。"
-        />
-      </View>
+      <Scoreboard
+        gameType={selectedMode}
+        players={scoreBoard?.players ?? players}
+        currentPlayerId={currentPlayerId}
+        winnerId={winnerId}
+      />
 
-      <View style={styles.previewSection}>
-        <Text style={styles.panelTitle}>Camera Preview</Text>
-        <View style={styles.previewFrame} collapsable={false}>
-          {cameraPermissionGranted && device ? (
-            <Camera
-              key={`preview-${previewInstanceKey}`}
-              style={styles.preview}
-              device={device}
-              isActive={shouldShowVisionPreview}
-              zoom={previewZoomRatio}
-              photo
-              resizeMode="cover"
-              androidPreviewViewType="texture-view"
-              onInitialized={() => {
-                setPreviewReady(true);
-              }}
-              onError={error => {
-                setPreviewReady(false);
-                setCameraStatus({
-                  isReady: false,
-                  isPreviewBound: false,
-                  statusMessage: `相机预览失败: ${error.message}`,
-                  lockPhase: 'FALLBACK',
-                  lockReason: error.code,
-                });
-              }}
-            />
-          ) : (
-            <View style={styles.previewFallback}>
-              <Text style={styles.body}>
-                {cameraPermissionGranted ? '未找到可用的后置相机。' : '需要相机权限才能显示实时预览。'}
-              </Text>
-            </View>
-          )}
-          <View style={styles.zoomOverlay} pointerEvents="box-none">
-            <Text style={styles.zoomCurrentLabel}>{previewZoomRatio.toFixed(2)}x</Text>
-            <View
-              style={[
-                styles.zoomTrackShell,
-                !canAdjustZoom && styles.zoomTrackShellDisabled,
-              ]}
-              onStartShouldSetResponderCapture={() => canAdjustZoom}
-              onMoveShouldSetResponderCapture={() => canAdjustZoom}
-              onStartShouldSetResponder={() => canAdjustZoom}
-              onMoveShouldSetResponder={() => canAdjustZoom}
-              onResponderTerminationRequest={() => false}
-              onResponderGrant={event => {
-                beginZoomDrag(event.nativeEvent.locationY, event.nativeEvent.pageY);
-              }}
-              onResponderMove={event => {
-                moveZoomDrag(event.nativeEvent.pageY);
-              }}
-              onResponderRelease={endZoomDrag}
-              onResponderTerminate={endZoomDrag}
-            >
-              <Text style={styles.zoomScaleLabel}>{zoomRange.max.toFixed(1)}x</Text>
-              <View
-                ref={zoomTrackRef}
-                style={styles.zoomTrack}
-                onLayout={event => {
-                  const nextHeight = Math.round(event.nativeEvent.layout.height);
-                  setZoomTrackHeight(current => (current === nextHeight ? current : nextHeight));
-                  refreshZoomTrackMetrics();
-                }}>
-                <View style={styles.zoomTrackFill} />
-                <View
-                  style={[
-                    styles.zoomThumb,
-                    {
-                      top: thumbOffset,
-                    },
-                  ]}
-                />
-              </View>
-              <Text style={styles.zoomScaleLabel}>{zoomRange.min.toFixed(1)}x</Text>
-            </View>
-          </View>
-        </View>
-        <Text style={styles.body}>{cameraStatus.statusMessage}</Text>
-        <Text style={styles.body}>
-          Zoom {cameraStatus.zoomRatio.toFixed(2)}x · {cameraStatus.lockPhase} · Preview{' '}
-          {shouldShowVisionPreview ? 'VISION' : cameraStatus.isPreviewBound ? 'NATIVE' : 'UNBOUND'}
-        </Text>
-      </View>
-
-      <View style={styles.content}>
-        <View style={styles.statusGrid}>
-          <StatusCard label="Mode" value={selectedModeLabel ?? selectedMode ?? 'unselected'} />
-          <StatusCard label="State" value={status} tone={toneForStatus(status)} />
-          <StatusCard
-            label="Round / Throw"
-            value={`${currentRoundNumber} / ${currentThrowNumber}`}
-          />
-          <StatusCard label="Artifacts" value={`${artifactCount}`} />
-        </View>
-
-        <Panel>
-          <Text style={styles.panelTitle}>Current turn</Text>
-          <View style={styles.rowBetween}>
-            <Text style={styles.bodyStrong}>Current player</Text>
-            <Text style={styles.body}>{currentPlayer?.name ?? '未开始'}</Text>
-          </View>
-          <View style={styles.rowBetween}>
-            <Text style={styles.bodyStrong}>Bridge</Text>
-            <Text style={styles.body}>
-              {isRealBullTrackNativeBridgeAvailable ? 'Native continuous live round' : 'Mock fallback'}
-            </Text>
-          </View>
-          <Text style={styles.statusMessage}>{statusMessage}</Text>
-          {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
-        </Panel>
-
-        <Panel>
-          <Text style={styles.panelTitle}>Scoreboard</Text>
-          {(scoreBoard?.players ?? players).map(player => (
-            <View key={player.id} style={styles.scoreRow}>
-              <View style={styles.scoreIdentity}>
-                <Text style={styles.bodyStrong}>{player.name}</Text>
-                <Text style={styles.body}>
-                  {player.roundScores.length > 0
-                    ? `本局轮分: ${player.roundScores.join(' / ')}`
-                    : '尚无已确认轮次'}
-                </Text>
-              </View>
-              <Text style={styles.scoreValue}>{player.score}</Text>
-            </View>
-          ))}
-        </Panel>
-
-        <Panel>
-          <View style={styles.rowBetween}>
-            <Text style={styles.panelTitle}>Current round result</Text>
-            <Text style={styles.totalScore}>{totalScore}</Text>
-          </View>
-          {currentThrows.length === 0 ? (
-            <Text style={styles.body}>本轮还没有识别结果。</Text>
-          ) : (
-            currentThrows.map(item => (
-              <View key={item.id} style={styles.throwRow}>
-                <View>
-                  <Text style={styles.bodyStrong}>{item.label}</Text>
-                  <Text style={styles.body}>
-                    ({item.pointNorm.x.toFixed(2)}, {item.pointNorm.y.toFixed(2)})
-                  </Text>
-                </View>
-                <Text style={styles.throwScore}>{item.score}</Text>
-              </View>
-            ))
-          )}
-          {currentRoundResult ? (
-            <Text style={styles.body}>
-              已确认：{currentRoundResult.playerName} 本轮得到 {currentRoundResult.roundScore} 分
-            </Text>
-          ) : null}
-          {winner ? <Text style={styles.winnerText}>Winner: {winner.name}</Text> : null}
-        </Panel>
-
-        <View style={styles.actionGroup}>
-          <PrimaryButton
-            label={runningAction === 'start' ? 'Starting Round...' : '开始本轮'}
-            onPress={() => {
-              setRunningAction('start');
-              setHandoffInProgress(true);
-              Promise.resolve()
-                .then(() => updateLiveZoomRatio(latestZoomRef.current))
-                .then(
-                  () =>
-                    new Promise<void>(resolve => {
-                      setTimeout(() => resolve(), 180);
-                    }),
-                )
-                .then(() => startLiveRound())
-                .finally(() => {
-                  setRunningAction(null);
-                })
-                .catch(() => {
-                  setHandoffInProgress(false);
-                });
+      <View style={styles.previewFrame} collapsable={false}>
+        {cameraPermissionGranted && device ? (
+          <Camera
+            key={`preview-${previewInstanceKey}`}
+            style={styles.preview}
+            device={device}
+            isActive={shouldShowVisionPreview}
+            zoom={previewZoomRatio}
+            photo
+            resizeMode="cover"
+            androidPreviewViewType="texture-view"
+            onInitialized={() => {
+              setPreviewReady(true);
             }}
-            disabled={
-              isBusy ||
-              !cameraPermissionGranted ||
-              !device ||
-              !previewReady ||
-              status === 'roundInProgress' ||
-              status === 'gameOver'
-            }
-          />
-          <SecondaryButton
-            label={runningAction === 'stop' ? 'Stopping...' : '结束本轮'}
-            onPress={() => {
-              setRunningAction('stop');
-              stopLiveRound()
-                .finally(() => {
-                  setRunningAction(null);
-                })
-                .catch(() => undefined);
-            }}
-            disabled={isBusy || status !== 'roundInProgress'}
-          />
-          <SecondaryButton
-            label={runningAction === 'redetect' ? 'Redetecting...' : '重新识别'}
-            onPress={() => {
-              setRunningAction('redetect');
-              redetectCurrentRound()
-                .finally(() => {
-                  setRunningAction(null);
-                })
-                .catch(() => undefined);
-            }}
-            disabled={isBusy || !canRedetect || !device || !previewReady}
-          />
-          <SecondaryButton
-            label={runningAction === 'confirm' ? 'Confirming...' : '确认本轮结果'}
-            onPress={() => {
-              setRunningAction('confirm');
-              confirmCurrentRound()
-                .finally(() => {
-                  setRunningAction(null);
-                })
-                .catch(() => undefined);
-            }}
-            disabled={isBusy || status !== 'showingResult' || currentThrows.length === 0}
-          />
-          <SecondaryButton
-            label={runningAction === 'reload' ? 'Reloading...' : '刷新调试图'}
-            onPress={() => {
-              setRunningAction('reload');
-              reloadDebugArtifacts()
-                .finally(() => {
-                  setRunningAction(null);
-                })
-                .catch(() => undefined);
-            }}
-            disabled={isBusy}
-          />
-          <SecondaryButton
-            label="查看调试图"
-            onPress={() => navigation.navigate('Debug')}
-            disabled={isBusy}
-          />
-          <SecondaryButton
-            label="重新开始整局"
-            onPress={() => {
-              resetLiveGameSession();
-              navigation.reset({
-                index: 0,
-                routes: [{ name: 'Home' }],
+            onError={error => {
+              setPreviewReady(false);
+              setCameraStatus({
+                isReady: false,
+                isPreviewBound: false,
+                statusMessage: `相机预览失败: ${error.message}`,
+                lockPhase: 'FALLBACK',
+                lockReason: error.code,
               });
             }}
+          />
+        ) : (
+          <View style={styles.previewFallback}>
+            <Text style={styles.fallbackText}>
+              {cameraPermissionGranted ? '未找到可用的后置相机' : '需要相机权限才能识别飞镖'}
+            </Text>
+          </View>
+        )}
+        {!shouldShowVisionPreview && cameraPermissionGranted && device ? (
+          <View style={styles.previewCover} pointerEvents="none">
+            <Text style={styles.coverTitle}>
+              {status === 'roundInProgress'
+                ? captureReady
+                  ? '可以投镖了'
+                  : '准备中…'
+                : status === 'gameOver'
+                  ? '比赛结束'
+                  : '本轮已结束'}
+            </Text>
+            {status === 'roundInProgress' ? (
+              <Text style={styles.coverHint}>识别期间暂停预览以省电</Text>
+            ) : null}
+          </View>
+        ) : null}
+        <View style={styles.zoomOverlay} pointerEvents="box-none">
+          <Text style={styles.zoomCurrentLabel}>{previewZoomRatio.toFixed(1)}x</Text>
+          <View
+            style={[
+              styles.zoomTrackShell,
+              !canAdjustZoom && styles.zoomTrackShellDisabled,
+            ]}
+            onStartShouldSetResponderCapture={() => canAdjustZoom}
+            onMoveShouldSetResponderCapture={() => canAdjustZoom}
+            onStartShouldSetResponder={() => canAdjustZoom}
+            onMoveShouldSetResponder={() => canAdjustZoom}
+            onResponderTerminationRequest={() => false}
+            onResponderGrant={event => {
+              beginZoomDrag(event.nativeEvent.locationY, event.nativeEvent.pageY);
+            }}
+            onResponderMove={event => {
+              moveZoomDrag(event.nativeEvent.pageY);
+            }}
+            onResponderRelease={endZoomDrag}
+            onResponderTerminate={endZoomDrag}
+          >
+            <Text style={styles.zoomScaleLabel}>{zoomRange.max.toFixed(1)}x</Text>
+            <View
+              ref={zoomTrackRef}
+              style={styles.zoomTrack}
+              onLayout={event => {
+                const nextHeight = Math.round(event.nativeEvent.layout.height);
+                setZoomTrackHeight(current => (current === nextHeight ? current : nextHeight));
+                refreshZoomTrackMetrics();
+              }}>
+              <View style={styles.zoomTrackFill} />
+              <View
+                style={[
+                  styles.zoomThumb,
+                  {
+                    top: thumbOffset,
+                  },
+                ]}
+              />
+            </View>
+            <Text style={styles.zoomScaleLabel}>{zoomRange.min.toFixed(1)}x</Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.turnBlock}>
+        <View style={styles.rowBetween}>
+          <Text style={styles.turnHeadline}>{turnHeadline}</Text>
+          <Text style={styles.totalScore}>{totalScore}</Text>
+        </View>
+        {turnHint ? <Text style={styles.hint}>{turnHint}</Text> : null}
+        {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+        <View style={styles.dartRow}>
+          {[0, 1, 2].map(index => {
+            const item = currentThrows[index];
+            return (
+              <Pressable
+                key={index}
+                disabled={!canEditThrows || !item}
+                onPress={() => setEditingIndex(index)}
+                style={({ pressed }) => [
+                  styles.dartSlot,
+                  canEditThrows && item && styles.dartSlotEditable,
+                  pressed && styles.dartSlotPressed,
+                ]}>
+                <Text style={styles.dartLabel}>{item ? formatThrowLabel(item) : '—'}</Text>
+                <Text style={styles.dartScore}>{item ? item.score : ''}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </View>
+
+      <View style={styles.actionGroup}>
+        {status === 'gameOver' ? (
+          <>
+            <PrimaryButton label="再来一局" onPress={playAgain} />
+            <SecondaryButton label="返回主页" onPress={exitGame} />
+          </>
+        ) : status === 'roundInProgress' ? (
+          <PrimaryButton
+            label={runningAction === 'stop' ? '正在结束…' : '结束本轮'}
+            onPress={() => runAction('stop', stopLiveRound)}
             disabled={isBusy}
           />
-        </View>
-
-        <Panel>
-          <Text style={styles.panelTitle}>Live diagnostics</Text>
-          <Text style={styles.body}>
-            Preview host: VisionCamera · Device {device?.name ?? 'missing'} ·{' '}
-            {shouldShowVisionPreview
-              ? previewReady
-                ? 'ACTIVE'
-                : 'PENDING'
-              : status === 'roundInProgress'
-                ? 'NATIVE ROUND CAPTURE'
-                : previewReady
-                  ? 'STANDBY'
-                  : 'PENDING'}
-          </Text>
-          <Text style={styles.body}>Legacy preview diagnostics: {previewDiagnosticsText}</Text>
-          {cameraStatus.lockReason ? <Text style={styles.body}>{cameraStatus.lockReason}</Text> : null}
-        </Panel>
+        ) : status === 'showingResult' ? (
+          <>
+            <PrimaryButton
+              label={runningAction === 'confirm' ? '正在确认…' : '确认'}
+              onPress={() => runAction('confirm', confirmCurrentRound)}
+              disabled={isBusy || currentThrows.length === 0}
+            />
+            <SecondaryButton
+              label={runningAction === 'redetect' ? '正在重新识别…' : '重新识别'}
+              onPress={() => runAction('redetect', redetectCurrentRound)}
+              disabled={isBusy || !canRedetect || !device}
+            />
+          </>
+        ) : (
+          <PrimaryButton
+            label={runningAction === 'start' ? '正在启动…' : '开始本轮'}
+            onPress={startRound}
+            disabled={isBusy || !cameraPermissionGranted || !device || !previewReady}
+          />
+        )}
+        {status !== 'gameOver' ? (
+          <Pressable onPress={confirmExit} disabled={isBusy} style={styles.exitButton}>
+            <Text style={styles.exitLabel}>退出对局</Text>
+          </Pressable>
+        ) : null}
       </View>
+
+      {showDebugInfo ? (
+        <Panel>
+          <Text style={styles.panelTitle}>调试信息</Text>
+          <Text style={styles.debugText}>{statusMessage}</Text>
+          <Text style={styles.debugText}>{cameraStatus.statusMessage}</Text>
+          <Text style={styles.debugText}>
+            {status} · Zoom {cameraStatus.zoomRatio.toFixed(2)}x · {cameraStatus.lockPhase} ·{' '}
+            {isRealBullTrackNativeBridgeAvailable ? 'native' : 'mock'} · 调试图 {artifactCount}
+          </Text>
+          {currentThrows.map(item => (
+            <Text key={item.id} style={styles.debugText}>
+              {item.label} ({item.pointNorm.x.toFixed(2)}, {item.pointNorm.y.toFixed(2)})
+            </Text>
+          ))}
+          <Text style={styles.debugText}>{previewDiagnosticsText}</Text>
+          {cameraStatus.lockReason ? (
+            <Text style={styles.debugText}>{cameraStatus.lockReason}</Text>
+          ) : null}
+          <View style={styles.inlineActions}>
+            <SecondaryButton
+              label="刷新调试图"
+              onPress={() => runAction('reload', reloadDebugArtifacts)}
+              disabled={isBusy}
+            />
+            <SecondaryButton
+              label="查看调试图"
+              onPress={() => navigation.navigate('Debug')}
+              disabled={isBusy}
+            />
+          </View>
+        </Panel>
+      ) : null}
+
+      <ThrowEditor
+        visible={editingIndex !== null}
+        initialThrow={editingIndex !== null ? currentThrows[editingIndex] ?? null : null}
+        onCancel={() => setEditingIndex(null)}
+        onSave={throwResult => {
+          if (editingIndex !== null) {
+            replaceThrow(editingIndex, throwResult);
+          }
+          setEditingIndex(null);
+        }}
+      />
     </ScrollView>
   );
+};
+
+const formatThrowLabel = (throwResult: ThrowResult) => {
+  switch (throwResult.ring) {
+    case 'innerBull':
+      return '内牛';
+    case 'outerBull':
+      return '外牛';
+    case 'miss':
+      return '脱靶';
+    default:
+      return throwResult.label.startsWith('S') ? throwResult.label.slice(1) : throwResult.label;
+  }
 };
 
 const styles = StyleSheet.create({
@@ -572,42 +590,30 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   screenContent: {
+    padding: 16,
     paddingBottom: 36,
-  },
-  headerBlock: {
-    paddingTop: 24,
-    paddingHorizontal: 24,
-  },
-  previewSection: {
-    paddingHorizontal: 24,
-    paddingTop: 12,
-    gap: 10,
-  },
-  content: {
-    padding: 24,
-    gap: 20,
-  },
-  statusGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
+    gap: 14,
   },
   panelTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
     color: colors.textPrimary,
   },
   previewFrame: {
     borderRadius: 18,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.border,
     backgroundColor: '#000',
-    minHeight: 280,
+    height: 320,
   },
   preview: {
     width: '100%',
     height: 320,
+  },
+  previewCover: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   zoomOverlay: {
     position: 'absolute',
@@ -684,10 +690,28 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   previewFallback: {
-    minHeight: 280,
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 20,
+  },
+  fallbackText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#F7F8FA',
+  },
+  coverTitle: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: '#F7F8FA',
+  },
+  coverHint: {
+    marginTop: 6,
+    fontSize: 13,
+    color: '#D7DBE2',
+  },
+  turnBlock: {
+    gap: 8,
   },
   rowBetween: {
     flexDirection: 'row',
@@ -695,69 +719,74 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 12,
   },
-  body: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: colors.textSecondary,
-  },
-  bodyStrong: {
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '700',
+  turnHeadline: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '800',
     color: colors.textPrimary,
   },
-  statusMessage: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: colors.info,
+  totalScore: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: colors.accent,
+  },
+  hint: {
+    fontSize: 13,
+    color: colors.textSecondary,
   },
   errorText: {
     fontSize: 14,
     lineHeight: 20,
     color: colors.danger,
   },
-  scoreRow: {
+  dartRow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: 12,
+    gap: 8,
   },
-  scoreIdentity: {
+  dartSlot: {
     flex: 1,
-    gap: 4,
-  },
-  scoreValue: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: colors.textPrimary,
-  },
-  totalScore: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: colors.accent,
-  },
-  throwRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: colors.panel,
+    borderWidth: 1,
+    borderColor: colors.border,
     alignItems: 'center',
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: 12,
+    gap: 2,
   },
-  throwScore: {
-    fontSize: 22,
+  dartSlotEditable: {
+    borderColor: colors.accent,
+    borderStyle: 'dashed',
+  },
+  dartSlotPressed: {
+    backgroundColor: colors.panelStrong,
+  },
+  dartLabel: {
+    fontSize: 20,
     fontWeight: '800',
     color: colors.textPrimary,
   },
-  winnerText: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: colors.success,
+  dartScore: {
+    fontSize: 13,
+    color: colors.textSecondary,
   },
   actionGroup: {
-    gap: 12,
+    gap: 10,
+  },
+  exitButton: {
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  exitLabel: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  debugText: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: colors.textSecondary,
+  },
+  inlineActions: {
+    flexDirection: 'row',
+    gap: 10,
   },
 });

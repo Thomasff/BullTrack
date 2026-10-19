@@ -6,4 +6,5 @@ export type RootStackParamList = {
   PlayerSetup: { modeOptionId: ModeOptionId };
   Game: undefined;
   Debug: undefined;
+  MatchDetail: { matchId: number };
 };

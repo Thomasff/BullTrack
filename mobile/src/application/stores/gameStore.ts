@@ -9,6 +9,7 @@ import type {
   ThrowResult,
 } from '../../domain/game/types';
 import type { CompletedRoundRecord } from '../../domain/history/types';
+import { getDefaultPlayerName } from '../../domain/game/players';
 
 interface GameStoreState {
   status: GameStatus;
@@ -30,6 +31,9 @@ interface GameStoreState {
   cameraStatus: CameraStatus;
   roundId: string | null;
   canRedetect: boolean;
+  throwsEdited: boolean;
+  // True once native has taken the empty-board first frame and darts may be thrown.
+  captureReady: boolean;
   selectMode: (mode: GameType, label: string) => void;
   configurePlayers: (playerNames: string[]) => void;
   setCurrentPlayer: (playerId: string | null) => void;
@@ -42,8 +46,10 @@ interface GameStoreState {
     currentThrowNumber?: number;
     canRedetect?: boolean;
     errorMessage?: string | null;
+    captureReady?: boolean;
   }) => void;
   setRoundResult: (result: RoundResult) => void;
+  replaceThrow: (index: number, throwResult: ThrowResult) => void;
   addCompletedRound: (round: CompletedRoundRecord) => void;
   setWinner: (winnerId: string | null, statusMessage: string) => void;
   setCameraPermissionGranted: (granted: boolean) => void;
@@ -82,6 +88,8 @@ const initialState = {
   cameraStatus: initialCameraStatus,
   roundId: null as string | null,
   canRedetect: false,
+  throwsEdited: false,
+  captureReady: false,
 };
 
 export const useGameStore = create<GameStoreState>(set => ({
@@ -97,7 +105,7 @@ export const useGameStore = create<GameStoreState>(set => ({
   configurePlayers: playerNames => {
     const players = playerNames.map((name, index) => ({
       id: `player-${index + 1}`,
-      name: name.trim() || `Player ${index + 1}`,
+      name: name.trim() || getDefaultPlayerName(index),
       score: 0,
       roundScores: [],
     }));
@@ -126,9 +134,11 @@ export const useGameStore = create<GameStoreState>(set => ({
       status: input.status ?? state.status,
       statusMessage: input.statusMessage ?? state.statusMessage,
       currentThrows: input.currentThrows ?? state.currentThrows,
+      throwsEdited: input.currentThrows ? false : state.throwsEdited,
       currentThrowNumber:
         input.currentThrowNumber ?? input.currentThrows?.length ?? state.currentThrowNumber,
       canRedetect: input.canRedetect ?? state.canRedetect,
+      captureReady: input.captureReady ?? state.captureReady,
       currentRoundResult:
         input.status === 'roundInProgress' ? null : state.currentRoundResult,
       errorMessage:
@@ -143,7 +153,15 @@ export const useGameStore = create<GameStoreState>(set => ({
       canRedetect: false,
       errorMessage: null,
       statusMessage: '本轮结果已确认',
+      throwsEdited: false,
     }),
+  replaceThrow: (index, throwResult) =>
+    set(state => ({
+      currentThrows: state.currentThrows.map((item, i) =>
+        i === index ? throwResult : item,
+      ),
+      throwsEdited: true,
+    })),
   addCompletedRound: round =>
     set(state => ({
       completedRounds: [...state.completedRounds, round],
@@ -184,6 +202,7 @@ export const useGameStore = create<GameStoreState>(set => ({
       currentThrowNumber: 0,
       currentRoundResult: null,
       canRedetect: false,
+      throwsEdited: false,
       errorMessage: null,
       status: 'waitingForThrow',
       statusMessage: '准备开始下一轮',

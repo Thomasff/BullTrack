@@ -48,7 +48,7 @@ const applyRoundResult = (throws: ThrowResult[]) => {
         ? `${scoreBoard.players.find(player => player.id === winnerId)?.name ?? 'Player'} 获胜`
         : '比赛结束',
     );
-    return;
+    return { result, isGameOver, winnerId };
   }
 
   useGameStore.getState().setCurrentPlayer(nextPlayerId);
@@ -81,6 +81,7 @@ export const ensureBullTrackSubscriptions = () => {
           currentThrows: event.throws ?? [],
           canRedetect: false,
           errorMessage: null,
+          captureReady: event.phase === 'capturing',
         });
       } else if (event.phase === 'showingResult') {
         useGameStore.getState().setRoundState({
@@ -92,12 +93,13 @@ export const ensureBullTrackSubscriptions = () => {
           errorMessage: null,
         });
       } else {
+        // Keep any error from onNativeError visible; drop throws of a failed round.
         useGameStore.getState().setRoundState({
           roundId: event.roundId ?? null,
           status: 'waitingForThrow',
           statusMessage: event.statusMessage,
+          currentThrows: event.throws ?? [],
           canRedetect: false,
-          errorMessage: null,
         });
       }
     }),
@@ -121,11 +123,9 @@ export const ensureBullTrackSubscriptions = () => {
       const event = payload as {
         message: string;
       };
+      // Status transitions come from onRoundStateChanged; only surface the error here.
       useGameStore.getState().setRoundState({
-        status: 'waitingForThrow',
-        statusMessage: 'Native round failed',
-        errorMessage: event.message,
-        canRedetect: false,
+        errorMessage: `识别出错：${event.message}`,
       });
     }),
   ];
@@ -155,9 +155,9 @@ export const startGameSession = (
   useGameStore.getState().selectMode(mode, modeLabel);
   useGameStore.getState().configurePlayers(playerNames);
   const players = useGameStore.getState().players;
-  createGameEngine(mode, players);
-  useGameStore.getState().setCurrentPlayer(players[0]?.id ?? null);
-  useGameStore.getState().setScoreBoard({ players });
+  const engine = createGameEngine(mode, players);
+  useGameStore.getState().setCurrentPlayer(engine.getCurrentPlayerId());
+  useGameStore.getState().setScoreBoard(engine.getScoreBoard());
 };
 
 export const prepareLiveCamera = async () => {
@@ -209,12 +209,14 @@ export const confirmCurrentRound = async () => {
     throw new Error('No round result to confirm.');
   }
   const roundIndex = state.currentRoundNumber;
+  // Manual corrections made in the UI take precedence over native detection.
+  const editedThrows = state.throwsEdited ? state.currentThrows : null;
 
   const finishResult = await bullTrackNativeBridge.finishRound({
     roundId: state.roundId,
   });
   useVisionDebugStore.getState().setArtifacts(finishResult.debugArtifacts);
-  const appliedRound = applyRoundResult(finishResult.throws);
+  const appliedRound = applyRoundResult(editedThrows ?? finishResult.throws);
   if (!appliedRound) {
     return;
   }

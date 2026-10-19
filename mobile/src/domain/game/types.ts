@@ -1,4 +1,11 @@
-export type GameType = 'highScore' | 'game301' | 'game501' | 'cricket';
+export type GameType =
+  | 'highScore'
+  | 'darts99'
+  | 'aroundTheClock'
+  | 'game301'
+  | 'game501'
+  | 'game701'
+  | 'cricket';
 
 export type GameStatus =
   | 'idle'

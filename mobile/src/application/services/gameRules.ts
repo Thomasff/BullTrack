@@ -5,6 +5,7 @@ import type {
   ScoreBoard,
   ThrowResult,
 } from '../../domain/game/types';
+import { BOARD_SECTORS, getThrowSector } from '../../domain/game/throws';
 
 interface GameEngine {
   readonly type: GameType;
@@ -24,15 +25,29 @@ const clonePlayers = (players: PlayerSummary[]): PlayerSummary[] =>
     marks: player.marks ? { ...player.marks } : undefined,
   }));
 
+export const HIGH_SCORE_ROUNDS = 10;
+export const DARTS_99_ROUNDS = 33;
+export const DARTS_99_TARGET = 20;
+
+// Fixed-round game where the highest total wins; darts99 only counts hits on its target.
 class HighScoreEngine implements GameEngine {
-  readonly type = 'highScore' as const;
+  readonly type: 'highScore' | 'darts99';
   private readonly players: PlayerSummary[];
   private currentPlayerIndex = 0;
   private completedRounds = 0;
-  private readonly totalRounds = 10;
+  private readonly totalRounds: number;
 
-  constructor(players: PlayerSummary[]) {
+  constructor(type: 'highScore' | 'darts99', players: PlayerSummary[]) {
+    this.type = type;
+    this.totalRounds = type === 'darts99' ? DARTS_99_ROUNDS : HIGH_SCORE_ROUNDS;
     this.players = clonePlayers(players);
+  }
+
+  private scoreThrow(throwResult: ThrowResult) {
+    if (this.type === 'darts99' && getThrowSector(throwResult) !== DARTS_99_TARGET) {
+      return 0;
+    }
+    return throwResult.score;
   }
 
   getCurrentPlayerId() {
@@ -40,14 +55,12 @@ class HighScoreEngine implements GameEngine {
   }
 
   getScoreBoard() {
-    return {
-      players: [...this.players].sort((left, right) => right.score - left.score),
-    };
+    return { players: clonePlayers(this.players) };
   }
 
   applyRound(throws: ThrowResult[]): RoundResult {
     const player = this.players[this.currentPlayerIndex];
-    const roundScore = throws.reduce((sum, item) => sum + item.score, 0);
+    const roundScore = throws.reduce((sum, item) => sum + this.scoreThrow(item), 0);
     player.score += roundScore;
     player.roundScores = [...player.roundScores, roundScore];
 
@@ -89,6 +102,12 @@ class HighScoreEngine implements GameEngine {
   }
 }
 
+const x01StartingScores = {
+  game301: 301,
+  game501: 501,
+  game701: 701,
+};
+
 class X01Engine implements GameEngine {
   readonly type: GameType;
   private readonly players: PlayerSummary[];
@@ -96,13 +115,13 @@ class X01Engine implements GameEngine {
   private winnerId: string | null = null;
   private readonly startingScore: number;
 
-  constructor(type: 'game301' | 'game501', players: PlayerSummary[]) {
+  constructor(type: keyof typeof x01StartingScores, players: PlayerSummary[]) {
     this.type = type;
+    this.startingScore = x01StartingScores[type];
     this.players = clonePlayers(players).map(player => ({
       ...player,
-      score: type === 'game301' ? 301 : 501,
+      score: this.startingScore,
     }));
-    this.startingScore = type === 'game301' ? 301 : 501;
   }
 
   getCurrentPlayerId() {
@@ -222,7 +241,7 @@ class CricketEngine implements GameEngine {
         extraMarks > 0 &&
         this.players
           .filter(candidate => candidate.id !== player.id)
-          .every(candidate => (candidate.marks?.[sector] ?? 0) >= 3)
+          .some(candidate => (candidate.marks?.[sector] ?? 0) < 3)
       ) {
         roundScore += Number(sector) * extraMarks;
       }
@@ -278,15 +297,97 @@ class CricketEngine implements GameEngine {
   }
 }
 
+// Targets 1-20 in order, then bull; any ring of the current target advances one step.
+export const AROUND_THE_CLOCK_TARGETS = [...BOARD_SECTORS, 25];
+
+export const getAroundTheClockTarget = (progress: number) =>
+  AROUND_THE_CLOCK_TARGETS[progress] ?? null;
+
+class AroundTheClockEngine implements GameEngine {
+  readonly type = 'aroundTheClock' as const;
+  private readonly players: PlayerSummary[];
+  private currentPlayerIndex = 0;
+  private winnerId: string | null = null;
+
+  constructor(players: PlayerSummary[]) {
+    this.players = clonePlayers(players).map(player => ({ ...player, score: 0 }));
+  }
+
+  getCurrentPlayerId() {
+    return this.players[this.currentPlayerIndex].id;
+  }
+
+  getScoreBoard() {
+    return { players: clonePlayers(this.players) };
+  }
+
+  applyRound(throws: ThrowResult[]): RoundResult {
+    const player = this.players[this.currentPlayerIndex];
+    let hits = 0;
+
+    throws.forEach(throwResult => {
+      const target = getAroundTheClockTarget(player.score);
+      if (target !== null && getThrowSector(throwResult) === target) {
+        player.score += 1;
+        hits += 1;
+      }
+    });
+
+    player.roundScores = [...player.roundScores, hits];
+    if (player.score >= AROUND_THE_CLOCK_TARGETS.length) {
+      this.winnerId = player.id;
+    } else {
+      this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
+    }
+
+    return {
+      playerId: player.id,
+      playerName: player.name,
+      throws,
+      roundScore: hits,
+    };
+  }
+
+  isGameOver() {
+    return this.winnerId !== null;
+  }
+
+  getWinnerId() {
+    return this.winnerId;
+  }
+
+  getCurrentRoundNumber() {
+    const roundsPlayed = Math.max(...this.players.map(player => player.roundScores.length), 0);
+    return roundsPlayed + (this.winnerId ? 0 : 1);
+  }
+
+  reset() {
+    this.currentPlayerIndex = 0;
+    this.winnerId = null;
+    this.players.forEach(player => {
+      player.score = 0;
+      player.roundScores = [];
+    });
+  }
+}
+
 let engine: GameEngine | null = null;
 
 export const createGameEngine = (type: GameType, players: PlayerSummary[]) => {
-  engine =
-    type === 'highScore'
-      ? new HighScoreEngine(players)
-      : type === 'cricket'
-        ? new CricketEngine(players)
-        : new X01Engine(type, players);
+  switch (type) {
+    case 'highScore':
+    case 'darts99':
+      engine = new HighScoreEngine(type, players);
+      break;
+    case 'cricket':
+      engine = new CricketEngine(players);
+      break;
+    case 'aroundTheClock':
+      engine = new AroundTheClockEngine(players);
+      break;
+    default:
+      engine = new X01Engine(type, players);
+  }
   return engine;
 };
 
