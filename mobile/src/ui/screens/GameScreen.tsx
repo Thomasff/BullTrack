@@ -53,7 +53,7 @@ export const GameScreen = ({ navigation }: Props) => {
   const [scrollEnabled, setScrollEnabled] = useState(true);
   const [previewInstanceKey, setPreviewInstanceKey] = useState(0);
   const [zoomTrackHeight, setZoomTrackHeight] = useState(ZOOM_SLIDER_HEIGHT);
-  const [previewZoomRatio, setPreviewZoomRatio] = useState(ZOOM_MIN);
+  const [previewZoomRatio, setPreviewZoomRatio] = useState(() => useSettingsStore.getState().zoomRatio);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [frameWidth, setFrameWidth] = useState(0);
   const [leaveDialog, setLeaveDialog] = useState<'roundInProgress' | 'confirm' | null>(null);
@@ -61,8 +61,8 @@ export const GameScreen = ({ navigation }: Props) => {
   const [permissionDenied, setPermissionDenied] = useState(false);
   const allowLeaveRef = useRef(false);
   const pendingLeaveRef = useRef<(() => void) | null>(null);
-  const zoomTrackRef = useRef<View>(null);
-  const latestZoomRef = useRef(ZOOM_MIN);
+  const latestZoomRef = useRef(previewZoomRatio);
+  const zoomDragStartRef = useRef({ pageY: 0, zoomRatio: previewZoomRatio });
   const isFocused = useIsFocused();
   const device = useCameraDevice('back');
   // Native round capture is a 16:9 frame center-cropped to 9:16 portrait. Using the
@@ -98,9 +98,6 @@ export const GameScreen = ({ navigation }: Props) => {
   } = useGameStore();
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
   const previousStatusRef = useRef(status);
-  const isZoomDraggingRef = useRef(false);
-  const zoomTrackTopRef = useRef(0);
-  const zoomDragOffsetRef = useRef(0);
   const artifactCount = useVisionDebugStore(state => state.artifacts.length);
   const lastNativeError = useVisionDebugStore(state => state.lastNativeError);
 
@@ -218,14 +215,13 @@ export const GameScreen = ({ navigation }: Props) => {
     !isBusy &&
     !handoffInProgress;
 
+  // The slider (persisted in settings) is the single source of zoom; native status events
+  // never overwrite it, so it carries over between rounds and games, failed or not.
   useEffect(() => {
-    const clamped = Math.min(zoomRange.max, Math.max(zoomRange.min, cameraStatus.zoomRatio || ZOOM_MIN));
-    if (isZoomDraggingRef.current) {
-      return;
-    }
-    setPreviewZoomRatio(clamped);
+    const clamped = Math.min(zoomRange.max, Math.max(zoomRange.min, latestZoomRef.current));
     latestZoomRef.current = clamped;
-  }, [cameraStatus.zoomRatio, zoomRange.max, zoomRange.min]);
+    setPreviewZoomRatio(clamped);
+  }, [zoomRange.max, zoomRange.min]);
 
   useEffect(() => {
     if (status !== 'waitingForThrow') {
@@ -255,50 +251,27 @@ export const GameScreen = ({ navigation }: Props) => {
     useSettingsStore.getState().setZoomRatio(latestZoomRef.current).catch(() => undefined);
   };
 
-  const refreshZoomTrackMetrics = () => {
-    zoomTrackRef.current?.measureInWindow((_x, y, _width, height) => {
-      zoomTrackTopRef.current = y;
-      const nextHeight = Math.round(height);
-      if (nextHeight > 0) {
-        setZoomTrackHeight(current => (current === nextHeight ? current : nextHeight));
-      }
-    });
-  };
-
-  const resolveZoomRatioFromPageY = (pageY: number) => {
-    const trackHeight = Math.max(1, zoomTrackHeight);
-    const relativeY = pageY - zoomTrackTopRef.current - zoomDragOffsetRef.current;
-    const progress = 1 - Math.min(1, Math.max(0, relativeY / trackHeight));
-    return zoomRange.min + progress * (zoomRange.max - zoomRange.min);
-  };
-
-  const beginZoomDrag = (locationY: number, pageY: number) => {
+  // Relative drag: the zoom follows the finger's vertical movement from where it touched,
+  // so no absolute track position (which shifts when the page scrolls) is needed.
+  const beginZoomDrag = (pageY: number) => {
     if (!canAdjustZoom) {
       return;
     }
-    isZoomDraggingRef.current = true;
     setScrollEnabled(false);
-    refreshZoomTrackMetrics();
-    const trackHeight = Math.max(1, zoomTrackHeight);
-    const usableHeight = Math.max(1, trackHeight - ZOOM_THUMB_SIZE);
-    const zoomSpan = Math.max(0.0001, zoomRange.max - zoomRange.min);
-    const normalized = (previewZoomRatio - zoomRange.min) / zoomSpan;
-    const thumbTop = (1 - normalized) * usableHeight;
-    const thumbCenter = thumbTop + ZOOM_THUMB_SIZE / 2;
-    zoomDragOffsetRef.current = locationY - thumbCenter;
-    commitZoomRatio(resolveZoomRatioFromPageY(pageY));
+    zoomDragStartRef.current = { pageY, zoomRatio: latestZoomRef.current };
   };
 
   const moveZoomDrag = (pageY: number) => {
     if (!canAdjustZoom) {
       return;
     }
-    commitZoomRatio(resolveZoomRatioFromPageY(pageY));
+    const usableHeight = Math.max(1, zoomTrackHeight - ZOOM_THUMB_SIZE);
+    const start = zoomDragStartRef.current;
+    const deltaRatio = ((start.pageY - pageY) / usableHeight) * (zoomRange.max - zoomRange.min);
+    commitZoomRatio(start.zoomRatio + deltaRatio);
   };
 
   const endZoomDrag = () => {
-    isZoomDraggingRef.current = false;
-    zoomDragOffsetRef.current = 0;
     setScrollEnabled(true);
     persistZoomRatio();
   };
@@ -554,7 +527,9 @@ export const GameScreen = ({ navigation }: Props) => {
             onMoveShouldSetResponder={() => canAdjustZoom}
             onResponderTerminationRequest={() => false}
             onResponderGrant={event => {
-              beginZoomDrag(event.nativeEvent.locationY, event.nativeEvent.pageY);
+              beginZoomDrag(event.nativeEvent.pageY);
+              // Returning true blocks the native ScrollView from stealing the drag (Android).
+              return true;
             }}
             onResponderMove={event => {
               moveZoomDrag(event.nativeEvent.pageY);
@@ -564,12 +539,10 @@ export const GameScreen = ({ navigation }: Props) => {
           >
             <Text style={styles.zoomScaleLabel}>{zoomRange.max.toFixed(1)}x</Text>
             <View
-              ref={zoomTrackRef}
               style={styles.zoomTrack}
               onLayout={event => {
                 const nextHeight = Math.round(event.nativeEvent.layout.height);
                 setZoomTrackHeight(current => (current === nextHeight ? current : nextHeight));
-                refreshZoomTrackMetrics();
               }}>
               <View style={styles.zoomTrackFill} />
               <View

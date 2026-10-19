@@ -172,6 +172,9 @@ class CameraXManager : CameraManager {
     }
 
     override fun setZoomRatio(zoomRatio: Float) {
+        // Keep the request even while unbound (the camera is released between rounds);
+        // bindCameraUseCases applies it through applyZoom on the next round.
+        currentZoomRatio = zoomRatio
         val camera = boundCamera ?: return
         val zoomState = camera.cameraInfo.zoomState.value ?: return
         val clamped = zoomRatio.coerceIn(zoomState.minZoomRatio, zoomState.maxZoomRatio)
