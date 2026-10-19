@@ -49,6 +49,9 @@ export const GameScreen = ({ navigation }: Props) => {
   >(null);
   const [previewDiagnosticsText, setPreviewDiagnosticsText] = useState('vision-camera');
   const [previewReady, setPreviewReady] = useState(false);
+  // VisionCamera drops a zoom set while the camera is still opening, so the zoom prop
+  // is only passed once the preview is streaming (the change then gets applied).
+  const [previewStreaming, setPreviewStreaming] = useState(false);
   const [handoffInProgress, setHandoffInProgress] = useState(false);
   const [scrollEnabled, setScrollEnabled] = useState(true);
   const [previewInstanceKey, setPreviewInstanceKey] = useState(0);
@@ -233,6 +236,7 @@ export const GameScreen = ({ navigation }: Props) => {
     const previousStatus = previousStatusRef.current;
     if (status === 'waitingForThrow' && previousStatus !== 'waitingForThrow') {
       setPreviewReady(false);
+      setPreviewStreaming(false);
       setPreviewInstanceKey(current => current + 1);
     }
     previousStatusRef.current = status;
@@ -456,7 +460,9 @@ export const GameScreen = ({ navigation }: Props) => {
             style={styles.preview}
             device={device}
             isActive={shouldShowVisionPreview}
-            zoom={previewZoomRatio}
+            zoom={previewStreaming ? previewZoomRatio : ZOOM_MIN}
+            onStarted={() => setPreviewStreaming(true)}
+            onStopped={() => setPreviewStreaming(false)}
             format={format}
             resizeMode="cover"
             androidPreviewViewType="texture-view"
