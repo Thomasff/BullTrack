@@ -451,8 +451,13 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
             long_edge_filtered_candidates.begin() + kExpectedDoubleRegionCount);
     }
 
-    std::sort(precise_candidates.begin(), precise_candidates.end(), [](const ComponentCandidate& lhs, const ComponentCandidate& rhs) {
-        return lhs.angle_from_top_clockwise < rhs.angle_from_top_clockwise;
+    // The 20 double sits right on the top direction, so start the clockwise order half a gap
+    // (18 degrees) before it: a board or camera tilted slightly left must not push it to the end.
+    const auto order_key = [](const ComponentCandidate& component) {
+        return std::fmod(component.angle_from_top_clockwise + CV_PI / kExpectedDoubleRegionCount, 2.0 * CV_PI);
+    };
+    std::sort(precise_candidates.begin(), precise_candidates.end(), [&order_key](const ComponentCandidate& lhs, const ComponentCandidate& rhs) {
+        return order_key(lhs) < order_key(rhs);
     });
 
     const std::array<int, 4> kSelectedIndices = {1, 4, 6, 9};
