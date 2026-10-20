@@ -10,18 +10,6 @@ export interface CameraReadyState {
   lockReason?: string | null;
 }
 
-export interface PreviewDiagnostics {
-  createViewManagersCount: number;
-  createViewInstanceCount: number;
-  viewAttachedCount: number;
-  hostAttachFragmentCount: number;
-  fragmentCreateViewCount: number;
-  fragmentViewCreatedCount: number;
-  fragmentStartCount: number;
-  controllerAttachPreviewCount: number;
-  lastStep: string;
-}
-
 export interface StartLiveRoundInput {
   gameMode: GameType;
   playerId: string;
@@ -63,7 +51,6 @@ export interface BullTrackNativeBridge {
   finishRound(input: FinishRoundInput): Promise<FinishRoundResult>;
   loadDebugArtifacts(roundId: string): Promise<DebugArtifact[]>;
   setZoomRatio(zoomRatio: number): Promise<CameraReadyState>;
-  getPreviewDiagnostics(): Promise<PreviewDiagnostics>;
   preloadSoundCues(): void;
   playSoundCue(cue: SoundCue): void;
 }

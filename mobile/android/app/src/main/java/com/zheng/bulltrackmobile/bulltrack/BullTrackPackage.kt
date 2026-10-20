@@ -14,8 +14,6 @@ class BullTrackPackage : ReactPackage {
     override fun createViewManagers(
         reactContext: ReactApplicationContext
     ): List<ViewManager<*, *>> {
-        BullTrackPreviewDiagnostics.createViewManagersCount += 1
-        BullTrackPreviewDiagnostics.mark("package.createViewManagers")
-        return listOf(BullTrackCameraPreviewViewManager())
+        return emptyList()
     }
 }

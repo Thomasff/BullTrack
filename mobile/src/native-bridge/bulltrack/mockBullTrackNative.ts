@@ -6,7 +6,6 @@ import type {
   CameraReadyState,
   FinishRoundInput,
   FinishRoundResult,
-  PreviewDiagnostics,
   RedetectCurrentRoundInput,
   StartLiveRoundInput,
   StartLiveRoundResult,
@@ -49,18 +48,6 @@ const readyState: CameraReadyState = {
   lockReason: null,
 };
 
-const previewDiagnostics: PreviewDiagnostics = {
-  createViewManagersCount: 1,
-  createViewInstanceCount: 1,
-  viewAttachedCount: 1,
-  hostAttachFragmentCount: 1,
-  fragmentCreateViewCount: 1,
-  fragmentViewCreatedCount: 1,
-  fragmentStartCount: 1,
-  controllerAttachPreviewCount: 1,
-  lastStep: 'mock.preview.ready',
-};
-
 const accepted = (statusMessage: string): ActionAcceptedResult => ({
   accepted: true,
   statusMessage,
@@ -84,7 +71,6 @@ export const mockBullTrackNativeBridge: BullTrackNativeBridge = {
   }),
   loadDebugArtifacts: async () => mockArtifacts,
   setZoomRatio: async () => readyState,
-  getPreviewDiagnostics: async () => previewDiagnostics,
   preloadSoundCues: () => undefined,
   playSoundCue: () => undefined,
 };

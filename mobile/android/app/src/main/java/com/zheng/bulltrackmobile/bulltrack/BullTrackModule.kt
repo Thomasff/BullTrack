@@ -68,10 +68,6 @@ class BullTrackModule(
         }
     }
 
-    override fun getPreviewDiagnostics(promise: Promise) {
-        promise.resolve(BullTrackPreviewDiagnostics.toWritableMap())
-    }
-
     override fun preloadSoundCues() {
         soundCues.preload()
     }

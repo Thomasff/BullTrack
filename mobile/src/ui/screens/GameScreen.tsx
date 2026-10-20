@@ -8,7 +8,6 @@ import {
   confirmCurrentRound,
   discardReopenedRound,
   ensureBullTrackSubscriptions,
-  getPreviewDiagnostics,
   prepareLiveCamera,
   redetectCurrentRound,
   refreshCameraPermission,
@@ -49,7 +48,6 @@ export const GameScreen = ({ navigation }: Props) => {
   const [runningAction, setRunningAction] = useState<
     'permission' | 'prepare' | 'start' | 'stop' | 'redetect' | 'confirm' | 'reload' | 'undo' | null
   >(null);
-  const [previewDiagnosticsText, setPreviewDiagnosticsText] = useState('vision-camera');
   const [previewReady, setPreviewReady] = useState(false);
   // VisionCamera drops a zoom set while the camera is still opening, so the zoom prop
   // is only passed once the preview is streaming (the change then gets applied).
@@ -118,10 +116,6 @@ export const GameScreen = ({ navigation }: Props) => {
           return prepareLiveCamera();
         }
         return undefined;
-      })
-      .then(() => getPreviewDiagnostics())
-      .then(diagnostics => {
-        setPreviewDiagnosticsText(JSON.stringify(diagnostics));
       })
       .finally(() => {
         setRunningAction(null);
@@ -687,7 +681,6 @@ export const GameScreen = ({ navigation }: Props) => {
               {item.label} ({item.pointNorm.x.toFixed(2)}, {item.pointNorm.y.toFixed(2)})
             </Text>
           ))}
-          <Text style={styles.debugText}>{previewDiagnosticsText}</Text>
           {cameraStatus.lockReason ? (
             <Text style={styles.debugText}>{cameraStatus.lockReason}</Text>
           ) : null}

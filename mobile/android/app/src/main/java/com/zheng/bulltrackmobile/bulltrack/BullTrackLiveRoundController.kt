@@ -3,14 +3,12 @@ package com.zheng.bulltrackmobile.bulltrack
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.SystemClock
-import androidx.camera.view.PreviewView
 import androidx.lifecycle.LifecycleOwner
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
-import com.facebook.react.uimanager.ThemedReactContext
 import com.zheng.bulltrack.camera.CameraLockPhase
 import com.zheng.bulltrack.camera.CameraState
 import com.zheng.bulltrack.camera.CameraXManager
@@ -114,32 +112,6 @@ class BullTrackLiveRoundController(
         this.zoomRatio = zoomRatio.toFloat()
         cameraManager.setZoomRatio(this.zoomRatio)
         return currentCameraReadyState("已更新原生 round zoom")
-    }
-
-    fun attachPreview(view: PreviewView, themedContext: ThemedReactContext) {
-        BullTrackPreviewDiagnostics.controllerAttachPreviewCount += 1
-        BullTrackPreviewDiagnostics.mark("controller.attachPreview.legacyNoop")
-        emitCameraStatus(
-            isReady = false,
-            isPreviewBound = false,
-            zoomRatio = zoomRatio,
-            statusMessage = "预览已切换到 VisionCamera，原生 Preview 宿主已停用",
-            lockPhase = CameraLockPhase.IDLE,
-            lockReason = "Legacy PreviewView host disabled",
-        )
-    }
-
-    fun detachPreview(view: PreviewView? = null) = Unit
-
-    fun markPreviewUnavailable(statusMessage: String, lockReason: String? = null) {
-        emitCameraStatus(
-            isReady = false,
-            isPreviewBound = false,
-            zoomRatio = zoomRatio,
-            statusMessage = statusMessage,
-            lockPhase = CameraLockPhase.IDLE,
-            lockReason = lockReason,
-        )
     }
 
     fun startLiveRound(): WritableMap {

@@ -219,8 +219,6 @@ export const prepareLiveCamera = async () => {
   await bullTrackNativeBridge.prepareRoundCamera();
 };
 
-export const getPreviewDiagnostics = async () => bullTrackNativeBridge.getPreviewDiagnostics();
-
 export const updateLiveZoomRatio = async (zoomRatio: number) => {
   const readyState = await bullTrackNativeBridge.setZoomRatio(zoomRatio);
   useGameStore.getState().setCameraStatus(readyState);
