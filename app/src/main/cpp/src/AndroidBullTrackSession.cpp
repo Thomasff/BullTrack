@@ -759,13 +759,18 @@ cv::Mat DrawRedetectSummaryImage(
 #endif
 
 // Board-wide preparation shared by every dart box of the same before/after pair.
+constexpr const char* kDartAlignmentMotion = "homography";
+// Below this ECC score an alignment is not trusted (hand in view, motion blur, board partly out
+// of frame): the frame is not used to confirm a dart. Normal frames score 0.99 or more.
+constexpr double kMinAlignmentCorrelation = 0.97;
+
 struct AlignedBoardPair {
     cv::Size round_board_size;
     cv::Mat before_gray_aligned;
     cv::Mat after_gray_aligned;
     // Colour view of the aligned after image, only filled while debug images are on.
     cv::Mat after_view_aligned;
-    // ECC warp of the after image (inverse map, 2x3) and how well each image matched the template.
+    // ECC warp of the after image (inverse map, 3x3) and how well each image matched the template.
     cv::Mat after_warp;
     double before_correlation = 0.0;
     double after_correlation = 0.0;
@@ -799,16 +804,19 @@ std::optional<AlignedBoardPair> PrepareAlignedBoardPair(
     cv::Mat before_gray = PreprocessImage(before_view, config.dart.preprocess_blur_kernel);
     cv::Mat after_gray = PreprocessImage(after_view, config.dart.preprocess_blur_kernel);
 
+    // Full perspective model: a hand-held or wobbling phone changes distance and angle, not only
+    // position and turn. Measured 2026-10-21: scores never below the rotation+shift model on the
+    // stand (0.992-0.999) and back above 0.99 for most hand-held frames (0.96-0.98 before).
     PyramidECCResult before_alignment = AlignPyramidEcc(
         first_preprocessed_gray,
         before_gray,
         3,
-        "euclidean");
+        kDartAlignmentMotion);
     PyramidECCResult after_alignment = AlignPyramidEcc(
         first_preprocessed_gray,
         after_gray,
         3,
-        "euclidean");
+        kDartAlignmentMotion);
 
     AlignedBoardPair pair;
     pair.round_board_size = round_board_size;
@@ -822,11 +830,29 @@ std::optional<AlignedBoardPair> PrepareAlignedBoardPair(
         pair.after_view_aligned = WarpImageWithMatrix(
             after_view,
             after_alignment.warp_matrix,
-            "euclidean",
+            kDartAlignmentMotion,
             round_board_size);
     }
 #endif
     return pair;
+}
+
+// ECC score of one frame's dart search crop against the template, or -1 when it does not converge.
+double AlignmentScoreAgainstTemplate(
+    const cv::Mat& template_gray,
+    const cv::Mat& search_crop_bgr,
+    const PipelineConfig& config) {
+    try {
+        const cv::Mat gray = PreprocessImage(
+            EnhanceWarpedImage(
+                ResizeToTargetSize(search_crop_bgr, template_gray.size()),
+                config.enhancement.saturation_scale,
+                config.enhancement.contrast_scale),
+            config.dart.preprocess_blur_kernel);
+        return AlignPyramidEcc(template_gray, gray, 3, kDartAlignmentMotion).correlation;
+    } catch (const std::exception&) {
+        return -1.0;
+    }
 }
 
 // YOLO found the dart box in the after image as captured, but the comparison runs on the
@@ -841,15 +867,21 @@ cv::Rect MapDartBoxIntoAlignedPair(
         return box_in_crop;
     }
     // WARP_INVERSE_MAP: aligned(p) = after(W p), so a point q of the after image lands at W^-1 q.
-    cv::Mat inverse_warp;
-    cv::invertAffineTransform(pair.after_warp, inverse_warp);
+    cv::Mat warp;
+    pair.after_warp.convertTo(warp, CV_64F);
+    if (warp.rows == 2) {
+        cv::Mat full = cv::Mat::eye(3, 3, CV_64F);
+        warp.copyTo(full(cv::Rect(0, 0, 3, 2)));
+        warp = full;
+    }
+    const cv::Mat inverse_warp = warp.inv();
     const std::vector<cv::Point2f> corners{
         cv::Point2f(static_cast<float>(box_in_crop.x), static_cast<float>(box_in_crop.y)),
         cv::Point2f(static_cast<float>(box_in_crop.br().x), static_cast<float>(box_in_crop.y)),
         cv::Point2f(static_cast<float>(box_in_crop.x), static_cast<float>(box_in_crop.br().y)),
         cv::Point2f(static_cast<float>(box_in_crop.br().x), static_cast<float>(box_in_crop.br().y))};
     std::vector<cv::Point2f> moved;
-    cv::transform(corners, moved, inverse_warp);
+    cv::perspectiveTransform(corners, moved, inverse_warp);
     return cv::boundingRect(moved) & cv::Rect(cv::Point(0, 0), pair.round_board_size);
 }
 
@@ -1109,6 +1141,15 @@ void AndroidBullTrackSession::ConfirmNewDart(
         count_dart();
         return;
     }
+    if (pair->before_correlation < kMinAlignmentCorrelation || pair->after_correlation < kMinAlignmentCorrelation) {
+        // Not trusted (shaking, blur, a hand in view): keep waiting and try again with the next frame.
+        pending_candidate_ = PendingYoloCandidateState{base_frame, stable_frame};
+        result.gate_reason = cv::format(
+            "alignment_low ecc=%.3f/%.3f",
+            pair->before_correlation,
+            pair->after_correlation);
+        return;
+    }
 
     // Candidates are the boxes that pair with no box of the clean frame: old darts keep their
     // boxes, so they drop out even when they still wobble or a new dart touches their box. When
@@ -1274,10 +1315,15 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
 
     if (clean_refresh_frames_left_ > 0) {
         clean_refresh_frames_left_ -= 1;
-        // Only a frame that still shows exactly the confirmed darts (no box elsewhere) may stand in.
+        // Only a frame that still shows exactly the confirmed darts (no box elsewhere) and aligns
+        // well (no hand in view, no blur) may stand in.
         if (!pending_candidate_.has_value() && stored_current.has_board_box && last_clean_frame_.has_value() &&
             current_count >= last_confirmed_dart_count_ &&
-            BoxesMatchOneToOne(stored_current.dart_boxes, last_clean_frame_->dart_boxes)) {
+            BoxesMatchOneToOne(stored_current.dart_boxes, last_clean_frame_->dart_boxes) &&
+            AlignmentScoreAgainstTemplate(
+                first_frame_preprocessed_for_alignment_,
+                stored_current.dart_search_crop_bgr,
+                pipeline_config_) >= kMinAlignmentCorrelation) {
             last_clean_frame_ = stored_current;
         }
     }
