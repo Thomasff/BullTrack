@@ -3,6 +3,7 @@ package com.zheng.bulltrackmobile.bulltrack
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.SystemClock
+import android.util.Log
 import androidx.lifecycle.LifecycleOwner
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactApplicationContext
@@ -130,6 +131,7 @@ class BullTrackLiveRoundController(
             }.onFailure { error ->
                 cleanupCurrentSession(destroySession = true)
                 releaseRoundOwnershipOnMain()
+                Log.e(TAG, "Live round failed", error)
                 emitNativeError("BT_LIVE_ROUND_FAILED", error.message ?: "Unknown native round error")
                 emitRoundState(
                     phase = "finished",
@@ -290,6 +292,7 @@ class BullTrackLiveRoundController(
                 }
             }.getOrElse { error ->
                 detector.destroySession(attemptSessionId)
+                Log.w(TAG, "Board setup attempt $attempt failed", error)
                 // "No board found" arrives as an exception; timeouts and cancellation do not retry.
                 if (attempt == START_ROUND_ATTEMPTS || stopRequested || error is CancellationException) {
                     throw error
@@ -302,6 +305,7 @@ class BullTrackLiveRoundController(
                 sessionId = attemptSessionId
                 break
             }
+            Log.w(TAG, "Board setup attempt $attempt failed: $errorMessage")
             detector.destroySession(attemptSessionId)
             if (attempt == START_ROUND_ATTEMPTS || stopRequested) {
                 error(errorMessage)
@@ -420,6 +424,10 @@ class BullTrackLiveRoundController(
         artifactStore.saveArtifacts(session.roundId, frameUpdate.gateDebugImages)
         artifactStore.saveArtifacts(session.roundId, frameUpdate.preciseDebugImages)
 
+        if (frameUpdate.gateTriggered || frameUpdate.gateReason.startsWith("yolo_count_increased_no_board_change")) {
+            // Change counts per confirmation, to tune the "no new dart" threshold from real rounds.
+            Log.i(TAG, "Frame $frameIndex: ${frameUpdate.gateReason}")
+        }
         if (!frameUpdate.gateTriggered) {
             emitThrowsUpdated(
                 roundId = session.roundId,
@@ -774,6 +782,7 @@ class BullTrackLiveRoundController(
         private const val CAMERA_READY_TIMEOUT_MS = 4_000L
         private const val FRAME_INTERVAL_MS = 333L
         private const val START_ROUND_ATTEMPTS = 3
+        private const val TAG = "BullTrackRound"
         private const val FRAME_WAIT_SLICE_MS = 50L
         private const val NANOS_PER_MILLISECOND = 1_000_000L
     }
