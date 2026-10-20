@@ -33,6 +33,7 @@ struct FirstFrameBoardBaseline {
     cv::Mat preprocessed_gray;
     cv::Mat point_rectification_h;
     float rectified_radius = 1.0f;
+    cv::Rect dart_search_rect;
     BoardCircleDetectionResult board_detection;
     YoloDetectionResult yolo_detection;
 };
@@ -476,6 +477,37 @@ cv::Mat CropBoardByRect(const cv::Mat& image, const cv::Rect& rect) {
     return image(rect).clone();
 }
 
+// Dart detection looks at the board box widened on every side, more on the right: shot from the
+// left at an angle, a dart near the right edge (or one in the miss ring) sticks out of the board
+// box and was cut off, sometimes entirely. Board fitting keeps the plain board box.
+constexpr double kDartSearchMarginLeft = 0.10;
+constexpr double kDartSearchMarginRight = 0.25;
+constexpr double kDartSearchMarginTop = 0.10;
+constexpr double kDartSearchMarginBottom = 0.10;
+
+cv::Rect ExpandToDartSearchRect(const cv::Rect& board_box) {
+    const int left = static_cast<int>(std::lround(board_box.width * kDartSearchMarginLeft));
+    const int right = static_cast<int>(std::lround(board_box.width * kDartSearchMarginRight));
+    const int top = static_cast<int>(std::lround(board_box.height * kDartSearchMarginTop));
+    const int bottom = static_cast<int>(std::lround(board_box.height * kDartSearchMarginBottom));
+    return cv::Rect(
+        board_box.x - left,
+        board_box.y - top,
+        board_box.width + left + right,
+        board_box.height + top + bottom);
+}
+
+// Crops a rect that may reach past the image edge, filling the outside with black, so every frame
+// keeps the same geometry relative to its board box.
+cv::Mat CropWithBlackPadding(const cv::Mat& image, const cv::Rect& rect) {
+    cv::Mat crop = cv::Mat::zeros(rect.size(), image.type());
+    const cv::Rect inside = rect & cv::Rect(0, 0, image.cols, image.rows);
+    if (inside.area() > 0) {
+        image(inside).copyTo(crop(inside - rect.tl()));
+    }
+    return crop;
+}
+
 cv::Rect SelectBestBoardBox(const YoloDetectionResult& detection, const cv::Size& image_size) {
     std::optional<cv::Rect> board_box = SelectOptionalBestBoardBox(detection, image_size);
     if (!board_box.has_value()) {
@@ -509,8 +541,13 @@ FirstFrameBoardBaseline BuildFirstFrameBoardBaseline(
     baseline.board_box = board_box;
     baseline.board_crop_bgr = std::move(board_crop_bgr);
     baseline.enhanced_board_crop_bgr = std::move(enhanced_board_crop_bgr);
+    // Darts are aligned and compared in the widened search area, so the template covers it too.
+    baseline.dart_search_rect = ExpandToDartSearchRect(board_box);
     baseline.preprocessed_gray = PreprocessImage(
-        baseline.enhanced_board_crop_bgr,
+        EnhanceWarpedImage(
+            CropWithBlackPadding(first_frame_bgr, baseline.dart_search_rect),
+            pipeline_config.enhancement.saturation_scale,
+            pipeline_config.enhancement.contrast_scale),
         pipeline_config.dart.preprocess_blur_kernel);
     baseline.point_rectification_h = board_detection.point_rectification_h.clone();
     baseline.rectified_radius = board_detection.rectified_radius;
@@ -532,7 +569,8 @@ TrackedYoloFrameState BuildTrackedYoloFrameState(
     if (detected_board_box.has_value()) {
         frame_state.board_box = detected_board_box.value();
         frame_state.has_board_box = true;
-        frame_state.detected_board_crop_bgr = CropBoardByRect(frame_bgr, frame_state.board_box);
+        frame_state.dart_search_rect = ExpandToDartSearchRect(frame_state.board_box);
+        frame_state.dart_search_crop_bgr = CropWithBlackPadding(frame_bgr, frame_state.dart_search_rect);
     }
     frame_state.dart_boxes = SelectTopDartBoxes(detection, max_dart_count);
     frame_state.overlay_bgr = detection.overlay_bgr;
@@ -784,17 +822,18 @@ std::optional<AlignedBoardPair> PrepareAlignedBoardPair(
 
 LocalizedDartDetectionResult LocateDartTipInAlignedPair(
     const AlignedBoardPair& pair,
-    const cv::Rect& after_board_box,
+    const cv::Rect& after_search_rect,
     const YoloDetectionBox& dart_box,
     const cv::Mat& point_rectification_h,
     float rectified_radius,
+    const cv::Point& board_offset_in_search,
     int frame_index,
     const std::string& debug_prefix) {
     LocalizedDartDetectionResult result;
     cv::Rect local_rect;
     try {
         local_rect = ExpandAndClampLocalRect(
-            MapDetectionBoxToBoardCrop(dart_box, after_board_box, pair.round_board_size),
+            MapDetectionBoxToBoardCrop(dart_box, after_search_rect, pair.round_board_size),
             pair.round_board_size);
     } catch (const std::exception&) {
         result.reason = "local_dart_box_invalid";
@@ -815,7 +854,7 @@ LocalizedDartDetectionResult LocateDartTipInAlignedPair(
         result.has_dart = true;
         result.point_in_round_board = tip_point;
         result.point_norm = NormalizePointFromRoundAlignedBoard(
-            tip_point.value(),
+            tip_point.value() - board_offset_in_search,
             point_rectification_h,
             rectified_radius);
         result.reason = "local_tip_resolved";
@@ -941,12 +980,12 @@ struct BoxChange {
 // blurred grayscale images, so board holes that shift by a pixel do not count as change.
 BoxChange CountChangedPixelsInBox(
     const AlignedBoardPair& pair,
-    const cv::Rect& after_board_box,
+    const cv::Rect& after_search_rect,
     const YoloDetectionBox& dart_box) {
     cv::Rect local_rect;
     try {
         local_rect = ExpandAndClampLocalRect(
-            MapDetectionBoxToBoardCrop(dart_box, after_board_box, pair.round_board_size),
+            MapDetectionBoxToBoardCrop(dart_box, after_search_rect, pair.round_board_size),
             pair.round_board_size);
     } catch (const std::exception&) {
         return {};
@@ -983,6 +1022,8 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     first_frame_board_box_ = baseline.board_box;
     first_frame_board_crop_bgr_ = baseline.board_crop_bgr.clone();
     first_frame_preprocessed_for_alignment_ = baseline.preprocessed_gray.clone();
+    first_frame_dart_search_rect_ = baseline.dart_search_rect;
+    board_offset_in_search_ = baseline.board_box.tl() - baseline.dart_search_rect.tl();
     first_frame_point_rectification_h_ = baseline.point_rectification_h.clone();
     first_frame_rectified_radius_ = baseline.rectified_radius;
     recent_frames_.clear();
@@ -1021,8 +1062,8 @@ void AndroidBullTrackSession::ConfirmNewDart(
     try {
         pair = PrepareAlignedBoardPair(
             first_frame_preprocessed_for_alignment_,
-            base_frame.detected_board_crop_bgr,
-            stable_frame.detected_board_crop_bgr,
+            base_frame.dart_search_crop_bgr,
+            stable_frame.dart_search_crop_bgr,
             pipeline_config_);
     } catch (const std::exception& error) {
         // YOLO saw one more dart in two frames in a row, so it counts; it just has no tip point.
@@ -1050,7 +1091,7 @@ void AndroidBullTrackSession::ConfirmNewDart(
     std::optional<size_t> best_index;
     BoxChange best_change;
     for (size_t i : candidates) {
-        const BoxChange change = CountChangedPixelsInBox(pair.value(), stable_frame.board_box, boxes[i]);
+        const BoxChange change = CountChangedPixelsInBox(pair.value(), stable_frame.dart_search_rect, boxes[i]);
         if (!best_index.has_value() || change.changed_pixels > best_change.changed_pixels) {
             best_index = i;
             best_change = change;
@@ -1094,10 +1135,11 @@ void AndroidBullTrackSession::ConfirmNewDart(
 #endif
     LocalizedDartDetectionResult localized = LocateDartTipInAlignedPair(
         pair.value(),
-        stable_frame.board_box,
+        stable_frame.dart_search_rect,
         new_dart_box,
         first_frame_point_rectification_h_,
         first_frame_rectified_radius_,
+        board_offset_in_search_,
         current_frame_index_,
         "s3");
     result.precise_debug_images = std::move(localized.debug_images);
@@ -1237,12 +1279,13 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
             result.yolo_status += " board_missing";
             return result;
         }
+        const cv::Rect after_search_rect = ExpandToDartSearchRect(after_board_box.value());
 
         std::vector<YoloDetectionBox> top_dart_boxes = SelectTopDartBoxes(yolo_detection, 3);
         if (top_dart_boxes.empty()) {
             result.yolo_status += " no_dart_boxes";
 #if BT_ENABLE_DEBUG_IMAGES
-            cv::Mat after_board_crop_bgr = CropBoardByRect(latest_frame_bgr_, after_board_box.value());
+            cv::Mat after_board_crop_bgr = CropWithBlackPadding(latest_frame_bgr_, after_search_rect);
             cv::Mat after_board_resized = ResizeToTargetSize(after_board_crop_bgr, first_frame_preprocessed_for_alignment_.size());
             cv::Mat after_board_view = EnhanceWarpedImage(
                 after_board_resized,
@@ -1258,8 +1301,8 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
             return result;
         }
 
-        cv::Mat before_board_crop_bgr = CropBoardByRect(first_frame_bgr_, first_frame_board_box_);
-        cv::Mat after_board_crop_bgr = CropBoardByRect(latest_frame_bgr_, after_board_box.value());
+        cv::Mat before_board_crop_bgr = CropWithBlackPadding(first_frame_bgr_, first_frame_dart_search_rect_);
+        cv::Mat after_board_crop_bgr = CropWithBlackPadding(latest_frame_bgr_, after_search_rect);
         std::vector<std::optional<cv::Point>> summary_points;
         summary_points.reserve(top_dart_boxes.size());
 
@@ -1274,10 +1317,11 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
             const std::string prefix = "s9" + std::to_string(static_cast<int>(i + 1));
             LocalizedDartDetectionResult localized = LocateDartTipInAlignedPair(
                 aligned_pair.value(),
-                after_board_box.value(),
+                after_search_rect,
                 top_dart_boxes[i],
                 first_frame_point_rectification_h_,
                 first_frame_rectified_radius_,
+                board_offset_in_search_,
                 current_frame_index_,
                 prefix);
             summary_points.push_back(localized.point_in_round_board);
@@ -1298,13 +1342,13 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
             pipeline_config_.enhancement.contrast_scale);
         std::vector<YoloDetectionBox> summary_boxes;
         summary_boxes.reserve(top_dart_boxes.size());
-        const float scale_x = static_cast<float>(after_board_view.cols) / static_cast<float>(after_board_box->width);
-        const float scale_y = static_cast<float>(after_board_view.rows) / static_cast<float>(after_board_box->height);
+        const float scale_x = static_cast<float>(after_board_view.cols) / static_cast<float>(after_search_rect.width);
+        const float scale_y = static_cast<float>(after_board_view.rows) / static_cast<float>(after_search_rect.height);
         for (const YoloDetectionBox& dart_box : top_dart_boxes) {
             YoloDetectionBox scaled_box = dart_box;
             scaled_box.rect = cv::Rect2f(
-                (dart_box.rect.x - static_cast<float>(after_board_box->x)) * scale_x,
-                (dart_box.rect.y - static_cast<float>(after_board_box->y)) * scale_y,
+                (dart_box.rect.x - static_cast<float>(after_search_rect.x)) * scale_x,
+                (dart_box.rect.y - static_cast<float>(after_search_rect.y)) * scale_y,
                 dart_box.rect.width * scale_x,
                 dart_box.rect.height * scale_y);
             summary_boxes.push_back(scaled_box);

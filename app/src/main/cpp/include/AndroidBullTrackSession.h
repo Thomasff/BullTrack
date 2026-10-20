@@ -41,7 +41,9 @@ struct AndroidRedetectResult {
 struct TrackedYoloFrameState {
     int frame_index = 0;
     cv::Mat frame_bgr;
-    cv::Mat detected_board_crop_bgr;
+    // Widened area around the board box used for dart detection (may reach past the image).
+    cv::Rect dart_search_rect{};
+    cv::Mat dart_search_crop_bgr;
     cv::Rect board_box{};
     bool has_board_box = false;
     std::vector<YoloDetectionBox> dart_boxes;
@@ -70,6 +72,9 @@ private:
     cv::Mat first_frame_preprocessed_for_alignment_;
     cv::Mat first_frame_point_rectification_h_;
     float first_frame_rectified_radius_ = 1.0f;
+    cv::Rect first_frame_dart_search_rect_{};
+    // Board box corner inside the dart search crop, to map tips back to board-crop coordinates.
+    cv::Point board_offset_in_search_{};
     cv::Mat latest_frame_bgr_;
     std::vector<TrackedYoloFrameState> recent_frames_;
     std::optional<PendingYoloCandidateState> pending_candidate_;
