@@ -852,6 +852,45 @@ LocalizedDartDetectionResult LocateDartTipInAlignedPair(
 constexpr int kMinNewDartChangedPixels = 8;
 constexpr double kMinNewDartChangedRatio = 0.005;
 
+// After a no-change check, frames showing the same boxes skip the check for about 2 s (at ~3
+// frames per second) before it runs again, which keeps a lingering duplicate box cheap.
+constexpr int kPhantomSkipFrames = 6;
+// Boxes this similar are taken as the same detection.
+constexpr float kSameBoxMinIou = 0.5f;
+
+float BoxIou(const cv::Rect2f& a, const cv::Rect2f& b) {
+    const float intersection = (a & b).area();
+    const float union_area = a.area() + b.area() - intersection;
+    return union_area > 0.0f ? intersection / union_area : 0.0f;
+}
+
+// True when every current box pairs with its own reference box. A box anywhere else (a real new
+// dart) means the board may have changed and must be checked again.
+bool BoxesMatchOneToOne(
+    const std::vector<YoloDetectionBox>& current,
+    const std::vector<YoloDetectionBox>& reference) {
+    if (reference.empty() || current.size() > reference.size()) {
+        return false;
+    }
+    std::vector<bool> used(reference.size(), false);
+    for (const YoloDetectionBox& box : current) {
+        int best = -1;
+        float best_iou = kSameBoxMinIou;
+        for (size_t i = 0; i < reference.size(); ++i) {
+            const float iou = used[i] ? 0.0f : BoxIou(box.rect, reference[i].rect);
+            if (iou >= best_iou) {
+                best_iou = iou;
+                best = static_cast<int>(i);
+            }
+        }
+        if (best < 0) {
+            return false;
+        }
+        used[static_cast<size_t>(best)] = true;
+    }
+    return true;
+}
+
 struct BoxChange {
     int changed_pixels = 0;
     int local_area = 0;
@@ -907,7 +946,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     first_frame_rectified_radius_ = baseline.rectified_radius;
     recent_frames_.clear();
     pending_candidate_.reset();
-    phantom_count_floor_ = 0;
+    phantom_boxes_.clear();
     last_confirmed_dart_count_ = static_cast<int>(SelectTopDartBoxes(baseline.yolo_detection, 3).size());
     round_start_dart_count_ = last_confirmed_dart_count_;
     PushRecentFrame(
@@ -975,7 +1014,8 @@ void AndroidBullTrackSession::ConfirmNewDart(
         static_cast<int>(static_cast<double>(best_change.local_area) * kMinNewDartChangedRatio));
     if (!best_index.has_value() || best_change.changed_pixels < min_changed_pixels) {
         // Nothing new on the board: YOLO drew an extra box, often a duplicate of an old dart.
-        phantom_count_floor_ = static_cast<int>(boxes.size());
+        phantom_boxes_ = boxes;
+        phantom_frame_index_ = current_frame_index_;
         result.gate_reason = "yolo_count_increased_no_board_change" + change_text;
         return;
     }
@@ -1055,10 +1095,11 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
 
     if (current_count <= last_confirmed_dart_count_) {
         pending_candidate_.reset();
-        phantom_count_floor_ = 0;
+        phantom_boxes_.clear();
         result.gate_reason = "yolo_count_not_increased";
-    } else if (current_count <= phantom_count_floor_) {
-        // The extra box was already checked and showed no new dart on the board.
+    } else if (current_frame_index_ - phantom_frame_index_ <= kPhantomSkipFrames &&
+               BoxesMatchOneToOne(stored_current.dart_boxes, phantom_boxes_)) {
+        // Same boxes as a frame already checked with no change on the board.
         pending_candidate_.reset();
         result.gate_reason = "yolo_phantom_box_ignored";
     } else if (!pending_candidate_.has_value()) {

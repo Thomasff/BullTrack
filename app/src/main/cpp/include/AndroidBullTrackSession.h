@@ -78,9 +78,10 @@ private:
     int last_confirmed_dart_count_ = 0;
     // Darts YOLO already saw on the empty-board frame; the round still allows three more.
     int round_start_dart_count_ = 0;
-    // Box count of the last extra YOLO box that showed no change on the board; such a box is not
-    // checked again until the count rises above it or drops back to the confirmed count.
-    int phantom_count_floor_ = 0;
+    // Boxes of the last frame whose extra box showed no change on the board. The same set of boxes
+    // is not checked again for a short while; any box elsewhere (a real new dart) is checked at once.
+    std::vector<YoloDetectionBox> phantom_boxes_;
+    int phantom_frame_index_ = 0;
 
     void ConfirmNewDart(
         const TrackedYoloFrameState& stable_frame,
