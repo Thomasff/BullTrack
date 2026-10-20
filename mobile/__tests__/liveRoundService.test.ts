@@ -88,7 +88,6 @@ const T20 = createThrow('triple', 20);
 test('undo reopens the last round for correction and re-applies it', async () => {
   startGameSession('game301', ['Alice', 'Bob'], '301');
   await playRound([T20, T20, T20]);
-  const bobRoundNumber = useGameStore.getState().currentRoundNumber;
   await playRound([S1, S1, S1]);
 
   await undoLastRound();
@@ -96,7 +95,7 @@ test('undo reopens the last round for correction and re-applies it', async () =>
   expect(state.status).toBe('showingResult');
   expect(state.reopenedRound).toBe(true);
   expect(state.currentPlayerId).toBe('player-2');
-  expect(state.currentRoundNumber).toBe(bobRoundNumber);
+  expect(state.currentRoundNumber).toBe(1);
   expect(state.currentThrows).toEqual([S1, S1, S1]);
   expect(state.completedRounds).toHaveLength(1);
   expect(state.scoreBoard?.players.map(player => player.score)).toEqual([121, 301]);
@@ -109,9 +108,10 @@ test('undo reopens the last round for correction and re-applies it', async () =>
   expect(state.scoreBoard?.players.map(player => player.score)).toEqual([121, 301 - 62]);
   expect(state.completedRounds.map(round => [round.playerId, round.roundIndex])).toEqual([
     ['player-1', 1],
-    ['player-2', bobRoundNumber],
+    ['player-2', 1],
   ]);
   expect(state.currentPlayerId).toBe('player-1');
+  expect(state.currentRoundNumber).toBe(2);
   expect(state.reopenedRound).toBe(false);
 });
 

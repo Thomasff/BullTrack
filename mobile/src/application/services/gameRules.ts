@@ -176,7 +176,9 @@ class X01Engine implements GameEngine {
   }
 
   getCurrentRoundNumber() {
-    const roundsPlayed = Math.max(...this.players.map(player => player.roundScores.length), 0);
+    // Counted per player: once seat 1 has thrown, seat 2 is still in the same round.
+    // The winner stays current, so after a win this is the winning round.
+    const roundsPlayed = this.players[this.currentPlayerIndex].roundScores.length;
     return roundsPlayed + (this.winnerId ? 0 : 1);
   }
 
@@ -282,7 +284,9 @@ class CricketEngine implements GameEngine {
   }
 
   getCurrentRoundNumber() {
-    const roundsPlayed = Math.max(...this.players.map(player => player.roundScores.length), 0);
+    // Counted per player: once seat 1 has thrown, seat 2 is still in the same round.
+    // The winner stays current, so after a win this is the winning round.
+    const roundsPlayed = this.players[this.currentPlayerIndex].roundScores.length;
     return roundsPlayed + (this.winnerId ? 0 : 1);
   }
 
@@ -357,7 +361,9 @@ class AroundTheClockEngine implements GameEngine {
   }
 
   getCurrentRoundNumber() {
-    const roundsPlayed = Math.max(...this.players.map(player => player.roundScores.length), 0);
+    // Counted per player: once seat 1 has thrown, seat 2 is still in the same round.
+    // The winner stays current, so after a win this is the winning round.
+    const roundsPlayed = this.players[this.currentPlayerIndex].roundScores.length;
     return roundsPlayed + (this.winnerId ? 0 : 1);
   }
 

@@ -133,3 +133,17 @@ describe('99 darts at 20', () => {
     expect(engine.getScoreBoard().players[0].score).toBe(120);
   });
 });
+
+describe('Round number', () => {
+  test.each(['game301', 'cricket', 'aroundTheClock', 'highScore'] as const)(
+    '%s counts rounds per player, not ahead of later seats',
+    type => {
+      const engine = createGameEngine(type, players(2));
+      expect(engine.getCurrentRoundNumber()).toBe(1);
+      engine.applyRound([S(1), S(1), S(1)]);
+      expect(engine.getCurrentRoundNumber()).toBe(1);
+      engine.applyRound([S(1), S(1), S(1)]);
+      expect(engine.getCurrentRoundNumber()).toBe(2);
+    },
+  );
+});
