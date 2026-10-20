@@ -7,12 +7,16 @@ interface DebugImageViewerProps {
   artifact: DebugArtifact;
 }
 
+// Native paths come from java.io.File.toURI(), which writes "file:/data/..." with one slash;
+// React Native's Image only loads the "file:///data/..." form.
+const toImageUri = (path: string) => path.replace(/^file:\/(?!\/)/, 'file:///');
+
 export const DebugImageViewer = ({ artifact }: DebugImageViewerProps) => (
   <View style={styles.container}>
     <Text style={styles.title}>{artifact.title}</Text>
     <Text style={styles.meta}>{artifact.kind}</Text>
-    {artifact.path.startsWith('file://') ? (
-      <Image source={{ uri: artifact.path }} style={styles.preview} />
+    {artifact.path.startsWith('file:') ? (
+      <Image source={{ uri: toImageUri(artifact.path) }} style={styles.preview} resizeMode="contain" />
     ) : null}
     <Text style={styles.path}>{artifact.path}</Text>
     {artifact.note ? <Text style={styles.note}>{artifact.note}</Text> : null}

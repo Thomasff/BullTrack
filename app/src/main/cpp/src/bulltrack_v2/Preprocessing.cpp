@@ -10,17 +10,13 @@
 namespace bulltrack {
 namespace {
 
-cv::Rect BuildCenteredThirdRect(const cv::Size& image_size) {
-    const int width = std::max(1, image_size.width / 3);
-    const int height = std::max(1, image_size.height / 3);
-    const int x = std::max(0, (image_size.width - width) / 2);
-    const int y = std::max(0, (image_size.height - height) / 2);
-    return cv::Rect(x, y, width, height);
-}
+// Inner edge of the red sampling ring, as a fraction of the board radius: just inside the
+// treble bed (about 0.58 of the double ring's outer edge), so trebles and doubles are both in.
+constexpr double kRedSampleInnerRadius = 0.45;
 
 AdaptiveRedLabModel BuildFallbackAdaptiveRedLabModel(const cv::Size& image_size) {
     AdaptiveRedLabModel model;
-    model.sample_rect = BuildCenteredThirdRect(image_size);
+    model.sample_rect = cv::Rect(0, 0, image_size.width, image_size.height);
     return model;
 }
 
@@ -38,7 +34,7 @@ AdaptiveRedLabModel EstimateAdaptiveRedLabModel(const cv::Mat& img, int max_samp
 
     cv::Mat lab;
     cv::cvtColor(img, lab, cv::COLOR_BGR2Lab);
-    const cv::Rect sample_rect = BuildCenteredThirdRect(img.size());
+    const cv::Rect sample_rect(0, 0, img.cols, img.rows);
 
     struct SamplePixel {
         cv::Point point;
@@ -47,10 +43,20 @@ AdaptiveRedLabModel EstimateAdaptiveRedLabModel(const cv::Mat& img, int max_samp
         float b = 0.0f;
     };
 
+    // Sample from the ring holding the treble and double beds (the crop is the board box, so the
+    // board is the inscribed ellipse). The centre third only holds the tiny inner bull, which the
+    // heavy measurement blur often washes into the outer bull, leaving no red sample at all.
+    const double half_width = std::max(1.0, img.cols * 0.5);
+    const double half_height = std::max(1.0, img.rows * 0.5);
     std::vector<SamplePixel> candidates;
-    candidates.reserve(static_cast<size_t>(sample_rect.area()));
-    for (int y = sample_rect.y; y < sample_rect.y + sample_rect.height; ++y) {
-        for (int x = sample_rect.x; x < sample_rect.x + sample_rect.width; ++x) {
+    for (int y = 0; y < img.rows; ++y) {
+        const double ny = (y + 0.5 - half_height) / half_height;
+        for (int x = 0; x < img.cols; ++x) {
+            const double nx = (x + 0.5 - half_width) / half_width;
+            const double radius_sq = nx * nx + ny * ny;
+            if (radius_sq < kRedSampleInnerRadius * kRedSampleInnerRadius || radius_sq > 1.0) {
+                continue;
+            }
             const cv::Vec3b lab_pixel = lab.at<cv::Vec3b>(y, x);
             const float l = static_cast<float>(lab_pixel[0]);
             const float a = static_cast<float>(lab_pixel[1]);
@@ -71,17 +77,22 @@ AdaptiveRedLabModel EstimateAdaptiveRedLabModel(const cv::Mat& img, int max_samp
         return BuildFallbackAdaptiveRedLabModel(img.size());
     }
 
-    std::stable_sort(candidates.begin(), candidates.end(), [](const SamplePixel& lhs, const SamplePixel& rhs) {
-        if (lhs.a != rhs.a) {
-            return lhs.a > rhs.a;
-        }
-        if (lhs.l != rhs.l) {
-            return lhs.l > rhs.l;
-        }
-        return lhs.b > rhs.b;
-    });
-
     const int selected_count = std::min<int>(std::max(1, max_sample_count), static_cast<int>(candidates.size()));
+    // Only the reddest few are used, so a partial sort is enough over the much larger ring.
+    std::partial_sort(
+        candidates.begin(),
+        candidates.begin() + selected_count,
+        candidates.end(),
+        [](const SamplePixel& lhs, const SamplePixel& rhs) {
+            if (lhs.a != rhs.a) {
+                return lhs.a > rhs.a;
+            }
+            if (lhs.l != rhs.l) {
+                return lhs.l > rhs.l;
+            }
+            return lhs.b > rhs.b;
+        });
+
     float sum_l = 0.0f;
     float sum_a = 0.0f;
     float sum_b = 0.0f;
