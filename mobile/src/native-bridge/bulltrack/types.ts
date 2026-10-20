@@ -53,6 +53,8 @@ export interface FinishRoundResult {
   debugArtifacts: DebugArtifact[];
 }
 
+export type SoundCue = 'ready' | 'dart' | 'error';
+
 export interface BullTrackNativeBridge {
   prepareRoundCamera(): Promise<CameraReadyState>;
   startLiveRound(input: StartLiveRoundInput): Promise<StartLiveRoundResult>;
@@ -62,4 +64,6 @@ export interface BullTrackNativeBridge {
   loadDebugArtifacts(roundId: string): Promise<DebugArtifact[]>;
   setZoomRatio(zoomRatio: number): Promise<CameraReadyState>;
   getPreviewDiagnostics(): Promise<PreviewDiagnostics>;
+  preloadSoundCues(): void;
+  playSoundCue(cue: SoundCue): void;
 }

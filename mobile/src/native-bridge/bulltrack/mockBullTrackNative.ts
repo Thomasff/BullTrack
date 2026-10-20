@@ -85,4 +85,6 @@ export const mockBullTrackNativeBridge: BullTrackNativeBridge = {
   loadDebugArtifacts: async () => mockArtifacts,
   setZoomRatio: async () => readyState,
   getPreviewDiagnostics: async () => previewDiagnostics,
+  preloadSoundCues: () => undefined,
+  playSoundCue: () => undefined,
 };

@@ -17,6 +17,7 @@ class BullTrackModule(
 
     private val controller = BullTrackRuntime.get(reactContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val soundCues = BullTrackSoundCues(reactContext)
 
     override fun prepareRoundCamera(promise: Promise) {
         resolveSuspendPromise(promise) {
@@ -71,12 +72,21 @@ class BullTrackModule(
         promise.resolve(BullTrackPreviewDiagnostics.toWritableMap())
     }
 
+    override fun preloadSoundCues() {
+        soundCues.preload()
+    }
+
+    override fun playSoundCue(cue: String) {
+        soundCues.play(cue)
+    }
+
     override fun addListener(eventName: String) = Unit
 
     override fun removeListeners(count: Double) = Unit
 
     override fun invalidate() {
         controller.invalidate()
+        soundCues.release()
         super.invalidate()
     }
 

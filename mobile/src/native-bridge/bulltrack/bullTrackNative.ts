@@ -7,6 +7,7 @@ import type {
   FinishRoundInput,
   FinishRoundResult,
   PreviewDiagnostics,
+  SoundCue,
   RedetectCurrentRoundInput,
   StartLiveRoundInput,
   StartLiveRoundResult,
@@ -32,6 +33,8 @@ const nativeBridge: BullTrackNativeBridge | null = bullTrackNativeModule
         bullTrackNativeModule.setZoomRatio(zoomRatio) as Promise<CameraReadyState>,
       getPreviewDiagnostics: async () =>
         bullTrackNativeModule.getPreviewDiagnostics() as Promise<PreviewDiagnostics>,
+      preloadSoundCues: () => bullTrackNativeModule.preloadSoundCues(),
+      playSoundCue: (cue: SoundCue) => bullTrackNativeModule.playSoundCue(cue),
     }
   : null;
 

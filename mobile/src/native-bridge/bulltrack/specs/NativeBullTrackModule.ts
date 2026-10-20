@@ -10,6 +10,8 @@ export interface Spec extends TurboModule {
   loadDebugArtifacts(roundId: string): Promise<Array<Object>>;
   setZoomRatio(zoomRatio: number): Promise<Object>;
   getPreviewDiagnostics(): Promise<Object>;
+  preloadSoundCues(): void;
+  playSoundCue(cue: string): void;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }

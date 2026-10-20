@@ -18,8 +18,12 @@ jest.mock('../src/application/services/historyRepository', () => ({
 jest.mock('../src/native-bridge/bulltrack/bullTrackNative', () => ({
   bullTrackNativeModule: {},
   isRealBullTrackNativeBridgeAvailable: true,
-  bullTrackNativeBridge: {},
+  bullTrackNativeBridge: {
+    preloadSoundCues: () => undefined,
+    playSoundCue: (cue: string) => mockPlayedCues.push(cue),
+  },
 }));
+const mockPlayedCues: string[] = [];
 
 import {
   ensureBullTrackSubscriptions,
@@ -37,6 +41,24 @@ beforeEach(() => {
   resetLiveGameSession();
   ensureBullTrackSubscriptions();
   startGameSession('game301', ['Alice'], '301');
+  mockPlayedCues.length = 0;
+});
+
+test('sound cues: ready, each new live dart, and a failed live round', () => {
+  emit('onRoundStateChanged', { roundId: 'r1', phase: 'starting', statusMessage: '' });
+  emit('onRoundStateChanged', { roundId: 'r1', phase: 'capturing', statusMessage: '' });
+  emit('onThrowsUpdated', { roundId: 'r1', throws: [], statusMessage: '', canRedetect: false });
+  emit('onThrowsUpdated', { roundId: 'r1', throws: darts.slice(0, 1), statusMessage: '', canRedetect: false });
+  emit('onThrowsUpdated', { roundId: 'r1', throws: darts.slice(0, 1), statusMessage: '', canRedetect: false });
+  emit('onThrowsUpdated', { roundId: 'r1', throws: darts.slice(0, 2), statusMessage: '', canRedetect: false });
+  // Manual end fills misses: the final result is not a new dart.
+  emit('onThrowsUpdated', { roundId: 'r1', throws: darts, statusMessage: '', canRedetect: true });
+  expect(mockPlayedCues).toEqual(['ready', 'dart', 'dart']);
+
+  mockPlayedCues.length = 0;
+  emit('onRoundStateChanged', { roundId: 'r2', phase: 'starting', statusMessage: '' });
+  emit('onNativeError', { message: '首帧未检测到 board' });
+  expect(mockPlayedCues).toEqual(['error']);
 });
 
 test('capture readiness follows starting -> capturing', () => {

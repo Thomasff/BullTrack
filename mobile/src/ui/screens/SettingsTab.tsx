@@ -4,10 +4,13 @@ import { colors } from '../theme/colors';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { useSettingsStore } from '../../application/stores/settingsStore';
 import { clearHistory } from '../../application/services/historyRepository';
+import { playSoundCue } from '../../application/services/liveRoundService';
 
 export const SettingsTab = () => {
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
   const setShowDebugInfo = useSettingsStore(state => state.setShowDebugInfo);
+  const soundCues = useSettingsStore(state => state.soundCues);
+  const setSoundCues = useSettingsStore(state => state.setSoundCues);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [clearResult, setClearResult] = useState<'done' | 'failed' | null>(null);
 
@@ -30,6 +33,24 @@ export const SettingsTab = () => {
             value={showDebugInfo}
             onValueChange={value => {
               setShowDebugInfo(value).catch(() => undefined);
+            }}
+            trackColor={{ true: colors.accent, false: colors.border }}
+            thumbColor={colors.panel}
+          />
+        </View>
+        <View style={[styles.row, styles.rowDivider]}>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>提示音</Text>
+            <Text style={styles.description}>可以投镖、识别到一镖、出错时发出落镖声</Text>
+          </View>
+          <Switch
+            value={soundCues}
+            onValueChange={value => {
+              setSoundCues(value).catch(() => undefined);
+              if (value) {
+                // Let the player hear what the cue sounds like.
+                playSoundCue('dart');
+              }
             }}
             trackColor={{ true: colors.accent, false: colors.border }}
             thumbColor={colors.panel}
@@ -89,6 +110,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     gap: 12,
+  },
+  rowDivider: {
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
   pressed: {
     backgroundColor: colors.panelStrong,

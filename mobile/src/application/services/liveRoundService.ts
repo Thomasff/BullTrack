@@ -14,6 +14,7 @@ import { useSettingsStore } from '../stores/settingsStore';
 import { createGameEngine, getGameEngine, resetGameEngine } from './gameRules';
 import { saveCompletedMatch } from './historyRepository';
 import { toFriendlyErrorText } from './nativeErrorText';
+import type { SoundCue } from '../../native-bridge/bulltrack/types';
 import type {
   CameraStatus,
   GameType,
@@ -27,6 +28,13 @@ const eventEmitter =
   bullTrackNativeModule !== null
     ? new NativeEventEmitter(bullTrackNativeModule)
     : null;
+
+// Cues are for a player standing at the board who cannot watch the screen.
+export const playSoundCue = (cue: SoundCue) => {
+  if (useSettingsStore.getState().soundCues) {
+    bullTrackNativeBridge.playSoundCue(cue);
+  }
+};
 
 const applyRoundResult = (throws: ThrowResult[]) => {
   const engine = getGameEngine();
@@ -62,6 +70,7 @@ export const ensureBullTrackSubscriptions = () => {
   if (isSubscribed || eventEmitter === null) {
     return;
   }
+  bullTrackNativeBridge.preloadSoundCues();
 
   subscriptions = [
     eventEmitter.addListener('onCameraStatusChanged', payload => {
@@ -78,6 +87,9 @@ export const ensureBullTrackSubscriptions = () => {
 
       if (event.phase === 'starting') {
         useLiveFrameStore.getState().clear();
+      }
+      if (event.phase === 'capturing') {
+        playSoundCue('ready');
       }
       if (event.phase === 'starting' || event.phase === 'capturing') {
         useGameStore.getState().setRoundState({
@@ -116,6 +128,15 @@ export const ensureBullTrackSubscriptions = () => {
         statusMessage: string;
         canRedetect: boolean;
       };
+      const previous = useGameStore.getState();
+      // Only a dart newly found during live capture, not the final/redetect result.
+      if (
+        !event.canRedetect &&
+        previous.status === 'roundInProgress' &&
+        event.throws.length > previous.currentThrows.length
+      ) {
+        playSoundCue('dart');
+      }
       useGameStore.getState().setRoundState({
         roundId: event.roundId,
         status: event.canRedetect ? 'showingResult' : 'roundInProgress',
@@ -136,6 +157,10 @@ export const ensureBullTrackSubscriptions = () => {
       const event = payload as {
         message: string;
       };
+      // A failed live round (e.g. board not found) leaves the player waiting at the board.
+      if (useGameStore.getState().status === 'roundInProgress') {
+        playSoundCue('error');
+      }
       // Status transitions come from onRoundStateChanged; only surface the error here.
       useVisionDebugStore.getState().setLastNativeError(event.message);
       useGameStore.getState().setRoundState({
