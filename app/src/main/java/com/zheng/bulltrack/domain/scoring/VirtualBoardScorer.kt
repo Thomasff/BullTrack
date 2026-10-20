@@ -31,6 +31,34 @@ object VirtualBoardScorer {
         3, 19, 7, 16, 8, 11, 14, 9, 12, 5
     )
 
+    // Ring edges of the real board, normalized so 1 is the outer edge of the double ring
+    // (the native rectification scale). Measured on the soft-tip board used for development;
+    // a standard steel-tip board is within about 1% except the bull.
+    private val REAL_RING_EDGES = floatArrayOf(0f, 0.032f, 0.110f, 0.581f, 0.626f, 0.952f, 1.0f)
+    private val VIRTUAL_RING_EDGES = floatArrayOf(
+        0f, INNER_BULL_END, OUTER_BULL_END, INNER_SINGLE_END, TRIPLE_END, OUTER_SINGLE_END, DOUBLE_END
+    )
+    // Real radius 1.15 lands on the virtual board edge; anything further is clamped.
+    private const val REAL_MISS_SPAN = 0.15f
+
+    /**
+     * Maps a native point (real board proportions) onto the widened virtual board used for
+     * scoring and drawing, keeping its angle and moving its radius ring by ring.
+     */
+    fun fromRealBoard(position: DartPosition): DartPosition {
+        val realRadius = radius(position)
+        if (realRadius == 0f) return position
+        val virtualRadius = if (realRadius >= REAL_RING_EDGES.last()) {
+            DOUBLE_END + (realRadius - REAL_RING_EDGES.last()) / REAL_MISS_SPAN * (BOARD_OUTER_END - DOUBLE_END)
+        } else {
+            val ring = (1 until REAL_RING_EDGES.size).first { realRadius < REAL_RING_EDGES[it] }
+            val t = (realRadius - REAL_RING_EDGES[ring - 1]) / (REAL_RING_EDGES[ring] - REAL_RING_EDGES[ring - 1])
+            VIRTUAL_RING_EDGES[ring - 1] + t * (VIRTUAL_RING_EDGES[ring] - VIRTUAL_RING_EDGES[ring - 1])
+        }
+        val scale = virtualRadius / realRadius
+        return DartPosition(position.x * scale, position.y * scale)
+    }
+
     fun calculateScore(position: DartPosition): ThrowResult {
         val clamped = clampToBoard(position)
         val r = radius(clamped)

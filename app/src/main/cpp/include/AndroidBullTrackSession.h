@@ -74,7 +74,11 @@ private:
     cv::Mat latest_frame_bgr_;
     std::vector<TrackedYoloFrameState> recent_frames_;
     std::optional<PendingYoloCandidateState> pending_candidate_;
+    // Latest frame whose dart count equals the confirmed count: the "before" image of the next dart.
+    std::optional<TrackedYoloFrameState> last_clean_frame_;
     int last_confirmed_dart_count_ = 0;
+    // Darts YOLO already saw on the empty-board frame; the round still allows three more.
+    int round_start_dart_count_ = 0;
     bool started_ = false;
     int current_frame_index_ = 2;
 };

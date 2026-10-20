@@ -31,7 +31,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 import java.util.concurrent.Executors
-import kotlin.math.hypot
 
 class BullTrackLiveRoundController(
     private val reactContext: ReactApplicationContext
@@ -114,12 +113,14 @@ class BullTrackLiveRoundController(
         return currentCameraReadyState("已更新原生 round zoom")
     }
 
-    fun startLiveRound(): WritableMap {
+    fun startLiveRound(debugImages: Boolean): WritableMap {
         ensureSupportedRuntime()
         ensureDetectorInitialized()
         if (roundJob?.isActive == true || currentSession != null) {
             error("A live round is already running or awaiting confirmation.")
         }
+        detector.setDebugImagesEnabled(debugImages)
+        artifactStore.pruneOldRounds()
         stopRequested = false
         val roundId = createRoundId()
         roundJob = scope.launch(bridgeDispatcher) {
@@ -410,16 +411,16 @@ class BullTrackLiveRoundController(
             )
         }
 
-        val addedCount = mergeNewThrows(
-            existing = session.throws,
-            detected = listOfNotNull(frameUpdate.newThrow),
-        )
+        // The native gate only triggers once YOLO confirmed one more dart, so every trigger adds a
+        // dart (darts grouped in one bed are close but distinct). Without a tip point it becomes a
+        // miss the player can correct, keeping the count in step with the native session.
+        if (session.throws.size < MAX_DARTS) {
+            session.throws += frameUpdate.newThrow ?: createMissThrow(session.throws.size)
+        }
         val statusMessage = if (frameUpdate.newThrow == null) {
-            "第 $frameIndex 张图片触发精检，但未识别到新飞镖: ${frameUpdate.gateReason}"
-        } else if (addedCount > 0) {
-            "第 $frameIndex 张图片识别到新飞镖，当前共 ${session.throws.size} 支"
+            "第 $frameIndex 张图片触发精检，但未找到镖尖，先记为脱靶: ${frameUpdate.gateReason}"
         } else {
-            "第 $frameIndex 张图片触发精检，但结果与已有飞镖重复"
+            "第 $frameIndex 张图片识别到新飞镖，当前共 ${session.throws.size} 支"
         }
         emitThrowsUpdated(
             roundId = session.roundId,
@@ -609,31 +610,6 @@ class BullTrackLiveRoundController(
         }
     }
 
-    private fun mergeNewThrows(
-        existing: MutableList<ThrowResult>,
-        detected: List<ThrowResult>,
-    ): Int {
-        var added = 0
-        detected.forEach { throwResult ->
-            if (existing.size >= MAX_DARTS) {
-                return@forEach
-            }
-            val position = throwResult.position ?: return@forEach
-            val duplicate = existing.any { existingThrow ->
-                val existingPosition = existingThrow.position ?: return@any false
-                hypot(
-                    (existingPosition.x - position.x).toDouble(),
-                    (existingPosition.y - position.y).toDouble(),
-                ) < DUPLICATE_DISTANCE_THRESHOLD
-            }
-            if (!duplicate) {
-                existing += throwResult
-                added += 1
-            }
-        }
-        return added
-    }
-
     private fun createMissThrow(index: Int): ThrowResult {
         val position = when (index) {
             0 -> DartPosition(1.08f, 0f)
@@ -775,6 +751,5 @@ class BullTrackLiveRoundController(
         private const val FRAME_INTERVAL_MS = 333L
         private const val FRAME_WAIT_SLICE_MS = 50L
         private const val NANOS_PER_MILLISECOND = 1_000_000L
-        private const val DUPLICATE_DISTANCE_THRESHOLD = 0.08
     }
 }

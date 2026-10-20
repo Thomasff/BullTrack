@@ -26,6 +26,17 @@ class BullTrackArtifactStore(
         return listArtifacts(roundId)
     }
 
+    /** Keeps only the newest rounds' debug images so app storage does not grow without bound. */
+    fun pruneOldRounds(keep: Int = KEEP_ROUNDS) {
+        baseDir
+            .listFiles()
+            .orEmpty()
+            .filter { it.isDirectory }
+            .sortedByDescending { it.lastModified() }
+            .drop(keep)
+            .forEach { it.deleteRecursively() }
+    }
+
     fun listArtifacts(roundId: String): List<WritableMap> {
         val roundDir = File(baseDir, roundId)
         if (!roundDir.exists() || !roundDir.isDirectory) {
@@ -89,4 +100,8 @@ class BullTrackArtifactStore(
         val title: String,
         val note: String
     )
+
+    private companion object {
+        const val KEEP_ROUNDS = 10
+    }
 }

@@ -14,6 +14,8 @@ class MockDartDetector(
 
     override fun init() {
         delegate.init()
+        // This smoke-test shell exists to inspect the native chain, so it always wants debug images.
+        delegate.setDebugImagesEnabled(true)
         loadDebugBitmapsIfNeeded()
     }
 

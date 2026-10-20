@@ -192,6 +192,16 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeWarmUp(
     }
 }
 
+JNIEXPORT void JNICALL
+Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeSetDebugImagesEnabled(
+    JNIEnv* env,
+    jobject thiz,
+    jboolean enabled) {
+    (void)env;
+    (void)thiz;
+    bulltrack::SetDebugImagesActive(enabled == JNI_TRUE);
+}
+
 JNIEXPORT jlong JNICALL
 Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeCreateSession(
     JNIEnv* env,

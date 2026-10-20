@@ -1,5 +1,7 @@
 #include "YoloNcnnDetector.h"
 
+#include "DebugImageConfig.h"
+
 #include <ncnn/gpu.h>
 #include <ncnn/net.h>
 
@@ -24,6 +26,9 @@ constexpr const char* kOutputBlobName = "out0";
 constexpr int kInputSize = 640;
 constexpr float kScoreThreshold = 0.25f;
 constexpr float kNmsThreshold = 0.45f;
+// Darts are thin and often land side by side, so their boxes overlap a lot without being the
+// same dart; a low threshold merged neighbours into one box and the second dart was missed.
+constexpr float kDartNmsThreshold = 0.7f;
 constexpr int kGpuDeviceIndex = 0;
 
 AAssetManager* g_asset_manager = nullptr;
@@ -128,7 +133,8 @@ std::vector<YoloDetectionBox> ApplyNms(std::vector<YoloDetectionBox> boxes) {
             if (candidate.label != selected.label) {
                 continue;
             }
-            if (IoU(candidate.rect, selected.rect) > kNmsThreshold) {
+            const float threshold = candidate.label == "dart" ? kDartNmsThreshold : kNmsThreshold;
+            if (IoU(candidate.rect, selected.rect) > threshold) {
                 suppressed = true;
                 break;
             }
@@ -325,7 +331,9 @@ private:
 
         std::vector<YoloDetectionBox> boxes = DecodeOutput(output, letterbox, image_bgr.size());
         std::vector<YoloDetectionBox> final_boxes = ApplyNms(std::move(boxes));
-        return {final_boxes, DrawOverlay(image_bgr, final_boxes, backend, status_detail), backend, status_detail};
+        // The overlay is only a debug image; skip the full-frame copy and drawing otherwise.
+        cv::Mat overlay = DebugImagesActive() ? DrawOverlay(image_bgr, final_boxes, backend, status_detail) : cv::Mat();
+        return {final_boxes, overlay, backend, status_detail};
     }
 
     std::vector<YoloDetectionBox> DecodeOutput(

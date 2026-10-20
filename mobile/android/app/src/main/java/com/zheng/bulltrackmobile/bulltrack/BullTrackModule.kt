@@ -27,7 +27,8 @@ class BullTrackModule(
 
     override fun startLiveRound(request: ReadableMap, promise: Promise) {
         resolvePromise(promise) {
-            controller.startLiveRound()
+            val debugImages = request.hasKey("debugImages") && request.getBoolean("debugImages")
+            controller.startLiveRound(debugImages)
         }
     }
 

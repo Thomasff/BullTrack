@@ -237,6 +237,7 @@ export const startLiveRound = async () => {
   await bullTrackNativeBridge.startLiveRound({
     gameMode: state.selectedMode,
     playerId: state.currentPlayerId,
+    debugImages: useSettingsStore.getState().showDebugInfo,
   });
 };
 

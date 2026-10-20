@@ -18,6 +18,7 @@ class NativeDartDetector(
     private external fun nativeInit(assetManager: AssetManager?)
     private external fun nativeRelease()
     private external fun nativeWarmUp()
+    private external fun nativeSetDebugImagesEnabled(enabled: Boolean)
     private external fun nativeCreateSession(): Long
     private external fun nativeDestroySession(sessionId: Long)
     private external fun nativeStartRound(
@@ -49,6 +50,11 @@ class NativeDartDetector(
 
     fun release() {
         nativeRelease()
+    }
+
+    /** Debug images cost drawing and JPEG encoding on every frame, so they are opt-in. */
+    fun setDebugImagesEnabled(enabled: Boolean) {
+        nativeSetDebugImagesEnabled(enabled)
     }
 
     override fun createSession(): Long = nativeCreateSession()
@@ -131,6 +137,8 @@ class NativeDartDetector(
     }
 
     private fun toThrowResult(normalizedX: Float, normalizedY: Float): ThrowResult {
-        return VirtualBoardScorer.calculateScore(DartPosition(normalizedX, normalizedY))
+        return VirtualBoardScorer.calculateScore(
+            VirtualBoardScorer.fromRealBoard(DartPosition(normalizedX, normalizedY))
+        )
     }
 }

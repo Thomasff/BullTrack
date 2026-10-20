@@ -69,6 +69,9 @@ void AppendDebugImage(
     const std::string& step_code,
     const std::string& stage_name,
     const cv::Mat& image) {
+    if (!DebugImagesActive()) {
+        return;
+    }
     char file_name[128];
     std::snprintf(
         file_name,
@@ -550,7 +553,7 @@ TrackedYoloFrameState BuildTrackedYoloFrameState(
         frame_state.detected_board_crop_bgr = CropBoardByRect(frame_bgr, frame_state.board_box);
     }
     frame_state.dart_boxes = SelectTopDartBoxes(detection, max_dart_count);
-    frame_state.overlay_bgr = detection.overlay_bgr.clone();
+    frame_state.overlay_bgr = detection.overlay_bgr;
     frame_state.yolo_status = detection.execution_backend;
     if (!detection.status_detail.empty()) {
         frame_state.yolo_status += " " + detection.status_detail;
@@ -975,6 +978,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     recent_frames_.clear();
     pending_candidate_.reset();
     last_confirmed_dart_count_ = static_cast<int>(SelectTopDartBoxes(baseline.yolo_detection, 3).size());
+    round_start_dart_count_ = last_confirmed_dart_count_;
     PushRecentFrame(
         recent_frames_,
         BuildTrackedYoloFrameState(
@@ -983,6 +987,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
             first_frame_board_box_,
             baseline.yolo_detection,
             3));
+    last_clean_frame_ = recent_frames_.back();
 
     started_ = true;
     current_frame_index_ = 2;
@@ -1008,7 +1013,8 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
         return result;
     }
 
-    const int max_candidate_count = std::min(3, last_confirmed_dart_count_ + 1);
+    const int max_dart_count = round_start_dart_count_ + 3;
+    const int max_candidate_count = std::min(max_dart_count, last_confirmed_dart_count_ + 1);
     TrackedYoloFrameState current_frame_state = BuildTrackedYoloFrameState(
         current_frame_index_,
         latest_frame_bgr_,
@@ -1030,15 +1036,22 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     PushRecentFrame(recent_frames_, current_frame_state);
     const TrackedYoloFrameState& stored_current = recent_frames_.back();
 
+    if (current_count == last_confirmed_dart_count_ && stored_current.has_board_box) {
+        last_clean_frame_ = stored_current;
+    }
+
     if (current_count <= last_confirmed_dart_count_) {
         pending_candidate_.reset();
         result.gate_reason = "yolo_count_not_increased";
     } else if (!pending_candidate_.has_value()) {
-        if (recent_frames_.size() < 2) {
+        // Compare against the latest frame showing exactly the confirmed darts, not simply the
+        // previous frame: after a failed confirmation the previous frame already holds the new
+        // dart, and every later attempt would then fail for the rest of the round.
+        if (!last_clean_frame_.has_value()) {
             result.gate_reason = "yolo_count_not_increased";
         } else {
             pending_candidate_ = PendingYoloCandidateState{
-                recent_frames_[recent_frames_.size() - 2],
+                last_clean_frame_.value(),
                 stored_current
             };
             result.gate_reason = "yolo_count_increased_wait_next_frame";
@@ -1075,27 +1088,33 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
                         new_dart_box,
                         "stable_count_confirmed"));
 #endif
-                PreciseDetectionDebugResult precise_result = DetectSingleDartOnFrames(
-                    first_frame_preprocessed_for_alignment_,
-                    pending_candidate_->base_frame.detected_board_crop_bgr,
-                    stored_current.detected_board_crop_bgr,
-                    pending_candidate_->base_frame.board_box,
-                    stored_current.board_box,
-                    new_dart_box,
-                    first_frame_point_rectification_h_,
-                    first_frame_rectified_radius_,
-                    pipeline_config_,
-                    current_frame_index_);
-                result.precise_debug_images = std::move(precise_result.debug_images);
                 result.gate_triggered = true;
                 result.gate_reason = "trigger_precise_detection";
-                result.has_detection =
-                    precise_result.detection_result.has_dart &&
-                    precise_result.detection_result.point_norm.has_value();
-                if (precise_result.detection_result.point_norm.has_value()) {
-                    result.detected_point_norm = precise_result.detection_result.point_norm.value();
+                try {
+                    PreciseDetectionDebugResult precise_result = DetectSingleDartOnFrames(
+                        first_frame_preprocessed_for_alignment_,
+                        pending_candidate_->base_frame.detected_board_crop_bgr,
+                        stored_current.detected_board_crop_bgr,
+                        pending_candidate_->base_frame.board_box,
+                        stored_current.board_box,
+                        new_dart_box,
+                        first_frame_point_rectification_h_,
+                        first_frame_rectified_radius_,
+                        pipeline_config_,
+                        current_frame_index_);
+                    result.precise_debug_images = std::move(precise_result.debug_images);
+                    result.has_detection =
+                        precise_result.detection_result.has_dart &&
+                        precise_result.detection_result.point_norm.has_value();
+                    if (precise_result.detection_result.point_norm.has_value()) {
+                        result.detected_point_norm = precise_result.detection_result.point_norm.value();
+                    }
+                } catch (const std::exception& error) {
+                    // YOLO confirmed the dart, so it still counts; it just has no tip point.
+                    result.gate_reason = std::string("precise_detection_failed: ") + error.what();
                 }
-                last_confirmed_dart_count_ = std::min(3, last_confirmed_dart_count_ + 1);
+                last_confirmed_dart_count_ = std::min(max_dart_count, last_confirmed_dart_count_ + 1);
+                last_clean_frame_ = stored_current;
                 pending_candidate_.reset();
             }
         }

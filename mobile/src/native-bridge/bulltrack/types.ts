@@ -13,6 +13,8 @@ export interface CameraReadyState {
 export interface StartLiveRoundInput {
   gameMode: GameType;
   playerId: string;
+  // Native debug images cost CPU and storage, so they follow the "show debug info" setting.
+  debugImages: boolean;
 }
 
 export interface StartLiveRoundResult {
