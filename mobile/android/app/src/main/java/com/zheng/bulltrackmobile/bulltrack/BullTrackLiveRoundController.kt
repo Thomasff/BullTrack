@@ -16,6 +16,7 @@ import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.RingType
 import com.zheng.bulltrack.domain.model.ThrowResult
 import com.zheng.bulltrack.vision.NativeDartDetector
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -263,30 +264,48 @@ class BullTrackLiveRoundController(
         )
 
         bindNativeCaptureOnly()
-        val firstFrame = cameraManager.captureFirstFrameForRound()
-        val firstFrameCapturedNs = SystemClock.elapsedRealtimeNanos()
         clearLiveFrames()
-        publishLiveFrame(roundId, firstFrame.bitmap)
-        val sessionId = withTimeout(NATIVE_CALL_TIMEOUT_MS) {
-            withContext(Dispatchers.Default) {
-                detector.createSession()
-            }
-        }
-
-        val startUpdate = runCatching {
-            withTimeout(NATIVE_CALL_TIMEOUT_MS) {
+        // Building the board from the empty-board frame sometimes fails on one frame and works on
+        // the next, so retry with fresh frames before giving up instead of making the player
+        // walk back to the phone.
+        var sessionId = 0L
+        var firstFrameCapturedNs = 0L
+        var firstFrameStatus: String? = null
+        for (attempt in 1..START_ROUND_ATTEMPTS) {
+            val firstFrame = cameraManager.captureFirstFrameForRound()
+            firstFrameCapturedNs = SystemClock.elapsedRealtimeNanos()
+            firstFrameStatus = firstFrame.cameraConfig?.statusMessage
+            publishLiveFrame(roundId, firstFrame.bitmap)
+            val attemptSessionId = withTimeout(NATIVE_CALL_TIMEOUT_MS) {
                 withContext(Dispatchers.Default) {
-                    detector.startRound(sessionId, firstFrame.bitmap)
+                    detector.createSession()
                 }
             }
-        }.getOrElse { error ->
-            detector.destroySession(sessionId)
-            throw error
-        }
-        artifactStore.saveArtifacts(roundId, startUpdate.debugImages)
-        startUpdate.errorMessage?.let { errorMessage ->
-            detector.destroySession(sessionId)
-            error(errorMessage)
+
+            val startUpdate = runCatching {
+                withTimeout(NATIVE_CALL_TIMEOUT_MS) {
+                    withContext(Dispatchers.Default) {
+                        detector.startRound(attemptSessionId, firstFrame.bitmap)
+                    }
+                }
+            }.getOrElse { error ->
+                detector.destroySession(attemptSessionId)
+                // "No board found" arrives as an exception; timeouts and cancellation do not retry.
+                if (attempt == START_ROUND_ATTEMPTS || stopRequested || error is CancellationException) {
+                    throw error
+                }
+                null
+            } ?: continue
+            artifactStore.saveArtifacts(roundId, startUpdate.debugImages)
+            val errorMessage = startUpdate.errorMessage
+            if (errorMessage == null) {
+                sessionId = attemptSessionId
+                break
+            }
+            detector.destroySession(attemptSessionId)
+            if (attempt == START_ROUND_ATTEMPTS || stopRequested) {
+                error(errorMessage)
+            }
         }
 
         val session = RoundSession(
@@ -300,7 +319,7 @@ class BullTrackLiveRoundController(
         emitRoundState(
             phase = "capturing",
             roundId = roundId,
-            statusMessage = firstFrame.cameraConfig?.statusMessage ?: "已拍摄第 1 张图片，开始连续检测",
+            statusMessage = firstFrameStatus ?: "已拍摄第 1 张图片，开始连续检测",
             throws = emptyList(),
             canRedetect = false,
         )
@@ -632,7 +651,9 @@ class BullTrackLiveRoundController(
             gateReason == "yolo_count_not_increased" -> "YOLO 飞镖数量未增加"
             gateReason == "yolo_count_increased_wait_next_frame" -> "YOLO 飞镖数量增加，等待下一张确认"
             gateReason == "yolo_count_not_stable" -> "YOLO 飞镖数量未稳定"
-            gateReason == "yolo_new_dart_box_not_resolved" -> "YOLO 未能唯一确定新增飞镖框"
+            gateReason == "yolo_phantom_box_ignored" -> "多出的框已确认不是新镖，忽略"
+            gateReason.startsWith("yolo_count_increased_no_board_change") ->
+                "YOLO 多出一个框，但靶上没有新变化，已忽略（${gateReason.substringAfter(" ", "")}）"
             gateReason.startsWith("yolo_detect_failed:") -> "YOLO 检测失败"
             gateReason.isBlank() -> "未知原因"
             else -> gateReason
@@ -752,6 +773,7 @@ class BullTrackLiveRoundController(
         private const val NATIVE_CALL_TIMEOUT_MS = 12_000L
         private const val CAMERA_READY_TIMEOUT_MS = 4_000L
         private const val FRAME_INTERVAL_MS = 333L
+        private const val START_ROUND_ATTEMPTS = 3
         private const val FRAME_WAIT_SLICE_MS = 50L
         private const val NANOS_PER_MILLISECOND = 1_000_000L
     }

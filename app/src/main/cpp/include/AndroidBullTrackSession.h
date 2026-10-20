@@ -78,6 +78,14 @@ private:
     int last_confirmed_dart_count_ = 0;
     // Darts YOLO already saw on the empty-board frame; the round still allows three more.
     int round_start_dart_count_ = 0;
+    // Box count of the last extra YOLO box that showed no change on the board; such a box is not
+    // checked again until the count rises above it or drops back to the confirmed count.
+    int phantom_count_floor_ = 0;
+
+    void ConfirmNewDart(
+        const TrackedYoloFrameState& stable_frame,
+        int max_dart_count,
+        AndroidFrameProcessResult& result);
     bool started_ = false;
     int current_frame_index_ = 2;
 };

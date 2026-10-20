@@ -18,11 +18,6 @@
 namespace bulltrack {
 namespace {
 
-struct PreciseDetectionDebugResult {
-    SingleDartDetectionResult detection_result;
-    std::vector<DebugImageArtifact> debug_images;
-};
-
 struct LocalizedDartDetectionResult {
     bool has_dart = false;
     std::optional<cv::Point> point_in_round_board;
@@ -851,136 +846,35 @@ LocalizedDartDetectionResult LocateDartTipInAlignedPair(
     return result;
 }
 
-LocalizedDartDetectionResult DetectLocalizedDartTip(
-    const cv::Mat& first_preprocessed_gray,
-    const cv::Mat& before_board_crop_bgr,
-    const cv::Mat& after_board_crop_bgr,
+// Below this much change in the most changed box, a rise in the YOLO count is treated as an
+// extra box rather than a new dart. Rough first values; the counts go to the gate reason
+// (shown with debug info) so they can be tuned from real rounds.
+constexpr int kMinNewDartChangedPixels = 8;
+constexpr double kMinNewDartChangedRatio = 0.005;
+
+struct BoxChange {
+    int changed_pixels = 0;
+    int local_area = 0;
+};
+
+// Changed pixels inside a dart box between the aligned before/after images. These are the
+// blurred grayscale images, so board holes that shift by a pixel do not count as change.
+BoxChange CountChangedPixelsInBox(
+    const AlignedBoardPair& pair,
     const cv::Rect& after_board_box,
-    const YoloDetectionBox& dart_box,
-    const cv::Mat& point_rectification_h,
-    float rectified_radius,
-    const PipelineConfig& config,
-    int frame_index,
-    const std::string& debug_prefix) {
-    std::optional<AlignedBoardPair> pair = PrepareAlignedBoardPair(
-        first_preprocessed_gray,
-        before_board_crop_bgr,
-        after_board_crop_bgr,
-        config);
-    if (!pair.has_value()) {
-        LocalizedDartDetectionResult result;
-        result.reason = "local_dart_box_invalid";
-        return result;
+    const YoloDetectionBox& dart_box) {
+    cv::Rect local_rect;
+    try {
+        local_rect = ExpandAndClampLocalRect(
+            MapDetectionBoxToBoardCrop(dart_box, after_board_box, pair.round_board_size),
+            pair.round_board_size);
+    } catch (const std::exception&) {
+        return {};
     }
-    return LocateDartTipInAlignedPair(
-        pair.value(),
-        after_board_box,
-        dart_box,
-        point_rectification_h,
-        rectified_radius,
-        frame_index,
-        debug_prefix);
-}
-
-std::optional<YoloDetectionBox> ResolveNewDartBox(
-    const std::vector<YoloDetectionBox>& base_boxes,
-    const std::vector<YoloDetectionBox>& stable_boxes) {
-    if (stable_boxes.size() != base_boxes.size() + 1) {
-        return std::nullopt;
-    }
-    if (base_boxes.empty()) {
-        return stable_boxes.front();
-    }
-
-    struct DistancePair {
-        size_t stable_index = 0;
-        size_t base_index = 0;
-        float distance = 0.0f;
-    };
-
-    std::vector<DistancePair> distances;
-    distances.reserve(base_boxes.size() * stable_boxes.size());
-    for (size_t stable_index = 0; stable_index < stable_boxes.size(); ++stable_index) {
-        const cv::Point2f stable_center = BoxCenter(stable_boxes[stable_index]);
-        for (size_t base_index = 0; base_index < base_boxes.size(); ++base_index) {
-            const cv::Point2f base_center = BoxCenter(base_boxes[base_index]);
-            distances.push_back(DistancePair{
-                stable_index,
-                base_index,
-                static_cast<float>(cv::norm(stable_center - base_center))
-            });
-        }
-    }
-    std::sort(distances.begin(), distances.end(), [](const DistancePair& lhs, const DistancePair& rhs) {
-        return lhs.distance < rhs.distance;
-    });
-
-    std::vector<bool> used_stable(stable_boxes.size(), false);
-    std::vector<bool> used_base(base_boxes.size(), false);
-    size_t matched_count = 0;
-    for (const DistancePair& pair : distances) {
-        if (used_stable[pair.stable_index] || used_base[pair.base_index]) {
-            continue;
-        }
-        used_stable[pair.stable_index] = true;
-        used_base[pair.base_index] = true;
-        matched_count += 1;
-        if (matched_count == base_boxes.size()) {
-            break;
-        }
-    }
-
-    if (matched_count != base_boxes.size()) {
-        return std::nullopt;
-    }
-
-    std::optional<YoloDetectionBox> new_box;
-    for (size_t stable_index = 0; stable_index < stable_boxes.size(); ++stable_index) {
-        if (used_stable[stable_index]) {
-            continue;
-        }
-        if (new_box.has_value()) {
-            return std::nullopt;
-        }
-        new_box = stable_boxes[stable_index];
-    }
-    return new_box;
-}
-
-PreciseDetectionDebugResult DetectSingleDartOnFrames(
-    const cv::Mat& first_preprocessed_gray,
-    const cv::Mat& before_board_crop_bgr,
-    const cv::Mat& after_board_crop_bgr,
-    const cv::Rect& before_board_box,
-    const cv::Rect& after_board_box,
-    const std::optional<YoloDetectionBox>& new_dart_box,
-    const cv::Mat& point_rectification_h,
-    float rectified_radius,
-    const PipelineConfig& config,
-    int frame_index) {
-    (void)before_board_box;
-    PreciseDetectionDebugResult debug_result;
-    if (!new_dart_box.has_value()) {
-        debug_result.detection_result.reason = "local_dart_box_invalid";
-        return debug_result;
-    }
-    LocalizedDartDetectionResult localized = DetectLocalizedDartTip(
-        first_preprocessed_gray,
-        before_board_crop_bgr,
-        after_board_crop_bgr,
-        after_board_box,
-        new_dart_box.value(),
-        point_rectification_h,
-        rectified_radius,
-        config,
-        frame_index,
-        "s3");
-    debug_result.detection_result.has_dart = localized.has_dart;
-    debug_result.detection_result.tip_point = localized.point_in_round_board;
-    debug_result.detection_result.point_norm = localized.point_norm;
-    debug_result.detection_result.reason = localized.reason;
-    debug_result.debug_images = std::move(localized.debug_images);
-    return debug_result;
+    cv::Mat diff_thresh = BuildLocalDiffBinary(
+        pair.before_gray_aligned(local_rect),
+        pair.after_gray_aligned(local_rect));
+    return {cv::countNonZero(FilterSinglePixelComponents(diff_thresh)), local_rect.area()};
 }
 
 }  // namespace
@@ -1013,6 +907,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     first_frame_rectified_radius_ = baseline.rectified_radius;
     recent_frames_.clear();
     pending_candidate_.reset();
+    phantom_count_floor_ = 0;
     last_confirmed_dart_count_ = static_cast<int>(SelectTopDartBoxes(baseline.yolo_detection, 3).size());
     round_start_dart_count_ = last_confirmed_dart_count_;
     PushRecentFrame(
@@ -1027,6 +922,93 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     started_ = true;
     current_frame_index_ = 2;
     return result;
+}
+
+void AndroidBullTrackSession::ConfirmNewDart(
+    const TrackedYoloFrameState& stable_frame,
+    int max_dart_count,
+    AndroidFrameProcessResult& result) {
+    const TrackedYoloFrameState base_frame = pending_candidate_->base_frame;
+    pending_candidate_.reset();
+    const auto count_dart = [&]() {
+        result.gate_triggered = true;
+        last_confirmed_dart_count_ = std::min(max_dart_count, last_confirmed_dart_count_ + 1);
+        last_clean_frame_ = stable_frame;
+    };
+
+    std::optional<AlignedBoardPair> pair;
+    try {
+        pair = PrepareAlignedBoardPair(
+            first_frame_preprocessed_for_alignment_,
+            base_frame.detected_board_crop_bgr,
+            stable_frame.detected_board_crop_bgr,
+            pipeline_config_);
+    } catch (const std::exception& error) {
+        // YOLO saw one more dart in two frames in a row, so it counts; it just has no tip point.
+        result.gate_reason = std::string("precise_detection_failed: ") + error.what();
+        count_dart();
+        return;
+    }
+    if (!pair.has_value()) {
+        result.gate_reason = "precise_detection_failed: board_crop_empty";
+        count_dart();
+        return;
+    }
+
+    // The new dart is the box whose content changed most since the clean frame. A new dart next
+    // to an old one also changes part of the old dart's box, so take the maximum rather than
+    // the first box that changed; matching boxes by position fails for close darts.
+    const std::vector<YoloDetectionBox>& boxes = stable_frame.dart_boxes;
+    std::optional<size_t> best_index;
+    BoxChange best_change;
+    for (size_t i = 0; i < boxes.size(); ++i) {
+        const BoxChange change = CountChangedPixelsInBox(pair.value(), stable_frame.board_box, boxes[i]);
+        if (!best_index.has_value() || change.changed_pixels > best_change.changed_pixels) {
+            best_index = i;
+            best_change = change;
+        }
+    }
+    const std::string change_text =
+        " changed=" + std::to_string(best_change.changed_pixels) + "/" + std::to_string(best_change.local_area);
+    const int min_changed_pixels = std::max(
+        kMinNewDartChangedPixels,
+        static_cast<int>(static_cast<double>(best_change.local_area) * kMinNewDartChangedRatio));
+    if (!best_index.has_value() || best_change.changed_pixels < min_changed_pixels) {
+        // Nothing new on the board: YOLO drew an extra box, often a duplicate of an old dart.
+        phantom_count_floor_ = static_cast<int>(boxes.size());
+        result.gate_reason = "yolo_count_increased_no_board_change" + change_text;
+        return;
+    }
+
+#if BT_ENABLE_DEBUG_IMAGES
+    if (DebugImagesActive()) {
+        AppendDebugImage(
+            result.gate_debug_images,
+            current_frame_index_,
+            "s13",
+            "gate_yolo_confirmed",
+            DrawFrameOverlayWithHighlightedNewBox(
+                stable_frame.frame_bgr,
+                boxes,
+                boxes[best_index.value()],
+                "most_changed_box"));
+    }
+#endif
+    LocalizedDartDetectionResult localized = LocateDartTipInAlignedPair(
+        pair.value(),
+        stable_frame.board_box,
+        boxes[best_index.value()],
+        first_frame_point_rectification_h_,
+        first_frame_rectified_radius_,
+        current_frame_index_,
+        "s3");
+    result.precise_debug_images = std::move(localized.debug_images);
+    result.gate_reason = "trigger_precise_detection" + change_text;
+    result.has_detection = localized.has_dart && localized.point_norm.has_value();
+    if (localized.point_norm.has_value()) {
+        result.detected_point_norm = localized.point_norm.value();
+    }
+    count_dart();
 }
 
 AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& frame_bgr) {
@@ -1049,7 +1031,8 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     }
 
     const int max_dart_count = round_start_dart_count_ + 3;
-    const int max_candidate_count = std::min(max_dart_count, last_confirmed_dart_count_ + 1);
+    // One box more than the next dart needs, so a phantom box cannot crowd out the real new dart.
+    const int max_candidate_count = std::min(max_dart_count + 1, last_confirmed_dart_count_ + 2);
     TrackedYoloFrameState current_frame_state = BuildTrackedYoloFrameState(
         current_frame_index_,
         latest_frame_bgr_,
@@ -1076,7 +1059,12 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
 
     if (current_count <= last_confirmed_dart_count_) {
         pending_candidate_.reset();
+        phantom_count_floor_ = 0;
         result.gate_reason = "yolo_count_not_increased";
+    } else if (current_count <= phantom_count_floor_) {
+        // The extra box was already checked and showed no new dart on the board.
+        pending_candidate_.reset();
+        result.gate_reason = "yolo_phantom_box_ignored";
     } else if (!pending_candidate_.has_value()) {
         // Compare against the latest frame showing exactly the confirmed darts, not simply the
         // previous frame: after a failed confirmation the previous frame already holds the new
@@ -1095,62 +1083,11 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
         if (current_count < candidate_count) {
             pending_candidate_.reset();
             result.gate_reason = "yolo_count_not_stable";
+        } else if (!pending_candidate_->base_frame.has_board_box || !stored_current.has_board_box) {
+            pending_candidate_.reset();
+            result.gate_reason = "yolo_detect_failed: precise_board_box_missing";
         } else {
-            std::vector<YoloDetectionBox> stable_dart_boxes = stored_current.dart_boxes;
-            if (stable_dart_boxes.size() > static_cast<size_t>(candidate_count)) {
-                stable_dart_boxes.resize(static_cast<size_t>(candidate_count));
-            }
-            std::optional<YoloDetectionBox> new_dart_box = ResolveNewDartBox(
-                pending_candidate_->base_frame.dart_boxes,
-                stable_dart_boxes);
-            if (!new_dart_box.has_value()) {
-                pending_candidate_.reset();
-                result.gate_reason = "yolo_new_dart_box_not_resolved";
-            } else if (!pending_candidate_->base_frame.has_board_box || !stored_current.has_board_box) {
-                pending_candidate_.reset();
-                result.gate_reason = "yolo_detect_failed: precise_board_box_missing";
-            } else {
-#if BT_ENABLE_DEBUG_IMAGES
-                AppendDebugImage(
-                    result.gate_debug_images,
-                    current_frame_index_,
-                    "s13",
-                    "gate_yolo_confirmed",
-                    DrawFrameOverlayWithHighlightedNewBox(
-                        stored_current.frame_bgr,
-                        stable_dart_boxes,
-                        new_dart_box,
-                        "stable_count_confirmed"));
-#endif
-                result.gate_triggered = true;
-                result.gate_reason = "trigger_precise_detection";
-                try {
-                    PreciseDetectionDebugResult precise_result = DetectSingleDartOnFrames(
-                        first_frame_preprocessed_for_alignment_,
-                        pending_candidate_->base_frame.detected_board_crop_bgr,
-                        stored_current.detected_board_crop_bgr,
-                        pending_candidate_->base_frame.board_box,
-                        stored_current.board_box,
-                        new_dart_box,
-                        first_frame_point_rectification_h_,
-                        first_frame_rectified_radius_,
-                        pipeline_config_,
-                        current_frame_index_);
-                    result.precise_debug_images = std::move(precise_result.debug_images);
-                    result.has_detection =
-                        precise_result.detection_result.has_dart &&
-                        precise_result.detection_result.point_norm.has_value();
-                    if (precise_result.detection_result.point_norm.has_value()) {
-                        result.detected_point_norm = precise_result.detection_result.point_norm.value();
-                    }
-                } catch (const std::exception& error) {
-                    // YOLO confirmed the dart, so it still counts; it just has no tip point.
-                    result.gate_reason = std::string("precise_detection_failed: ") + error.what();
-                }
-                last_confirmed_dart_count_ = std::min(max_dart_count, last_confirmed_dart_count_ + 1);
-                last_clean_frame_ = stored_current;
-                pending_candidate_.reset();
-            }
+            ConfirmNewDart(stored_current, max_dart_count, result);
         }
     }
 
