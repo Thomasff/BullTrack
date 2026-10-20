@@ -82,6 +82,8 @@ private:
     // is not checked again for a short while; any box elsewhere (a real new dart) is checked at once.
     std::vector<YoloDetectionBox> phantom_boxes_;
     int phantom_frame_index_ = 0;
+    // Frames left in which a settled view may replace the clean frame after a confirmation.
+    int clean_refresh_frames_left_ = 0;
 
     void ConfirmNewDart(
         const TrackedYoloFrameState& stable_frame,

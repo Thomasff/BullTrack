@@ -891,6 +891,47 @@ bool BoxesMatchOneToOne(
     return true;
 }
 
+// Frames after a confirmation that may replace the clean frame with a settled view (~0.7 s).
+constexpr int kCleanRefreshFrames = 2;
+
+// Indices of current boxes that pair with no reference box (greedy one-to-one, best IoU first).
+std::vector<size_t> UnmatchedBoxIndices(
+    const std::vector<YoloDetectionBox>& current,
+    const std::vector<YoloDetectionBox>& reference) {
+    struct Pair {
+        size_t current_index;
+        size_t reference_index;
+        float iou;
+    };
+    std::vector<Pair> pairs;
+    for (size_t i = 0; i < current.size(); ++i) {
+        for (size_t j = 0; j < reference.size(); ++j) {
+            const float iou = BoxIou(current[i].rect, reference[j].rect);
+            if (iou >= kSameBoxMinIou) {
+                pairs.push_back(Pair{i, j, iou});
+            }
+        }
+    }
+    std::sort(pairs.begin(), pairs.end(), [](const Pair& lhs, const Pair& rhs) {
+        return lhs.iou > rhs.iou;
+    });
+    std::vector<bool> current_used(current.size(), false);
+    std::vector<bool> reference_used(reference.size(), false);
+    for (const Pair& pair : pairs) {
+        if (!current_used[pair.current_index] && !reference_used[pair.reference_index]) {
+            current_used[pair.current_index] = true;
+            reference_used[pair.reference_index] = true;
+        }
+    }
+    std::vector<size_t> unmatched;
+    for (size_t i = 0; i < current.size(); ++i) {
+        if (!current_used[i]) {
+            unmatched.push_back(i);
+        }
+    }
+    return unmatched;
+}
+
 struct BoxChange {
     int changed_pixels = 0;
     int local_area = 0;
@@ -947,6 +988,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     recent_frames_.clear();
     pending_candidate_.reset();
     phantom_boxes_.clear();
+    clean_refresh_frames_left_ = 0;
     last_confirmed_dart_count_ = static_cast<int>(SelectTopDartBoxes(baseline.yolo_detection, 3).size());
     round_start_dart_count_ = last_confirmed_dart_count_;
     PushRecentFrame(
@@ -994,13 +1036,20 @@ void AndroidBullTrackSession::ConfirmNewDart(
         return;
     }
 
-    // The new dart is the box whose content changed most since the clean frame. A new dart next
-    // to an old one also changes part of the old dart's box, so take the maximum rather than
-    // the first box that changed; matching boxes by position fails for close darts.
+    // Candidates are the boxes that pair with no box of the clean frame: old darts keep their
+    // boxes, so they drop out even when they still wobble or a new dart touches their box. When
+    // every box pairs up (YOLO missed an old dart this frame), fall back to all boxes. Among the
+    // candidates the new dart is the box whose content changed most.
     const std::vector<YoloDetectionBox>& boxes = stable_frame.dart_boxes;
+    std::vector<size_t> candidates = UnmatchedBoxIndices(boxes, base_frame.dart_boxes);
+    if (candidates.empty()) {
+        for (size_t i = 0; i < boxes.size(); ++i) {
+            candidates.push_back(i);
+        }
+    }
     std::optional<size_t> best_index;
     BoxChange best_change;
-    for (size_t i = 0; i < boxes.size(); ++i) {
+    for (size_t i : candidates) {
         const BoxChange change = CountChangedPixelsInBox(pair.value(), stable_frame.board_box, boxes[i]);
         if (!best_index.has_value() || change.changed_pixels > best_change.changed_pixels) {
             best_index = i;
@@ -1020,6 +1069,15 @@ void AndroidBullTrackSession::ConfirmNewDart(
         return;
     }
 
+    // YOLO sometimes splits one new dart into two overlapping boxes, each holding part of it;
+    // look for the tip in their union so the tip is not cut off.
+    YoloDetectionBox new_dart_box = boxes[best_index.value()];
+    for (size_t i : candidates) {
+        if (i != best_index.value() && (boxes[i].rect & new_dart_box.rect).area() > 0.0f) {
+            new_dart_box.rect = new_dart_box.rect | boxes[i].rect;
+        }
+    }
+
 #if BT_ENABLE_DEBUG_IMAGES
     if (DebugImagesActive()) {
         AppendDebugImage(
@@ -1030,14 +1088,14 @@ void AndroidBullTrackSession::ConfirmNewDart(
             DrawFrameOverlayWithHighlightedNewBox(
                 stable_frame.frame_bgr,
                 boxes,
-                boxes[best_index.value()],
+                new_dart_box,
                 "most_changed_box"));
     }
 #endif
     LocalizedDartDetectionResult localized = LocateDartTipInAlignedPair(
         pair.value(),
         stable_frame.board_box,
-        boxes[best_index.value()],
+        new_dart_box,
         first_frame_point_rectification_h_,
         first_frame_rectified_radius_,
         current_frame_index_,
@@ -1049,6 +1107,9 @@ void AndroidBullTrackSession::ConfirmNewDart(
         result.detected_point_norm = localized.point_norm.value();
     }
     count_dart();
+    // The dart may still wobble in this frame; the next frames showing the same boxes replace the
+    // clean frame with a settled view, so the wobble does not look like change for the next dart.
+    clean_refresh_frames_left_ = kCleanRefreshFrames;
 }
 
 AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& frame_bgr) {
@@ -1092,6 +1153,16 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     const int current_count = static_cast<int>(current_frame_state.dart_boxes.size());
     PushRecentFrame(recent_frames_, current_frame_state);
     const TrackedYoloFrameState& stored_current = recent_frames_.back();
+
+    if (clean_refresh_frames_left_ > 0) {
+        clean_refresh_frames_left_ -= 1;
+        // Only a frame that still shows exactly the confirmed darts (no box elsewhere) may stand in.
+        if (!pending_candidate_.has_value() && stored_current.has_board_box && last_clean_frame_.has_value() &&
+            current_count >= last_confirmed_dart_count_ &&
+            BoxesMatchOneToOne(stored_current.dart_boxes, last_clean_frame_->dart_boxes)) {
+            last_clean_frame_ = stored_current;
+        }
+    }
 
     if (current_count <= last_confirmed_dart_count_) {
         pending_candidate_.reset();
