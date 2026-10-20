@@ -3,7 +3,7 @@ import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { Panel } from '../components/Panel';
 import { PrimaryButton } from '../components/PrimaryButton';
-import { colors } from '../theme/colors';
+import { colors, teamColors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { startGameSession } from '../../application/services/liveRoundService';
 import { listKnownPlayerNames } from '../../application/services/historyRepository';
@@ -15,12 +15,28 @@ import {
   getDefaultPlayerName,
   resolvePlayerNames,
 } from '../../domain/game/players';
+import {
+  MAX_TEAMS,
+  MAX_TEAM_PLAYERS,
+  MAX_TEAM_SIZE,
+  MIN_TEAMS,
+  getTeamName,
+} from '../../domain/game/teams';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PlayerSetup'>;
 
+// A seat in the lineup: the team (always 0 when playing alone) and its position in that team.
+interface SeatRef {
+  team: number;
+  index: number;
+}
+
 export const PlayerSetupScreen = ({ navigation, route }: Props) => {
-  const [names, setNames] = useState<string[]>(['']);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [teamMode, setTeamMode] = useState(false);
+  // Solo: one group of names. Team game: one group per team, in A/B/C/D order.
+  const [soloNames, setSoloNames] = useState<string[]>(['']);
+  const [teamNames, setTeamNames] = useState<string[][]>([[''], ['']]);
+  const [active, setActive] = useState<SeatRef>({ team: 0, index: 0 });
   const [knownNames, setKnownNames] = useState<string[]>([]);
   const selectedOption = useMemo(
     () => getModeOption(route.params.modeOptionId),
@@ -33,86 +49,199 @@ export const PlayerSetupScreen = ({ navigation, route }: Props) => {
       .catch(() => setKnownNames([]));
   }, []);
 
-  const resolvedNames = resolvePlayerNames(names);
-  const duplicateName = findDuplicatePlayerName(names);
+  const groups = teamMode ? teamNames : [soloNames];
+  const setGroups = (update: (current: string[][]) => string[][]) => {
+    if (teamMode) {
+      setTeamNames(update);
+    } else {
+      setSoloNames(current => update([current])[0]);
+    }
+  };
+  const flatNames = groups.flat();
+  const maxPlayers = teamMode ? MAX_TEAM_PLAYERS : MAX_PLAYERS;
+  const maxGroupSize = teamMode ? MAX_TEAM_SIZE : MAX_PLAYERS;
+  const minGroupSize = teamMode ? 1 : MIN_PLAYERS;
+  const resolvedNames = resolvePlayerNames(flatNames);
+  const duplicateName = findDuplicatePlayerName(flatNames);
   const suggestions = knownNames.filter(name => !resolvedNames.includes(name));
+  // Default names number the seats across all teams, matching resolvePlayerNames.
+  const flatIndexOf = (seat: SeatRef) =>
+    groups.slice(0, seat.team).reduce((sum, group) => sum + group.length, 0) + seat.index;
 
-  const updateName = (index: number, value: string) => {
-    setNames(current => current.map((name, i) => (i === index ? value : name)));
+  const switchMode = (nextTeamMode: boolean) => {
+    setTeamMode(nextTeamMode);
+    setActive({ team: 0, index: 0 });
   };
 
-  const addPlayer = () => {
-    if (names.length < MAX_PLAYERS) {
-      setNames(current => [...current, '']);
-      setActiveIndex(names.length);
+  const updateName = (seat: SeatRef, value: string) => {
+    setGroups(current =>
+      current.map((group, team) =>
+        team === seat.team ? group.map((name, i) => (i === seat.index ? value : name)) : group,
+      ),
+    );
+  };
+
+  const addPlayer = (team: number, name = '') => {
+    if (flatNames.length >= maxPlayers || groups[team].length >= maxGroupSize) {
+      return false;
+    }
+    setGroups(current =>
+      current.map((group, i) => (i === team ? [...group, name] : group)),
+    );
+    setActive({ team, index: groups[team].length });
+    return true;
+  };
+
+  const removePlayer = (seat: SeatRef) => {
+    if (groups[seat.team].length > minGroupSize) {
+      setGroups(current =>
+        current.map((group, team) =>
+          team === seat.team ? group.filter((_, i) => i !== seat.index) : group,
+        ),
+      );
+      setActive({ team: 0, index: 0 });
     }
   };
 
-  const removePlayer = (index: number) => {
-    if (names.length > MIN_PLAYERS) {
-      setNames(current => current.filter((_, i) => i !== index));
-      setActiveIndex(0);
+  const addTeam = () => {
+    if (teamNames.length < MAX_TEAMS && flatNames.length < maxPlayers) {
+      setTeamNames(current => [...current, ['']]);
+      setActive({ team: teamNames.length, index: 0 });
     }
   };
 
-  // Fills the focused seat, or the first empty one, or a new seat.
+  const removeTeam = (team: number) => {
+    if (teamNames.length > MIN_TEAMS) {
+      setTeamNames(current => current.filter((_, i) => i !== team));
+      setActive({ team: 0, index: 0 });
+    }
+  };
+
+  // Fills the focused seat, or the first empty one, or adds a seat (to the focused team).
   const pickKnownName = (name: string) => {
-    const targetIndex =
-      names[activeIndex]?.trim() === ''
-        ? activeIndex
-        : names.findIndex(item => item.trim() === '');
-    if (targetIndex >= 0) {
-      updateName(targetIndex, name);
+    if (groups[active.team]?.[active.index]?.trim() === '') {
+      updateName(active, name);
       return;
     }
-    if (names.length < MAX_PLAYERS) {
-      setNames(current => [...current, name]);
+    for (let team = 0; team < groups.length; team += 1) {
+      const index = groups[team].findIndex(item => item.trim() === '');
+      if (index >= 0) {
+        updateName({ team, index }, name);
+        return;
+      }
     }
+    addPlayer(Math.min(active.team, groups.length - 1), name);
   };
+
+  const startGame = () => {
+    if (!selectedOption) {
+      return;
+    }
+    startGameSession(
+      selectedOption.runtimeGameType,
+      resolvedNames,
+      selectedOption.title,
+      teamMode ? groups.flatMap((group, team) => group.map(() => team)) : undefined,
+    );
+    navigation.navigate('Game');
+  };
+
+  const renderSeat = (name: string, seat: SeatRef, group: string[]) => {
+    const isActive = active.team === seat.team && active.index === seat.index;
+    return (
+      <View key={seat.index} style={styles.playerRow}>
+        <Text style={styles.seat}>{seat.index + 1}</Text>
+        <TextInput
+          value={name}
+          onChangeText={value => updateName(seat, value)}
+          onFocus={() => setActive(seat)}
+          placeholder={getDefaultPlayerName(flatIndexOf(seat))}
+          placeholderTextColor={colors.textSecondary}
+          maxLength={16}
+          style={[styles.input, isActive && styles.inputActive]}
+        />
+        {group.length > minGroupSize ? (
+          <Pressable hitSlop={8} onPress={() => removePlayer(seat)} style={styles.removeButton}>
+            <Text style={styles.removeLabel}>×</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  };
+
+  const renderAddPlayer = (team: number, label: string) =>
+    flatNames.length < maxPlayers && groups[team].length < maxGroupSize ? (
+      <Pressable onPress={() => addPlayer(team)} style={styles.addButton}>
+        <Text style={styles.addLabel}>{label}</Text>
+      </Pressable>
+    ) : null;
 
   return (
     <ScrollView
       contentContainerStyle={styles.content}
       keyboardShouldPersistTaps="handled"
       style={styles.screen}>
-      <Panel>
-        <View style={styles.rowBetween}>
-          <Text style={styles.panelTitle}>玩家</Text>
-          <Text style={styles.hint}>
-            {names.length} / {MAX_PLAYERS}
-          </Text>
-        </View>
-        {names.map((name, index) => (
-          <View key={index} style={styles.playerRow}>
-            <Text style={styles.seat}>{index + 1}</Text>
-            <TextInput
-              value={name}
-              onChangeText={value => updateName(index, value)}
-              onFocus={() => setActiveIndex(index)}
-              placeholder={getDefaultPlayerName(index)}
-              placeholderTextColor={colors.textSecondary}
-              maxLength={16}
-              style={[styles.input, activeIndex === index && styles.inputActive]}
-            />
-            {names.length > MIN_PLAYERS ? (
-              <Pressable
-                hitSlop={8}
-                onPress={() => removePlayer(index)}
-                style={styles.removeButton}>
-                <Text style={styles.removeLabel}>×</Text>
-              </Pressable>
-            ) : null}
-          </View>
-        ))}
-        {names.length < MAX_PLAYERS ? (
-          <Pressable onPress={addPlayer} style={styles.addButton}>
-            <Text style={styles.addLabel}>+ 添加玩家</Text>
+      <View style={styles.modeSwitch}>
+        {([false, true] as const).map(option => (
+          <Pressable
+            key={option ? 'team' : 'solo'}
+            onPress={() => switchMode(option)}
+            style={[styles.modeOption, teamMode === option && styles.modeOptionActive]}>
+            <Text style={[styles.modeLabel, teamMode === option && styles.modeLabelActive]}>
+              {option ? '组队' : '个人'}
+            </Text>
           </Pressable>
-        ) : null}
-        {duplicateName ? (
-          <Text style={styles.error}>名字重复：{duplicateName}</Text>
-        ) : null}
-      </Panel>
+        ))}
+      </View>
+
+      {teamMode ? (
+        <>
+          <Text style={styles.hint}>
+            队与队轮流投，队内按顺序轮流；每队共用一个分。{flatNames.length} / {MAX_TEAM_PLAYERS} 人
+          </Text>
+          {teamNames.map((group, team) => (
+            <Panel key={team}>
+              <View style={styles.rowBetween}>
+                <View style={styles.teamTitleRow}>
+                  <View
+                    style={[styles.teamDot, { backgroundColor: teamColors[team % teamColors.length] }]}
+                  />
+                  <Text style={styles.panelTitle}>{getTeamName(team)}</Text>
+                </View>
+                {teamNames.length > MIN_TEAMS ? (
+                  <Pressable hitSlop={8} onPress={() => removeTeam(team)}>
+                    <Text style={styles.removeTeamLabel}>移除</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+              {group.map((name, index) => renderSeat(name, { team, index }, group))}
+              {renderAddPlayer(team, '+ 添加队员')}
+            </Panel>
+          ))}
+          {teamNames.length < MAX_TEAMS && flatNames.length < MAX_TEAM_PLAYERS ? (
+            <Pressable onPress={addTeam} style={styles.addButton}>
+              <Text style={styles.addLabel}>+ 添加队伍</Text>
+            </Pressable>
+          ) : null}
+          {duplicateName ? (
+            <Text style={styles.error}>名字重复：{duplicateName}</Text>
+          ) : null}
+        </>
+      ) : (
+        <Panel>
+          <View style={styles.rowBetween}>
+            <Text style={styles.panelTitle}>玩家</Text>
+            <Text style={styles.hint}>
+              {soloNames.length} / {MAX_PLAYERS}
+            </Text>
+          </View>
+          {soloNames.map((name, index) => renderSeat(name, { team: 0, index }, soloNames))}
+          {renderAddPlayer(0, '+ 添加玩家')}
+          {duplicateName ? (
+            <Text style={styles.error}>名字重复：{duplicateName}</Text>
+          ) : null}
+        </Panel>
+      )}
 
       {suggestions.length > 0 ? (
         <Panel>
@@ -132,17 +261,7 @@ export const PlayerSetupScreen = ({ navigation, route }: Props) => {
 
       <PrimaryButton
         label="开始"
-        onPress={() => {
-          if (!selectedOption) {
-            return;
-          }
-          startGameSession(
-            selectedOption.runtimeGameType,
-            resolvedNames,
-            selectedOption.title,
-          );
-          navigation.navigate('Game');
-        }}
+        onPress={startGame}
         disabled={!selectedOption || duplicateName !== null}
       />
     </ScrollView>
@@ -162,6 +281,43 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  modeSwitch: {
+    flexDirection: 'row',
+    padding: 4,
+    borderRadius: 14,
+    backgroundColor: colors.panelStrong,
+  },
+  modeOption: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  modeOptionActive: {
+    backgroundColor: colors.panel,
+  },
+  modeLabel: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+  modeLabelActive: {
+    color: colors.accent,
+  },
+  teamTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  teamDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  removeTeamLabel: {
+    fontSize: 14,
+    color: colors.textSecondary,
   },
   panelTitle: {
     fontSize: 18,

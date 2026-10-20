@@ -18,7 +18,7 @@ SQLite.enablePromise(true);
 
 const DATABASE_NAME = 'bulltrack_history.db';
 // All schema statements are idempotent, so older versions simply re-run them.
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 let databasePromise: Promise<SQLiteDatabase> | null = null;
 
@@ -80,6 +80,7 @@ const initializeDatabase = async (database: SQLiteDatabase) => {
       player_id INTEGER NOT NULL,
       seat_index INTEGER NOT NULL,
       is_winner INTEGER NOT NULL DEFAULT 0,
+      team_index INTEGER,
       FOREIGN KEY(match_id) REFERENCES matches(id),
       FOREIGN KEY(player_id) REFERENCES players(id),
       UNIQUE(match_id, player_id)
@@ -111,6 +112,15 @@ const initializeDatabase = async (database: SQLiteDatabase) => {
       value TEXT NOT NULL
     )`,
   );
+  // Schema v3: team games. Fresh installs get the column from CREATE TABLE above.
+  const matchPlayerColumns = await execute(database, 'PRAGMA table_info(match_players)');
+  const hasTeamIndex = Array.from(
+    { length: matchPlayerColumns.rows.length },
+    (_, index) => matchPlayerColumns.rows.item(index).name,
+  ).includes('team_index');
+  if (!hasTeamIndex) {
+    await execute(database, 'ALTER TABLE match_players ADD COLUMN team_index INTEGER');
+  }
   await execute(
     database,
     'CREATE INDEX IF NOT EXISTS idx_matches_created_at ON matches(created_at)',
@@ -200,9 +210,11 @@ export const saveCompletedMatch = async (
         };
 
         const insertMatchPlayers = () => {
-          const winnerDatabasePlayerId = input.winnerId
-            ? playerIdByRuntimeId.get(input.winnerId) ?? null
-            : null;
+          // A single winner is kept on the match row; a winning team only on match_players.
+          const winnerDatabasePlayerId =
+            input.winnerIds.length === 1
+              ? playerIdByRuntimeId.get(input.winnerIds[0]) ?? null
+              : null;
 
           executeTransactionSql(
             transaction,
@@ -216,11 +228,12 @@ export const saveCompletedMatch = async (
               return;
             }
 
-            executeTransactionSql(transaction, 'INSERT INTO match_players (match_id, player_id, seat_index, is_winner) VALUES (?, ?, ?, ?)', [
+            executeTransactionSql(transaction, 'INSERT INTO match_players (match_id, player_id, seat_index, is_winner, team_index) VALUES (?, ?, ?, ?, ?)', [
               matchId,
               databasePlayerId,
               index,
-              player.id === input.winnerId ? 1 : 0,
+              input.winnerIds.includes(player.id) ? 1 : 0,
+              player.teamIndex ?? null,
             ]);
           });
           insertThrows();
@@ -316,10 +329,10 @@ export const listRecentMatches = async (limit = 20): Promise<RecentMatchSummary[
       matches.mode_label,
       matches.created_at,
       COUNT(match_players.id) AS player_count,
-      winner.name AS winner_name
+      GROUP_CONCAT(CASE WHEN match_players.is_winner = 1 THEN players.name END, '、') AS winner_name
     FROM matches
     LEFT JOIN match_players ON match_players.match_id = matches.id
-    LEFT JOIN players AS winner ON winner.id = matches.winner_player_id
+    LEFT JOIN players ON players.id = match_players.player_id
     GROUP BY matches.id
     ORDER BY matches.created_at DESC
     LIMIT ?`,
@@ -358,7 +371,8 @@ export const getMatchDetail = async (matchId: number): Promise<MatchDetail | nul
 
   const playerResult = await execute(
     database,
-    `SELECT match_players.player_id, match_players.seat_index, match_players.is_winner, players.name
+    `SELECT match_players.player_id, match_players.seat_index, match_players.is_winner,
+      match_players.team_index, players.name
     FROM match_players
     JOIN players ON players.id = match_players.player_id
     WHERE match_players.match_id = ?
@@ -404,6 +418,7 @@ export const getMatchDetail = async (matchId: number): Promise<MatchDetail | nul
         name: String(row.name),
         seatIndex: Number(row.seat_index),
         isWinner: Number(row.is_winner) === 1,
+        teamIndex: row.team_index === null || row.team_index === undefined ? null : Number(row.team_index),
       };
     }),
     rounds,

@@ -10,12 +10,28 @@ import type {
 } from '../../domain/game/types';
 import type { CompletedRoundRecord } from '../../domain/history/types';
 import { getDefaultPlayerName } from '../../domain/game/players';
+import {
+  buildTeams,
+  getEngineSides,
+  getThrowerId,
+  type TeamInfo,
+} from '../../domain/game/teams';
+
+// The person about to throw (in a team game, the member whose turn it is in the current team).
+export const getCurrentThrowerId = (state: {
+  teams: TeamInfo[] | null;
+  scoreBoard: ScoreBoard | null;
+  currentPlayerId: string | null;
+}) => getThrowerId(state.teams, state.scoreBoard?.players ?? [], state.currentPlayerId);
 
 interface GameStoreState {
   status: GameStatus;
   selectedMode: GameType | null;
   selectedModeLabel: string | null;
+  // The people playing; in a team game each has a teamIndex.
   players: PlayerSummary[];
+  // Team game only: the rule engine plays these teams as its sides (currentPlayerId is a team id).
+  teams: TeamInfo[] | null;
   currentPlayerId: string | null;
   scoreBoard: ScoreBoard | null;
   currentRoundNumber: number;
@@ -39,7 +55,7 @@ interface GameStoreState {
   // History id of the saved finished game, so undoing its last round can remove it.
   savedMatchId: number | null;
   selectMode: (mode: GameType, label: string) => void;
-  configurePlayers: (playerNames: string[]) => void;
+  configurePlayers: (playerNames: string[], teamIndexes?: number[]) => void;
   setCurrentPlayer: (playerId: string | null) => void;
   setScoreBoard: (scoreBoard: ScoreBoard | null) => void;
   setRoundState: (input: {
@@ -77,6 +93,7 @@ const initialState = {
   selectedMode: null as GameType | null,
   selectedModeLabel: null as string | null,
   players: [] as PlayerSummary[],
+  teams: null as TeamInfo[] | null,
   currentPlayerId: null as string | null,
   scoreBoard: null as ScoreBoard | null,
   currentRoundNumber: 0,
@@ -108,17 +125,21 @@ export const useGameStore = create<GameStoreState>(set => ({
       statusMessage: '已选择模式，继续设置玩家',
       errorMessage: null,
     }),
-  configurePlayers: playerNames => {
-    const players = playerNames.map((name, index) => ({
+  configurePlayers: (playerNames, teamIndexes) => {
+    const players: PlayerSummary[] = playerNames.map((name, index) => ({
       id: `player-${index + 1}`,
       name: name.trim() || getDefaultPlayerName(index),
       score: 0,
       roundScores: [],
+      ...(teamIndexes ? { teamIndex: teamIndexes[index] ?? 0 } : {}),
     }));
+    const teams = buildTeams(players);
+    const sides = getEngineSides(players, teams);
     set({
       players,
-      scoreBoard: { players },
-      currentPlayerId: players[0]?.id ?? null,
+      teams,
+      scoreBoard: { players: sides },
+      currentPlayerId: sides[0]?.id ?? null,
       currentRoundNumber: 1,
       currentThrowNumber: 0,
       currentThrows: [],

@@ -6,6 +6,7 @@ import type { RootStackParamList } from '../../app/navigation/types';
 import { getMatchDetail } from '../../application/services/historyRepository';
 import type { MatchDetail } from '../../domain/history/types';
 import { formatMatchTime } from './StatsTab';
+import { getTeamName } from '../../domain/game/teams';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MatchDetail'>;
 
@@ -38,6 +39,22 @@ export const MatchDetailScreen = ({ route }: Props) => {
     [detail],
   );
 
+  // Team game: one line per team, e.g. "🏆 A 队：张三、李四".
+  const teamLines = useMemo(() => {
+    const players = detail?.players ?? [];
+    if (!players.some(player => player.teamIndex !== null)) {
+      return null;
+    }
+    const indexes = [...new Set(players.map(player => player.teamIndex ?? 0))].sort(
+      (left, right) => left - right,
+    );
+    return indexes.map(index => {
+      const members = players.filter(player => (player.teamIndex ?? 0) === index);
+      const trophy = members.some(player => player.isWinner) ? '🏆 ' : '';
+      return `${trophy}${getTeamName(index)}：${members.map(player => player.name).join('、')}`;
+    });
+  }, [detail]);
+
   if (!loaded) {
     return <Text style={styles.empty}>正在读取…</Text>;
   }
@@ -50,11 +67,19 @@ export const MatchDetailScreen = ({ route }: Props) => {
       <View style={styles.summary}>
         <Text style={styles.title}>{detail.modeLabel ?? detail.mode}</Text>
         <Text style={styles.meta}>{formatMatchTime(detail.createdAt)}</Text>
-        <Text style={styles.players}>
-          {detail.players
-            .map(player => (player.isWinner ? `🏆 ${player.name}` : player.name))
-            .join('   ')}
-        </Text>
+        {teamLines ? (
+          teamLines.map(line => (
+            <Text key={line} style={styles.players}>
+              {line}
+            </Text>
+          ))
+        ) : (
+          <Text style={styles.players}>
+            {detail.players
+              .map(player => (player.isWinner ? `🏆 ${player.name}` : player.name))
+              .join('   ')}
+          </Text>
+        )}
       </View>
 
       <View style={styles.card}>

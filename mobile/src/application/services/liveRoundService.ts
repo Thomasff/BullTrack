@@ -7,13 +7,14 @@ import {
   bullTrackNativeBridge,
   bullTrackNativeModule,
 } from '../../native-bridge/bulltrack/bullTrackNative';
-import { useGameStore } from '../stores/gameStore';
+import { getCurrentThrowerId, useGameStore } from '../stores/gameStore';
 import { useVisionDebugStore } from '../stores/visionDebugStore';
 import { useLiveFrameStore } from '../stores/liveFrameStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { createGameEngine, getGameEngine, resetGameEngine } from './gameRules';
 import { deleteMatch, saveCompletedMatch } from './historyRepository';
 import { toFriendlyErrorText } from './nativeErrorText';
+import { getEngineSides } from '../../domain/game/teams';
 import type { SoundCue } from '../../native-bridge/bulltrack/types';
 import type {
   CameraStatus,
@@ -193,15 +194,17 @@ export const refreshCameraPermission = async (): Promise<boolean> => {
   return isGranted;
 };
 
+// teamIndexes (one per name) starts a team game; omit it for everyone playing alone.
 export const startGameSession = (
   mode: GameType,
   playerNames: string[],
   modeLabel: string,
+  teamIndexes?: number[],
 ) => {
   useGameStore.getState().selectMode(mode, modeLabel);
-  useGameStore.getState().configurePlayers(playerNames);
-  const players = useGameStore.getState().players;
-  const engine = createGameEngine(mode, players);
+  useGameStore.getState().configurePlayers(playerNames, teamIndexes);
+  const { players, teams } = useGameStore.getState();
+  const engine = createGameEngine(mode, getEngineSides(players, teams));
   useGameStore.getState().setCurrentPlayer(engine.getCurrentPlayerId());
   useGameStore.getState().setScoreBoard(engine.getScoreBoard());
 };
@@ -253,6 +256,8 @@ export const confirmCurrentRound = async () => {
     throw new Error('No round result to confirm.');
   }
   const roundIndex = state.currentRoundNumber;
+  // Darts are recorded under the person who threw them, also in a team game.
+  const throwerId = getCurrentThrowerId(state) ?? state.currentPlayerId;
   // Manual corrections made in the UI take precedence over native detection.
   const editedThrows = state.throwsEdited ? state.currentThrows : null;
 
@@ -270,7 +275,7 @@ export const confirmCurrentRound = async () => {
   }
 
   const completedRound = {
-    playerId: appliedRound.result.playerId,
+    playerId: throwerId ?? appliedRound.result.playerId,
     roundIndex,
     throws: appliedRound.result.throws,
   };
@@ -290,8 +295,14 @@ export const confirmCurrentRound = async () => {
         players: latestState.players.map(player => ({
           id: player.id,
           name: player.name,
+          teamIndex: player.teamIndex ?? null,
         })),
-        winnerId: appliedRound.winnerId,
+        // A winning team wins for every member.
+        winnerIds: appliedRound.winnerId
+          ? latestState.teams?.find(team => team.id === appliedRound.winnerId)?.memberIds ?? [
+              appliedRound.winnerId,
+            ]
+          : [],
         rounds: latestState.completedRounds,
       });
       useGameStore.setState({ errorMessage: null, savedMatchId });
@@ -330,7 +341,10 @@ export const undoLastRound = async () => {
   }
 
   const remainingRounds = state.completedRounds.slice(0, -1);
-  const engine = createGameEngine(state.selectedMode, state.players);
+  const engine = createGameEngine(
+    state.selectedMode,
+    getEngineSides(state.players, state.teams),
+  );
   remainingRounds.forEach(round => engine.applyRound(round.throws));
 
   useGameStore.setState({

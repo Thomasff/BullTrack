@@ -56,11 +56,11 @@ test('saves the match to history when the game ends', async () => {
   expect(useGameStore.getState().status).toBe('gameOver');
   expect(mockSaveCompletedMatch).toHaveBeenCalledTimes(1);
   const saved = mockSaveCompletedMatch.mock.calls[0][0] as {
-    winnerId: string;
+    winnerIds: string[];
     rounds: Array<{ roundIndex: number }>;
     players: Array<{ name: string }>;
   };
-  expect(saved.winnerId).toBe('player-1');
+  expect(saved.winnerIds).toEqual(['player-1']);
   expect(saved.players[0].name).toBe('Alice');
   expect(saved.rounds.map(round => round.roundIndex)).toEqual([1, 2]);
 });
@@ -154,4 +154,43 @@ test('rethrowing a reopened round goes back to waiting for the same player', asy
   expect(state.currentPlayerId).toBe('player-1');
   expect(state.currentThrows).toEqual([]);
   expect(state.reopenedRound).toBe(false);
+});
+
+test('team game: shared score, alternating teams, darts recorded per thrower', async () => {
+  // A 队: Alice + Bob, B 队: Carol (uneven teams).
+  startGameSession('game301', ['Alice', 'Bob', 'Carol'], '301', [0, 0, 1]);
+  const state = () => useGameStore.getState();
+  expect(state().scoreBoard?.players.map(side => side.name)).toEqual(['A 队', 'B 队']);
+
+  await playRound([T20, T20, T20]); // Alice: A 队 121 left
+  await playRound([S1, S1, S1]); // Carol
+  await playRound([S1, S1, S1]); // Bob: A 队 118 left
+  await playRound([S1, S1, S1]); // Carol again
+  expect(state().completedRounds.map(round => [round.playerId, round.roundIndex])).toEqual([
+    ['player-1', 1],
+    ['player-3', 1],
+    ['player-2', 2],
+    ['player-3', 2],
+  ]);
+  expect(state().scoreBoard?.players.map(side => side.score)).toEqual([118, 295]);
+  expect(state().currentPlayerId).toBe('team-1');
+
+  // Alice checks out for the team: both A 队 members win.
+  await playRound([T20, createThrow('triple', 6), createThrow('double', 20)]);
+  expect(state().status).toBe('gameOver');
+  expect(state().winnerId).toBe('team-1');
+  const saved = mockSaveCompletedMatch.mock.calls[0][0] as {
+    winnerIds: string[];
+    players: Array<{ id: string; teamIndex: number | null }>;
+    rounds: Array<{ playerId: string }>;
+  };
+  expect(saved.winnerIds).toEqual(['player-1', 'player-2']);
+  expect(saved.players.map(player => player.teamIndex)).toEqual([0, 0, 1]);
+  expect(saved.rounds[4].playerId).toBe('player-1');
+
+  // Undo brings the round back for the same team and thrower.
+  await undoLastRound();
+  expect(state().currentPlayerId).toBe('team-1');
+  expect(state().scoreBoard?.players[0].score).toBe(118);
+  expect(state().completedRounds).toHaveLength(4);
 });

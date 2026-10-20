@@ -11,3 +11,6 @@ export const colors = {
   danger: '#A22929',
   info: '#235A80',
 };
+
+// One color per team (A/B/C/D 队), used for the team dot and the current thrower.
+export const teamColors = ['#C0392B', '#235A80', '#216E39', '#7A4E9C'];

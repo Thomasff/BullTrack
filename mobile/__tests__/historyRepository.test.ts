@@ -27,7 +27,7 @@ const saveSampleMatch = (createdAt: number) =>
       { id: 'player-1', name: 'Alice' },
       { id: 'player-2', name: 'Bob' },
     ],
-    winnerId: 'player-1',
+    winnerIds: ['player-1'],
     rounds: [
       { playerId: 'player-1', roundIndex: 1, throws: [T20, T20, T20] },
       { playerId: 'player-2', roundIndex: 1, throws: [S1, S1, S1] },
@@ -84,7 +84,7 @@ test('deletes one match and players left without matches', async () => {
     modeLabel: '301',
     createdAt: 2000,
     players: [{ id: 'player-1', name: 'Carol' }, { id: 'player-2', name: 'Alice' }],
-    winnerId: 'player-1',
+    winnerIds: ['player-1'],
     rounds: [{ playerId: 'player-1', roundIndex: 1, throws: [T20, T20, T20] }],
   });
   expect(removedId).not.toBeNull();
@@ -96,4 +96,39 @@ test('deletes one match and players left without matches', async () => {
   expect(await getMatchDetail(removedId as number)).toBeNull();
   const alice = (await listPlayerStats()).find(item => item.name === 'Alice');
   expect(alice).toMatchObject({ matchesPlayed: 1, wins: 1 });
+});
+
+test('saves a team match: team per player, every winning member wins', async () => {
+  const matchId = await saveCompletedMatch({
+    mode: 'game301',
+    modeLabel: '301',
+    createdAt: 3000,
+    players: [
+      { id: 'player-1', name: 'Alice', teamIndex: 0 },
+      { id: 'player-2', name: 'Bob', teamIndex: 0 },
+      { id: 'player-3', name: 'Carol', teamIndex: 1 },
+    ],
+    winnerIds: ['player-1', 'player-2'],
+    rounds: [
+      { playerId: 'player-1', roundIndex: 1, throws: [T20, T20, T20] },
+      { playerId: 'player-3', roundIndex: 1, throws: [S1, S1, S1] },
+      { playerId: 'player-2', roundIndex: 2, throws: [T20, createThrow('triple', 7), D20] },
+    ],
+  });
+
+  const recent = await listRecentMatches();
+  expect(recent[0].playerCount).toBe(3);
+  expect(recent[0].winnerName?.split('、').sort()).toEqual(['Alice', 'Bob']);
+
+  const detail = await getMatchDetail(matchId as number);
+  expect(detail?.players.map(player => [player.name, player.teamIndex, player.isWinner])).toEqual([
+    ['Alice', 0, true],
+    ['Bob', 0, true],
+    ['Carol', 1, false],
+  ]);
+
+  const stats = await listPlayerStats();
+  expect(stats.find(item => item.name === 'Bob')).toMatchObject({ wins: 1, bestRound: 121 });
+  expect(stats.find(item => item.name === 'Alice')).toMatchObject({ wins: 1, bestRound: 180 });
+  expect(stats.find(item => item.name === 'Carol')).toMatchObject({ wins: 0, bestRound: 3 });
 });

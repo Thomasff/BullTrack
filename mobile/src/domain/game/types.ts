@@ -43,6 +43,8 @@ export interface PlayerSummary {
   score: number;
   roundScores: number[];
   marks?: Record<string, number>;
+  // Set for players of a team game (0 = A 队).
+  teamIndex?: number;
 }
 
 export interface ScoreBoard {

@@ -20,7 +20,7 @@ import {
   undoLastRound,
   updateLiveZoomRatio,
 } from '../../application/services/liveRoundService';
-import { useGameStore } from '../../application/stores/gameStore';
+import { getCurrentThrowerId, useGameStore } from '../../application/stores/gameStore';
 import { useVisionDebugStore } from '../../application/stores/visionDebugStore';
 import { useSettingsStore } from '../../application/stores/settingsStore';
 import { Panel } from '../components/Panel';
@@ -84,6 +84,7 @@ export const GameScreen = ({ navigation }: Props) => {
     selectedMode,
     selectedModeLabel,
     players,
+    teams,
     currentPlayerId,
     scoreBoard,
     currentRoundNumber,
@@ -182,13 +183,17 @@ export const GameScreen = ({ navigation }: Props) => {
     });
   }, [cameraPermissionGranted, device, previewReady, setCameraStatus]);
 
+  // The person about to throw; in a team game currentPlayerId is the team.
+  const currentThrowerId = getCurrentThrowerId({ teams, scoreBoard, currentPlayerId });
   const currentPlayer = useMemo(
-    () => players.find(player => player.id === currentPlayerId) ?? null,
-    [currentPlayerId, players],
+    () => players.find(player => player.id === currentThrowerId) ?? null,
+    [currentThrowerId, players],
   );
+  const currentTeam = teams?.find(team => team.id === currentPlayerId) ?? null;
+  // A player, or a whole team.
   const winner = useMemo(
-    () => players.find(player => player.id === winnerId) ?? null,
-    [players, winnerId],
+    () => (scoreBoard?.players ?? players).find(side => side.id === winnerId) ?? null,
+    [players, scoreBoard, winnerId],
   );
   const totalScore = useMemo(
     () => currentThrows.reduce((sum, item) => sum + item.score, 0),
@@ -340,6 +345,7 @@ export const GameScreen = ({ navigation }: Props) => {
       selectedMode,
       players.map(player => player.name),
       selectedModeLabel ?? selectedMode,
+      teams ? players.map(player => player.teamIndex ?? 0) : undefined,
     );
   };
 
@@ -424,7 +430,7 @@ export const GameScreen = ({ navigation }: Props) => {
           : '准备中，先别投镖'
         : status === 'showingResult'
           ? '确认本轮结果'
-          : `轮到 ${currentPlayer?.name ?? '玩家'} · 第 ${currentRoundNumber} 轮`;
+          : `轮到 ${currentPlayer?.name ?? '玩家'}${currentTeam ? `（${currentTeam.name}）` : ''} · 第 ${currentRoundNumber} 轮`;
   // Only the latest confirmed round can be taken back, between rounds or after the game.
   const undoButton =
     completedRounds.length > 0 ? (
@@ -457,6 +463,9 @@ export const GameScreen = ({ navigation }: Props) => {
         players={scoreBoard?.players ?? players}
         currentPlayerId={currentPlayerId}
         winnerId={winnerId}
+        teams={teams}
+        people={players}
+        currentThrowerId={currentThrowerId}
       />
 
       <View

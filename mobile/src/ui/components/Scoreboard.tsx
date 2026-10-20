@@ -1,18 +1,24 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { colors } from '../theme/colors';
+import { colors, teamColors } from '../theme/colors';
 import {
   DARTS_99_ROUNDS,
   HIGH_SCORE_ROUNDS,
   getAroundTheClockTarget,
 } from '../../application/services/gameRules';
 import type { GameType, PlayerSummary } from '../../domain/game/types';
+import type { TeamInfo } from '../../domain/game/teams';
 
 interface ScoreboardProps {
   gameType: GameType | null;
+  // The scored sides: players, or teams in a team game.
   players: PlayerSummary[];
   currentPlayerId: string | null;
   winnerId: string | null;
+  // Team game only: lists each team's members and marks whose turn it is.
+  teams?: TeamInfo[] | null;
+  people?: PlayerSummary[];
+  currentThrowerId?: string | null;
 }
 
 const CRICKET_ROWS = ['20', '19', '18', '17', '16', '15', '25'];
@@ -48,23 +54,52 @@ const describePlayer = (gameType: GameType | null, player: PlayerSummary) => {
   }
 };
 
-export const Scoreboard = ({ gameType, players, currentPlayerId, winnerId }: ScoreboardProps) => (
+export const Scoreboard = ({
+  gameType,
+  players,
+  currentPlayerId,
+  winnerId,
+  teams = null,
+  people = [],
+  currentThrowerId = null,
+}: ScoreboardProps) => (
   <View style={styles.container}>
     <View style={styles.cards}>
       {players.map(player => {
         const { value, detail } = describePlayer(gameType, player);
         const isCurrent = winnerId === null && player.id === currentPlayerId;
         const isWinner = player.id === winnerId;
+        const team = teams?.find(item => item.id === player.id) ?? null;
+        const teamColor = team ? teamColors[team.index % teamColors.length] : null;
         return (
           <View
             key={player.id}
             style={[styles.card, isCurrent && styles.cardCurrent, isWinner && styles.cardWinner]}>
-            <Text numberOfLines={1} style={[styles.name, isCurrent && styles.nameCurrent]}>
-              {isWinner ? '🏆 ' : ''}
-              {player.name}
-            </Text>
+            <View style={styles.nameRow}>
+              {teamColor ? <View style={[styles.teamDot, { backgroundColor: teamColor }]} /> : null}
+              <Text numberOfLines={1} style={[styles.name, isCurrent && styles.nameCurrent]}>
+                {isWinner ? '🏆 ' : ''}
+                {player.name}
+              </Text>
+            </View>
             <Text style={styles.value}>{value}</Text>
             <Text style={styles.detail}>{detail}</Text>
+            {team ? (
+              <Text numberOfLines={2} style={styles.members}>
+                {team.memberIds.map((memberId, index) => (
+                  <Text
+                    key={memberId}
+                    style={
+                      isCurrent && memberId === currentThrowerId
+                        ? [styles.memberCurrent, { color: teamColor ?? colors.accent }]
+                        : undefined
+                    }>
+                    {index > 0 ? ' · ' : ''}
+                    {people.find(person => person.id === memberId)?.name ?? '—'}
+                  </Text>
+                ))}
+              </Text>
+            ) : null}
           </View>
         );
       })}
@@ -123,10 +158,31 @@ const styles = StyleSheet.create({
   cardWinner: {
     borderColor: colors.success,
   },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    maxWidth: '100%',
+  },
+  teamDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
   name: {
+    flexShrink: 1,
     fontSize: 13,
     fontWeight: '700',
     color: colors.textSecondary,
+  },
+  members: {
+    marginTop: 2,
+    fontSize: 11,
+    color: colors.textSecondary,
+    textAlign: 'center',
+  },
+  memberCurrent: {
+    fontWeight: '800',
   },
   nameCurrent: {
     color: colors.accent,

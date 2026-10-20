@@ -1,6 +1,7 @@
 import type { GameType, ThrowResult } from '../game/types';
 
 export interface CompletedRoundRecord {
+  // The person who threw these darts (in a team game, the team member).
   playerId: string;
   roundIndex: number;
   throws: ThrowResult[];
@@ -13,8 +14,11 @@ export interface CompletedMatchInput {
   players: Array<{
     id: string;
     name: string;
+    // Team game only (0 = A 队).
+    teamIndex?: number | null;
   }>;
-  winnerId: string | null;
+  // Every winning person: one player, or all members of the winning team.
+  winnerIds: string[];
   rounds: CompletedRoundRecord[];
 }
 
@@ -23,6 +27,7 @@ export interface MatchDetailPlayer {
   name: string;
   seatIndex: number;
   isWinner: boolean;
+  teamIndex: number | null;
 }
 
 export interface MatchDetailRound {
