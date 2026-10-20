@@ -97,7 +97,7 @@ cv::Mat DrawBoardCenterRadiusDebugImage(
     const cv::Mat& image_bgr,
     const BoardCircle& board_circle,
     const std::vector<cv::Mat>& red_region_masks,
-    const std::array<cv::Point2f, 4>& correction_points_src) {
+    const std::vector<cv::Point2f>& correction_points_src) {
     cv::Mat debug_image = image_bgr.clone();
     cv::circle(debug_image, cv::Point(board_circle.cx, board_circle.cy), board_circle.radius, cv::Scalar(0, 255, 255), 3);
     cv::circle(debug_image, cv::Point(board_circle.cx, board_circle.cy), 8, cv::Scalar(0, 0, 255), -1);
@@ -1053,10 +1053,6 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     PushRecentFrame(recent_frames_, current_frame_state);
     const TrackedYoloFrameState& stored_current = recent_frames_.back();
 
-    if (current_count == last_confirmed_dart_count_ && stored_current.has_board_box) {
-        last_clean_frame_ = stored_current;
-    }
-
     if (current_count <= last_confirmed_dart_count_) {
         pending_candidate_.reset();
         phantom_count_floor_ = 0;
@@ -1066,9 +1062,9 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
         pending_candidate_.reset();
         result.gate_reason = "yolo_phantom_box_ignored";
     } else if (!pending_candidate_.has_value()) {
-        // Compare against the latest frame showing exactly the confirmed darts, not simply the
-        // previous frame: after a failed confirmation the previous frame already holds the new
-        // dart, and every later attempt would then fail for the rest of the round.
+        // Compare against the frame of the last confirmation (or the empty board), not a frame
+        // picked by box count: YOLO often misses a low-confidence dart (one in the bull, say)
+        // for a frame or two, and such a frame may already hold the new dart.
         if (!last_clean_frame_.has_value()) {
             result.gate_reason = "yolo_count_not_increased";
         } else {

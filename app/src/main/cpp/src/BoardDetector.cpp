@@ -2,6 +2,8 @@
 
 #include "bulltrack_v2/Preprocessing.h"
 
+#include <android/log.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -17,8 +19,18 @@ namespace {
 
 constexpr double kAndroidRedRegionMinLongShortRatio = 2.3;
 constexpr double kInnerRemoveRadiusScale = 0.85;
-constexpr double kLongEdgeKeepScale = 0.5;
+// A piece shorter than this share of the median bed is noise; halves of a cut bed stay.
+constexpr double kFragmentLongEdgeScale = 0.35;
 constexpr int kExpectedDoubleRegionCount = 10;
+// Seats that must be filled to fit the board; a dart or its shadow may hide one or two beds.
+constexpr int kMinDoubleSeatCount = 8;
+// A bed further than this from its seat angle is not a double bed.
+constexpr double kMaxSeatAngleDeviationRad = 14.0 * CV_PI / 180.0;
+// Outer edge points within this share of the fitted ring radius count as on the ring.
+constexpr double kEllipseInlierTolerance = 0.2;
+// Largest allowed gap between a bed and its seat after the fit, in board radii (0.04 is about
+// 7 mm). First value; the real residual is logged and shown in the debug preview.
+constexpr double kMaxSeatResidual = 0.04;
 
 cv::Mat PrepareBoardMeasurementBaseImage(const cv::Mat& image_bgr) {
     if (image_bgr.empty()) {
@@ -60,10 +72,12 @@ struct RedRadiusCorrectionResult {
     cv::Mat perpendicular_components_binary;
     cv::Mat area_grouped_debug;
     cv::Mat perspective_corrected_preview_debug;
-    std::array<cv::Point2f, 4> correction_points_src{};
-    std::array<cv::Point2f, 4> correction_points_dst{};
+    std::vector<cv::Point2f> correction_points_src;
+    std::vector<cv::Point2f> correction_points_dst;
     cv::Mat point_rectification_h;
     std::string reason;
+    double seat_fit_max_residual = 0.0;
+    int seat_count = 0;
 };
 
 std::vector<ComponentCandidate> ExtractComponentCandidates(
@@ -205,24 +219,172 @@ cv::Point2f SelectFarthestLongEdgeMidpoint(const cv::RotatedRect& rect, const cv
     return best_midpoint.value();
 }
 
-std::array<cv::Point2f, 4> BuildCorrectionDestinationPoints() {
-    const std::array<double, 4> kAnglesDeg = {54.0, -54.0, -126.0, 126.0};
-    std::array<cv::Point2f, 4> dst_points{};
-    for (size_t i = 0; i < kAnglesDeg.size(); ++i) {
-        const double angle_rad = kAnglesDeg[i] * CV_PI / 180.0;
-        dst_points[i] = cv::Point2f(
-            static_cast<float>(std::cos(angle_rad)),
-            static_cast<float>(std::sin(angle_rad)));
-    }
-    return dst_points;
+// Point on the unit circle (y up) for double seat k, counted clockwise from the 20 at the top.
+cv::Point2f SeatDestinationPoint(int seat) {
+    const double angle_rad = (90.0 - 36.0 * seat) * CV_PI / 180.0;
+    return cv::Point2f(
+        static_cast<float>(std::cos(angle_rad)),
+        static_cast<float>(std::sin(angle_rad)));
 }
 
+double WrapAngle(double angle) {
+    angle = std::fmod(angle + CV_PI, 2.0 * CV_PI);
+    if (angle < 0.0) {
+        angle += 2.0 * CV_PI;
+    }
+    return angle - CV_PI;
+}
+
+struct DoubleSeatFit {
+    cv::Mat homography;
+    std::vector<cv::RotatedRect> seat_rects;
+    std::vector<cv::Point2f> src_points;
+    std::vector<cv::Point2f> dst_points;
+    std::vector<std::vector<size_t>> seat_members;
+    double max_residual = 0.0;
+};
+
+// Groups candidate beds into the 10 red double seats from their clockwise angle (0 = top) and
+// fits the homography from every filled seat. Pieces of one bed cut apart by a dart shaft land
+// in the same seat and are merged; a blob far from any seat is dropped instead of shifting the
+// numbering of the others.
+std::optional<DoubleSeatFit> FitSeatsFromAngles(
+    const std::vector<ComponentCandidate>& pool,
+    const std::vector<double>& angles,
+    const std::vector<bool>& usable,
+    const cv::Point2f& center,
+    double seat_offset) {
+    std::array<std::vector<size_t>, kExpectedDoubleRegionCount> seats;
+    const double seat_step = 2.0 * CV_PI / kExpectedDoubleRegionCount;
+    for (size_t i = 0; i < pool.size(); ++i) {
+        if (!usable[i]) {
+            continue;
+        }
+        const double relative = angles[i] - seat_offset;
+        const long seat_index = std::lround(relative / seat_step);
+        const double deviation = WrapAngle(relative - static_cast<double>(seat_index) * seat_step);
+        if (std::abs(deviation) > kMaxSeatAngleDeviationRad) {
+            continue;
+        }
+        const int seat = static_cast<int>(((seat_index % kExpectedDoubleRegionCount) + kExpectedDoubleRegionCount) % kExpectedDoubleRegionCount);
+        seats[seat].push_back(i);
+    }
+
+    DoubleSeatFit fit;
+    for (int seat = 0; seat < kExpectedDoubleRegionCount; ++seat) {
+        if (seats[seat].empty()) {
+            continue;
+        }
+        std::vector<cv::Point2f> corners;
+        for (size_t member : seats[seat]) {
+            std::array<cv::Point2f, 4> box_points{};
+            pool[member].rect.points(box_points.data());
+            corners.insert(corners.end(), box_points.begin(), box_points.end());
+        }
+        const cv::RotatedRect merged = seats[seat].size() == 1 ? pool[seats[seat].front()].rect : cv::minAreaRect(corners);
+        fit.seat_rects.push_back(merged);
+        fit.src_points.push_back(SelectFarthestLongEdgeMidpoint(merged, center));
+        fit.dst_points.push_back(SeatDestinationPoint(seat));
+        fit.seat_members.push_back(seats[seat]);
+    }
+    if (static_cast<int>(fit.src_points.size()) < kMinDoubleSeatCount) {
+        return std::nullopt;
+    }
+    fit.homography = cv::findHomography(fit.src_points, fit.dst_points, 0);
+    if (fit.homography.empty()) {
+        return std::nullopt;
+    }
+    std::vector<cv::Point2f> projected;
+    cv::perspectiveTransform(fit.src_points, projected, fit.homography);
+    for (size_t i = 0; i < projected.size(); ++i) {
+        fit.max_residual = std::max(fit.max_residual, static_cast<double>(cv::norm(projected[i] - fit.dst_points[i])));
+    }
+    return fit;
+}
+
+// Rough pass: the double ring images as an ellipse, so fit one through the beds' outer edge
+// points, squash it back to a circle and read each bed's angle there. Precise pass: with the
+// rough homography, read the angles in the rectified board instead and fit again.
+std::optional<DoubleSeatFit> FitDoubleSeats(
+    const std::vector<ComponentCandidate>& pool,
+    const cv::Point2f& rough_center) {
+    std::vector<cv::Point2f> outer_points;
+    outer_points.reserve(pool.size());
+    for (const auto& component : pool) {
+        outer_points.push_back(SelectFarthestLongEdgeMidpoint(component.rect, rough_center));
+    }
+    if (outer_points.size() < 5) {
+        return std::nullopt;
+    }
+
+    const auto normalize_to_ellipse = [](const cv::RotatedRect& ellipse, const cv::Point2f& point) {
+        const double theta = ellipse.angle * CV_PI / 180.0;
+        const double dx = point.x - ellipse.center.x;
+        const double dy = point.y - ellipse.center.y;
+        const double u = (dx * std::cos(theta) + dy * std::sin(theta)) / std::max(1e-6, ellipse.size.width * 0.5);
+        const double v = (-dx * std::sin(theta) + dy * std::cos(theta)) / std::max(1e-6, ellipse.size.height * 0.5);
+        // Rotate back so "up" in the image stays "up" on the squashed circle.
+        return cv::Point2d(u * std::cos(theta) - v * std::sin(theta), u * std::sin(theta) + v * std::cos(theta));
+    };
+
+    cv::RotatedRect ellipse = cv::fitEllipse(outer_points);
+    std::vector<cv::Point2f> inliers;
+    for (const auto& point : outer_points) {
+        const cv::Point2d normalized = normalize_to_ellipse(ellipse, point);
+        if (std::abs(std::hypot(normalized.x, normalized.y) - 1.0) < kEllipseInlierTolerance) {
+            inliers.push_back(point);
+        }
+    }
+    if (inliers.size() >= 5 && inliers.size() < outer_points.size()) {
+        ellipse = cv::fitEllipse(inliers);
+    }
+
+    std::vector<double> angles(pool.size(), 0.0);
+    std::vector<bool> usable(pool.size(), false);
+    double sum_sin = 0.0;
+    double sum_cos = 0.0;
+    for (size_t i = 0; i < pool.size(); ++i) {
+        const cv::Point2d normalized = normalize_to_ellipse(ellipse, outer_points[i]);
+        if (std::abs(std::hypot(normalized.x, normalized.y) - 1.0) >= kEllipseInlierTolerance) {
+            continue;
+        }
+        angles[i] = std::atan2(normalized.x, -normalized.y);
+        usable[i] = true;
+        sum_sin += std::sin(angles[i] * kExpectedDoubleRegionCount);
+        sum_cos += std::cos(angles[i] * kExpectedDoubleRegionCount);
+    }
+    // Every red double sits at a multiple of 36 degrees from the 20, so the common offset of all
+    // beds (a circular mean modulo 36 degrees) is the board's rotation; seat 0 is the one nearest
+    // the top, whichever side of it the 20 happens to be.
+    const double seat_offset = std::atan2(sum_sin, sum_cos) / kExpectedDoubleRegionCount;
+    std::optional<DoubleSeatFit> rough_fit = FitSeatsFromAngles(pool, angles, usable, ellipse.center, seat_offset);
+    if (!rough_fit.has_value()) {
+        return std::nullopt;
+    }
+
+    std::vector<cv::Point2f> rectified;
+    cv::perspectiveTransform(outer_points, rectified, rough_fit->homography);
+    cv::Point2f board_center = ellipse.center;
+    std::vector<cv::Point2f> center_projection;
+    cv::perspectiveTransform(std::vector<cv::Point2f>{cv::Point2f(0.0f, 0.0f)}, center_projection, rough_fit->homography.inv());
+    if (!center_projection.empty()) {
+        board_center = center_projection.front();
+    }
+    for (size_t i = 0; i < pool.size(); ++i) {
+        const double radius = std::hypot(rectified[i].x, rectified[i].y);
+        usable[i] = std::abs(radius - 1.0) < kEllipseInlierTolerance;
+        // Rectified coordinates have y up, so the clockwise angle from the top is atan2(x, y).
+        angles[i] = std::atan2(rectified[i].x, rectified[i].y);
+    }
+    std::optional<DoubleSeatFit> precise_fit = FitSeatsFromAngles(pool, angles, usable, board_center, 0.0);
+    return precise_fit.has_value() ? precise_fit : rough_fit;
+}
 #if BT_ENABLE_DEBUG_IMAGES
 cv::Mat DrawRotatedBoxesDebugImage(
     const cv::Mat& base_binary_img,
     const std::vector<ComponentCandidate>& components,
     const cv::Point2f& rough_center,
-    const std::optional<std::array<cv::Point2f, 4>>& correction_points = std::nullopt) {
+    const std::optional<std::vector<cv::Point2f>>& correction_points = std::nullopt) {
     cv::Mat debug_img;
     cv::cvtColor(base_binary_img, debug_img, cv::COLOR_GRAY2BGR);
     for (size_t i = 0; i < components.size(); ++i) {
@@ -368,11 +530,19 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     AdaptiveRedLabModel red_lab_model = EstimateAdaptiveRedLabModel(measurement_base_bgr);
     cv::Mat red_only_mask = ExtractRedOnlyMask(measurement_base_bgr, red_lab_model);
     cv::Mat red_binary_pre = red_only_mask.clone();
-    const int inner_remove_radius = std::max(1, static_cast<int>(std::lround(static_cast<double>(rough_radius) * kInnerRemoveRadiusScale)));
-    cv::circle(
+    // Seen at an angle the board is an ellipse filling the box, so remove an ellipse scaled from
+    // the box; a circle from the box width cut into the top and bottom doubles when shot from
+    // above or below.
+    const cv::Size inner_remove_axes(
+        std::max(1, static_cast<int>(std::lround(img_before.cols * 0.5 * kInnerRemoveRadiusScale))),
+        std::max(1, static_cast<int>(std::lround(img_before.rows * 0.5 * kInnerRemoveRadiusScale))));
+    cv::ellipse(
         red_binary_pre,
         cv::Point(static_cast<int>(std::lround(rough_center.x)), static_cast<int>(std::lround(rough_center.y))),
-        inner_remove_radius,
+        inner_remove_axes,
+        0.0,
+        0.0,
+        360.0,
         cv::Scalar(0),
         -1);
     cv::Mat inner_removed_binary = red_binary_pre.clone();
@@ -418,90 +588,44 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
             rough_center);
     }
 #endif
-    if (perpendicular_components.size() < kExpectedDoubleRegionCount) {
-        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "垂直方向筛选后双倍区不足10个"};
+    if (static_cast<int>(perpendicular_components.size()) < kMinDoubleSeatCount) {
+        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "垂直方向筛选后双倍区不足8个"};
     }
 
-    std::sort(perpendicular_components.begin(), perpendicular_components.end(), [](const ComponentCandidate& lhs, const ComponentCandidate& rhs) {
-        return lhs.center_distance < rhs.center_distance;
-    });
-
-    std::vector<ComponentCandidate> rough_candidates(
-        perpendicular_components.begin(),
-        perpendicular_components.begin() + kExpectedDoubleRegionCount);
-    const double rough_long_edge_mean =
-        std::accumulate(
-            rough_candidates.begin(),
-            rough_candidates.end(),
-            0.0,
-            [](double sum, const ComponentCandidate& component) {
-                return sum + GetRotatedRectLongEdge(component.rect);
-            }) / static_cast<double>(rough_candidates.size());
-
-    std::vector<ComponentCandidate> precise_candidates;
-    if (perpendicular_components.size() == kExpectedDoubleRegionCount) {
-        precise_candidates = rough_candidates;
-    } else {
-        std::vector<ComponentCandidate> long_edge_filtered_candidates;
-        for (const auto& component : perpendicular_components) {
-            if (GetRotatedRectLongEdge(component.rect) > (rough_long_edge_mean * kLongEdgeKeepScale)) {
-                long_edge_filtered_candidates.push_back(component);
-            }
+    // Drop small fragments, but keep halves of a bed cut by a dart shaft: seats merge those.
+    std::vector<double> long_edges;
+    long_edges.reserve(perpendicular_components.size());
+    for (const auto& component : perpendicular_components) {
+        long_edges.push_back(GetRotatedRectLongEdge(component.rect));
+    }
+    std::nth_element(long_edges.begin(), long_edges.begin() + long_edges.size() / 2, long_edges.end());
+    const double median_long_edge = long_edges[long_edges.size() / 2];
+    std::vector<ComponentCandidate> pool;
+    for (const auto& component : perpendicular_components) {
+        if (GetRotatedRectLongEdge(component.rect) > median_long_edge * kFragmentLongEdgeScale) {
+            pool.push_back(component);
         }
-        if (long_edge_filtered_candidates.size() < kExpectedDoubleRegionCount) {
-            cv::Mat area_grouped_debug;
-#if BT_ENABLE_DEBUG_IMAGES
-            area_grouped_debug = DrawAreaFilteredDebugImage(
-                red_binary_pre.size(),
-                rough_candidates,
-                long_edge_filtered_candidates,
-                rough_long_edge_mean);
-#endif
-            return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, area_grouped_debug, cv::Mat(), {}, {}, cv::Mat(), "长边筛选后双倍区不足10个"};
-        }
-        std::sort(long_edge_filtered_candidates.begin(), long_edge_filtered_candidates.end(), [](const ComponentCandidate& lhs, const ComponentCandidate& rhs) {
-            return lhs.center_distance < rhs.center_distance;
-        });
-        precise_candidates.assign(
-            long_edge_filtered_candidates.begin(),
-            long_edge_filtered_candidates.begin() + kExpectedDoubleRegionCount);
     }
 
-    // The 20 double sits right on the top direction, so start the clockwise order half a gap
-    // (18 degrees) before it: a board or camera tilted slightly left must not push it to the end.
-    const auto order_key = [](const ComponentCandidate& component) {
-        return std::fmod(component.angle_from_top_clockwise + CV_PI / kExpectedDoubleRegionCount, 2.0 * CV_PI);
-    };
-    std::sort(precise_candidates.begin(), precise_candidates.end(), [&order_key](const ComponentCandidate& lhs, const ComponentCandidate& rhs) {
-        return order_key(lhs) < order_key(rhs);
-    });
-
-    const std::array<int, 4> kSelectedIndices = {1, 4, 6, 9};
-    std::array<cv::Point2f, 4> correction_points_src{};
-    for (size_t i = 0; i < kSelectedIndices.size(); ++i) {
-        correction_points_src[i] = SelectFarthestLongEdgeMidpoint(
-            precise_candidates[kSelectedIndices[i]].rect,
-            rough_center);
+    std::optional<DoubleSeatFit> seat_fit = FitDoubleSeats(pool, rough_center);
+    if (!seat_fit.has_value()) {
+        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "分座位后双倍区不足8个"};
     }
-    const std::array<cv::Point2f, 4> correction_points_dst = BuildCorrectionDestinationPoints();
-    const float rectified_radius = cv::norm(correction_points_dst[0]);
-    const std::vector<cv::Point2f> correction_points_src_vec(
-        correction_points_src.begin(),
-        correction_points_src.end());
-    const std::vector<cv::Point2f> correction_points_dst_vec(
-        correction_points_dst.begin(),
-        correction_points_dst.end());
-    cv::Mat point_rectification_h = cv::getPerspectiveTransform(
-        correction_points_src_vec,
-        correction_points_dst_vec);
-    if (point_rectification_h.empty()) {
-        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, cv::Mat(), cv::Mat(), cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "无法计算透视矫正矩阵"};
+    if (seat_fit->max_residual > kMaxSeatResidual) {
+        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), seat_fit->src_points, seat_fit->dst_points, cv::Mat(), cv::format("双倍区位置不一致(残差%.3f)", seat_fit->max_residual), seat_fit->max_residual, static_cast<int>(seat_fit->src_points.size())};
     }
+    const cv::Mat& point_rectification_h = seat_fit->homography;
+    const float rectified_radius = 1.0f;
 
+    std::vector<ComponentCandidate> seat_candidates;
     std::vector<cv::Mat> selected_masks;
-    selected_masks.reserve(precise_candidates.size());
-    for (const auto& component : precise_candidates) {
-        selected_masks.push_back(component.mask);
+    for (size_t seat = 0; seat < seat_fit->seat_rects.size(); ++seat) {
+        ComponentCandidate merged;
+        merged.rect = seat_fit->seat_rects[seat];
+        seat_candidates.push_back(merged);
+        for (size_t member : seat_fit->seat_members[seat]) {
+            selected_masks.push_back(pool[member].mask);
+        }
     }
     const double corrected_radius = static_cast<double>(rectified_radius);
 
@@ -511,25 +635,21 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     if (DebugImagesActive()) {
         perpendicular_rotated_boxes_debug = DrawRotatedBoxesDebugImage(
             perpendicular_components_binary.empty() ? red_binary_pre : perpendicular_components_binary,
-            precise_candidates,
+            seat_candidates,
             rough_center,
-            correction_points_src);
+            seat_fit->src_points);
         area_grouped_debug = DrawAreaFilteredDebugImage(
             red_binary_pre.size(),
-            rough_candidates,
-            precise_candidates,
-            rough_long_edge_mean);
+            pool,
+            seat_candidates,
+            median_long_edge);
 
-        std::array<cv::Point2f, 4> preview_dst{};
-        for (size_t i = 0; i < correction_points_dst.size(); ++i) {
-            preview_dst[i] = cv::Point2f(
-                rough_center.x + correction_points_dst[i].x * rough_radius,
-                rough_center.y - correction_points_dst[i].y * rough_radius);
-        }
-        const int preview_radius = static_cast<int>(std::lround(cv::norm(preview_dst[0] - rough_center)));
-        const std::vector<cv::Point2f> preview_dst_vec(preview_dst.begin(), preview_dst.end());
-        cv::Mat preview_h = cv::getPerspectiveTransform(correction_points_src_vec, preview_dst_vec);
-        perspective_corrected_preview_debug = img_before.clone();
+        // Rectified board drawn at the rough board size around the crop centre.
+        const cv::Matx33d to_preview(
+            rough_radius, 0.0, rough_center.x,
+            0.0, -rough_radius, rough_center.y,
+            0.0, 0.0, 1.0);
+        const cv::Mat preview_h = cv::Mat(to_preview) * point_rectification_h;
         cv::warpPerspective(
             img_before,
             perspective_corrected_preview_debug,
@@ -537,32 +657,23 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
             img_before.size(),
             cv::INTER_LINEAR,
             cv::BORDER_CONSTANT);
-        cv::circle(
-            perspective_corrected_preview_debug,
-            cv::Point(static_cast<int>(std::lround(rough_center.x)), static_cast<int>(std::lround(rough_center.y))),
-            preview_radius,
-            cv::Scalar(0, 255, 255),
-            3);
-        cv::circle(
-            perspective_corrected_preview_debug,
-            cv::Point(static_cast<int>(std::lround(rough_center.x)), static_cast<int>(std::lround(rough_center.y))),
-            8,
-            cv::Scalar(0, 0, 255),
-            -1);
-        for (size_t i = 0; i < preview_dst.size(); ++i) {
+        const cv::Point preview_center(static_cast<int>(std::lround(rough_center.x)), static_cast<int>(std::lround(rough_center.y)));
+        cv::circle(perspective_corrected_preview_debug, preview_center, static_cast<int>(std::lround(rough_radius)), cv::Scalar(0, 255, 255), 3);
+        cv::circle(perspective_corrected_preview_debug, preview_center, 8, cv::Scalar(0, 0, 255), -1);
+        for (size_t i = 0; i < seat_fit->dst_points.size(); ++i) {
             const cv::Point point(
-                static_cast<int>(std::lround(preview_dst[i].x)),
-                static_cast<int>(std::lround(preview_dst[i].y)));
+                static_cast<int>(std::lround(rough_center.x + seat_fit->dst_points[i].x * rough_radius)),
+                static_cast<int>(std::lround(rough_center.y - seat_fit->dst_points[i].y * rough_radius)));
             cv::circle(perspective_corrected_preview_debug, point, 8, cv::Scalar(255, 0, 255), -1);
-            cv::putText(
-                perspective_corrected_preview_debug,
-                "P" + std::to_string(static_cast<int>(i + 1)),
-                point + cv::Point(6, -6),
-                cv::FONT_HERSHEY_SIMPLEX,
-                0.55,
-                cv::Scalar(255, 0, 255),
-                2);
         }
+        cv::putText(
+            perspective_corrected_preview_debug,
+            cv::format("seats=%d residual=%.3f", static_cast<int>(seat_fit->src_points.size()), seat_fit->max_residual),
+            cv::Point(12, 28),
+            cv::FONT_HERSHEY_SIMPLEX,
+            0.7,
+            cv::Scalar(255, 255, 0),
+            2);
     }
 #endif
 
@@ -577,10 +688,12 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         perpendicular_components_binary,
         area_grouped_debug,
         perspective_corrected_preview_debug,
-        correction_points_src,
-        correction_points_dst,
+        seat_fit->src_points,
+        seat_fit->dst_points,
         point_rectification_h,
-        "透视双倍区纠正成功"
+        "透视双倍区纠正成功",
+        seat_fit->max_residual,
+        static_cast<int>(seat_fit->src_points.size())
     };
 }
 
@@ -626,6 +739,15 @@ BoardCircleDetectionResult DetectBoardCircleDetailed(
     detection_result.correction_points_src = red_radius_result.correction_points_src;
     detection_result.correction_points_dst = red_radius_result.correction_points_dst;
     detection_result.point_rectification_h = red_radius_result.point_rectification_h.clone();
+    detection_result.seat_fit_max_residual = red_radius_result.seat_fit_max_residual;
+    detection_result.seat_count = red_radius_result.seat_count;
+    __android_log_print(
+        ANDROID_LOG_INFO,
+        "BullTrackNativeV2",
+        "board setup: %s seats=%d residual=%.4f",
+        red_radius_result.reason.c_str(),
+        red_radius_result.seat_count,
+        red_radius_result.seat_fit_max_residual);
     if (!red_radius_result.corrected_radius.has_value()) {
         detection_result.success = false;
         detection_result.error_message = red_radius_result.reason;

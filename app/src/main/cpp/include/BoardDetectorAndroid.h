@@ -4,6 +4,7 @@
 #include "DebugImageConfig.h"
 
 #include <array>
+#include <vector>
 
 namespace bulltrack {
 
@@ -28,9 +29,12 @@ struct BoardCircleDetectionResult {
     cv::Mat red_radius_perpendicular_components_binary;
     cv::Mat red_radius_area_grouped_debug;
     cv::Mat perspective_corrected_preview_debug;
-    std::array<cv::Point2f, 4> correction_points_src{};
-    std::array<cv::Point2f, 4> correction_points_dst{};
+    std::vector<cv::Point2f> correction_points_src;
+    std::vector<cv::Point2f> correction_points_dst;
     cv::Mat point_rectification_h;
+    // Largest bed-to-seat gap after the homography fit (board radii) and how many seats it used.
+    double seat_fit_max_residual = 0.0;
+    int seat_count = 0;
 };
 
 BoardCircleDetectionResult DetectBoardCircleDetailed(
