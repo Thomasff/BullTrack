@@ -80,12 +80,26 @@ std::vector<ComponentCandidate> ExtractComponentCandidates(
         if (area < min_area) {
             continue;
         }
-        cv::Mat mask = labels == label;
-        mask.convertTo(mask, CV_8U);
+        // Work inside the component's bounding box instead of comparing the whole label image
+        // per component; the full-size mask is only kept for debug images.
+        const cv::Rect bbox(
+            stats.at<int>(label, cv::CC_STAT_LEFT),
+            stats.at<int>(label, cv::CC_STAT_TOP),
+            stats.at<int>(label, cv::CC_STAT_WIDTH),
+            stats.at<int>(label, cv::CC_STAT_HEIGHT));
+        const cv::Mat roi_mask = labels(bbox) == label;
         std::vector<cv::Point> points;
-        cv::findNonZero(mask, points);
+        cv::findNonZero(roi_mask, points);
         if (points.empty()) {
             continue;
+        }
+        for (cv::Point& point : points) {
+            point += bbox.tl();
+        }
+        cv::Mat mask;
+        if (DebugImagesActive()) {
+            mask = cv::Mat::zeros(binary_img.size(), CV_8U);
+            roi_mask.copyTo(mask(bbox));
         }
         const cv::RotatedRect rect = cv::minAreaRect(points);
         const double dx = static_cast<double>(rect.center.x) - static_cast<double>(rough_center.x);
@@ -391,16 +405,18 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     cv::Mat perpendicular_components_binary;
     cv::Mat perpendicular_rotated_boxes_debug;
 #if BT_ENABLE_DEBUG_IMAGES
-    perpendicular_components_binary = cv::Mat::zeros(red_binary_pre.size(), CV_8U);
-    for (const auto& component : perpendicular_components) {
-        cv::bitwise_or(perpendicular_components_binary, component.mask, perpendicular_components_binary);
+    if (DebugImagesActive()) {
+        perpendicular_components_binary = cv::Mat::zeros(red_binary_pre.size(), CV_8U);
+        for (const auto& component : perpendicular_components) {
+            cv::bitwise_or(perpendicular_components_binary, component.mask, perpendicular_components_binary);
+        }
+        const cv::Mat& rotated_debug_base =
+            perpendicular_components.empty() ? red_binary_pre : perpendicular_components_binary;
+        perpendicular_rotated_boxes_debug = DrawRotatedBoxesDebugImage(
+            rotated_debug_base,
+            perpendicular_components,
+            rough_center);
     }
-    const cv::Mat& rotated_debug_base =
-        perpendicular_components.empty() ? red_binary_pre : perpendicular_components_binary;
-    perpendicular_rotated_boxes_debug = DrawRotatedBoxesDebugImage(
-        rotated_debug_base,
-        perpendicular_components,
-        rough_center);
 #endif
     if (perpendicular_components.size() < kExpectedDoubleRegionCount) {
         return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "垂直方向筛选后双倍区不足10个"};
@@ -492,59 +508,61 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     cv::Mat area_grouped_debug;
     cv::Mat perspective_corrected_preview_debug;
 #if BT_ENABLE_DEBUG_IMAGES
-    perpendicular_rotated_boxes_debug = DrawRotatedBoxesDebugImage(
-        perpendicular_components_binary.empty() ? red_binary_pre : perpendicular_components_binary,
-        precise_candidates,
-        rough_center,
-        correction_points_src);
-    area_grouped_debug = DrawAreaFilteredDebugImage(
-        red_binary_pre.size(),
-        rough_candidates,
-        precise_candidates,
-        rough_long_edge_mean);
+    if (DebugImagesActive()) {
+        perpendicular_rotated_boxes_debug = DrawRotatedBoxesDebugImage(
+            perpendicular_components_binary.empty() ? red_binary_pre : perpendicular_components_binary,
+            precise_candidates,
+            rough_center,
+            correction_points_src);
+        area_grouped_debug = DrawAreaFilteredDebugImage(
+            red_binary_pre.size(),
+            rough_candidates,
+            precise_candidates,
+            rough_long_edge_mean);
 
-    std::array<cv::Point2f, 4> preview_dst{};
-    for (size_t i = 0; i < correction_points_dst.size(); ++i) {
-        preview_dst[i] = cv::Point2f(
-            rough_center.x + correction_points_dst[i].x * rough_radius,
-            rough_center.y - correction_points_dst[i].y * rough_radius);
-    }
-    const int preview_radius = static_cast<int>(std::lround(cv::norm(preview_dst[0] - rough_center)));
-    const std::vector<cv::Point2f> preview_dst_vec(preview_dst.begin(), preview_dst.end());
-    cv::Mat preview_h = cv::getPerspectiveTransform(correction_points_src_vec, preview_dst_vec);
-    perspective_corrected_preview_debug = img_before.clone();
-    cv::warpPerspective(
-        img_before,
-        perspective_corrected_preview_debug,
-        preview_h,
-        img_before.size(),
-        cv::INTER_LINEAR,
-        cv::BORDER_CONSTANT);
-    cv::circle(
-        perspective_corrected_preview_debug,
-        cv::Point(static_cast<int>(std::lround(rough_center.x)), static_cast<int>(std::lround(rough_center.y))),
-        preview_radius,
-        cv::Scalar(0, 255, 255),
-        3);
-    cv::circle(
-        perspective_corrected_preview_debug,
-        cv::Point(static_cast<int>(std::lround(rough_center.x)), static_cast<int>(std::lround(rough_center.y))),
-        8,
-        cv::Scalar(0, 0, 255),
-        -1);
-    for (size_t i = 0; i < preview_dst.size(); ++i) {
-        const cv::Point point(
-            static_cast<int>(std::lround(preview_dst[i].x)),
-            static_cast<int>(std::lround(preview_dst[i].y)));
-        cv::circle(perspective_corrected_preview_debug, point, 8, cv::Scalar(255, 0, 255), -1);
-        cv::putText(
+        std::array<cv::Point2f, 4> preview_dst{};
+        for (size_t i = 0; i < correction_points_dst.size(); ++i) {
+            preview_dst[i] = cv::Point2f(
+                rough_center.x + correction_points_dst[i].x * rough_radius,
+                rough_center.y - correction_points_dst[i].y * rough_radius);
+        }
+        const int preview_radius = static_cast<int>(std::lround(cv::norm(preview_dst[0] - rough_center)));
+        const std::vector<cv::Point2f> preview_dst_vec(preview_dst.begin(), preview_dst.end());
+        cv::Mat preview_h = cv::getPerspectiveTransform(correction_points_src_vec, preview_dst_vec);
+        perspective_corrected_preview_debug = img_before.clone();
+        cv::warpPerspective(
+            img_before,
             perspective_corrected_preview_debug,
-            "P" + std::to_string(static_cast<int>(i + 1)),
-            point + cv::Point(6, -6),
-            cv::FONT_HERSHEY_SIMPLEX,
-            0.55,
-            cv::Scalar(255, 0, 255),
-            2);
+            preview_h,
+            img_before.size(),
+            cv::INTER_LINEAR,
+            cv::BORDER_CONSTANT);
+        cv::circle(
+            perspective_corrected_preview_debug,
+            cv::Point(static_cast<int>(std::lround(rough_center.x)), static_cast<int>(std::lround(rough_center.y))),
+            preview_radius,
+            cv::Scalar(0, 255, 255),
+            3);
+        cv::circle(
+            perspective_corrected_preview_debug,
+            cv::Point(static_cast<int>(std::lround(rough_center.x)), static_cast<int>(std::lround(rough_center.y))),
+            8,
+            cv::Scalar(0, 0, 255),
+            -1);
+        for (size_t i = 0; i < preview_dst.size(); ++i) {
+            const cv::Point point(
+                static_cast<int>(std::lround(preview_dst[i].x)),
+                static_cast<int>(std::lround(preview_dst[i].y)));
+            cv::circle(perspective_corrected_preview_debug, point, 8, cv::Scalar(255, 0, 255), -1);
+            cv::putText(
+                perspective_corrected_preview_debug,
+                "P" + std::to_string(static_cast<int>(i + 1)),
+                point + cv::Point(6, -6),
+                cv::FONT_HERSHEY_SIMPLEX,
+                0.55,
+                cv::Scalar(255, 0, 255),
+                2);
+        }
     }
 #endif
 
@@ -594,7 +612,9 @@ BoardCircleDetectionResult DetectBoardCircleDetailed(
     detection_result.adaptive_red_a = red_radius_result.red_lab_model.a;
     detection_result.adaptive_red_b = red_radius_result.red_lab_model.b;
     detection_result.adaptive_red_sample_count = red_radius_result.red_lab_model.sample_count;
-    detection_result.adaptive_red_measurement_base_bgr = PrepareBoardMeasurementBaseImage(img_before);
+    if (DebugImagesActive()) {
+        detection_result.adaptive_red_measurement_base_bgr = PrepareBoardMeasurementBaseImage(img_before);
+    }
     detection_result.adaptive_red_sample_rect = red_radius_result.red_lab_model.sample_rect;
     detection_result.adaptive_red_sample_points = red_radius_result.red_lab_model.sample_points;
     detection_result.red_radius_selected_component_masks = red_radius_result.selected_component_masks;

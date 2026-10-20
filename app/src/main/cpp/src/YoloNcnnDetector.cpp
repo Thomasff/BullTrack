@@ -234,6 +234,13 @@ public:
                 return DetectWithBackend(image_bgr, gpu_runtime_, "GPU", "");
             } catch (const std::exception& error) {
                 gpu_failure_detail = std::string("GPU fallback: ") + error.what();
+                // A model that failed to load on the GPU would be reloaded (~20 MB) on every
+                // frame before falling back, so stay on the CPU from now on. A one-off
+                // inference error after a successful load keeps the GPU.
+                if (!gpu_runtime_.initialized) {
+                    gpu_available_ = false;
+                    gpu_failure_reason_ = error.what();
+                }
             }
         } else {
             gpu_failure_detail = gpu_failure_reason_.empty()

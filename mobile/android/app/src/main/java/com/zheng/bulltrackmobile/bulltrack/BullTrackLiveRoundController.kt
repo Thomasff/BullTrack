@@ -264,6 +264,7 @@ class BullTrackLiveRoundController(
 
         bindNativeCaptureOnly()
         val firstFrame = cameraManager.captureFirstFrameForRound()
+        val firstFrameCapturedNs = SystemClock.elapsedRealtimeNanos()
         clearLiveFrames()
         publishLiveFrame(roundId, firstFrame.bitmap)
         val sessionId = withTimeout(NATIVE_CALL_TIMEOUT_MS) {
@@ -305,18 +306,20 @@ class BullTrackLiveRoundController(
         )
 
         var frameIndex = 2
-        var lastCaptureTimestampNs = firstFrame.timestampNs
+        // Pace with our own clock taken right before each capture: the sensor timestamp is not
+        // guaranteed to share the elapsedRealtime time base, and a mismatch removed all waiting.
+        var lastCaptureStartNs = firstFrameCapturedNs
         var captureNextImmediately = false
         while (!stopRequested) {
             if (!captureNextImmediately) {
-                waitUntilNextFrameWindow(lastCaptureTimestampNs)
+                waitUntilNextFrameWindow(lastCaptureStartNs)
             }
             if (stopRequested) {
                 break
             }
+            lastCaptureStartNs = SystemClock.elapsedRealtimeNanos()
             val frame = cameraManager.captureNextFrameForRound()
             publishLiveFrame(roundId, frame.bitmap)
-            lastCaptureTimestampNs = frame.timestampNs
             val decision = processNextFrame(frameIndex = frameIndex, frameBitmap = frame.bitmap)
             captureNextImmediately = decision.captureNextImmediately
             if (decision.shouldStop) {
@@ -358,9 +361,9 @@ class BullTrackLiveRoundController(
         }
     }
 
-    private suspend fun waitUntilNextFrameWindow(lastCaptureTimestampNs: Long) {
+    private suspend fun waitUntilNextFrameWindow(lastCaptureStartNs: Long) {
         val nowNs = SystemClock.elapsedRealtimeNanos()
-        val elapsedNs = nowNs - lastCaptureTimestampNs
+        val elapsedNs = nowNs - lastCaptureStartNs
         if (elapsedNs < 0L) {
             return
         }

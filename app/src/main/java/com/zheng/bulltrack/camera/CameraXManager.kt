@@ -648,13 +648,22 @@ class CameraXManager : CameraManager {
             else -> throw IllegalArgumentException("不支持的图像格式: ${image.format}")
         } ?: throw IllegalStateException("无法解码相机图像")
 
+        // Each step may return a new full-size bitmap (about 8 MB at 1080x1920); intermediates are
+        // recycled right away instead of waiting for GC, and no extra defensive copies are made.
         val rotated = rotateBitmap(bitmap, image.imageInfo.rotationDegrees.toFloat())
-        return centerCropToTarget(rotated, TARGET_WIDTH, TARGET_HEIGHT)
+        if (rotated !== bitmap) {
+            bitmap.recycle()
+        }
+        val cropped = centerCropToTarget(rotated, TARGET_WIDTH, TARGET_HEIGHT)
+        if (cropped !== rotated) {
+            rotated.recycle()
+        }
+        return ensureArgb8888(cropped)
     }
 
     private fun rotateBitmap(bitmap: Bitmap, rotationDegrees: Float): Bitmap {
         if (rotationDegrees == 0f) {
-            return bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            return bitmap
         }
         val matrix = Matrix().apply { postRotate(rotationDegrees) }
         return Bitmap.createBitmap(
@@ -665,10 +674,13 @@ class CameraXManager : CameraManager {
             bitmap.height,
             matrix,
             true
-        ).copy(Bitmap.Config.ARGB_8888, false)
+        )
     }
 
     private fun centerCropToTarget(bitmap: Bitmap, targetWidth: Int, targetHeight: Int): Bitmap {
+        if (bitmap.width == targetWidth && bitmap.height == targetHeight) {
+            return bitmap
+        }
         val scale = maxOf(
             targetWidth.toFloat() / bitmap.width.toFloat(),
             targetHeight.toFloat() / bitmap.height.toFloat()
@@ -678,13 +690,26 @@ class CameraXManager : CameraManager {
         val scaled = Bitmap.createScaledBitmap(bitmap, scaledWidth, scaledHeight, true)
         val left = ((scaledWidth - targetWidth) / 2).coerceAtLeast(0)
         val top = ((scaledHeight - targetHeight) / 2).coerceAtLeast(0)
-        return Bitmap.createBitmap(
+        val cropped = Bitmap.createBitmap(
             scaled,
             left,
             top,
             targetWidth.coerceAtMost(scaled.width - left),
             targetHeight.coerceAtMost(scaled.height - top)
-        ).copy(Bitmap.Config.ARGB_8888, false)
+        )
+        if (scaled !== bitmap && scaled !== cropped) {
+            scaled.recycle()
+        }
+        return cropped
+    }
+
+    private fun ensureArgb8888(bitmap: Bitmap): Bitmap {
+        if (bitmap.config == Bitmap.Config.ARGB_8888) {
+            return bitmap
+        }
+        val converted = bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        bitmap.recycle()
+        return converted
     }
 
     private fun yuv420888ToNv21(image: ImageProxy): ByteArray {

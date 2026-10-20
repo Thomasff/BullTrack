@@ -2,10 +2,10 @@ package com.zheng.bulltrack.vision
 
 import android.content.res.AssetManager
 import android.graphics.Bitmap
-import android.graphics.Color
 import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.ThrowResult
 import com.zheng.bulltrack.domain.scoring.VirtualBoardScorer
+import java.nio.ByteBuffer
 
 class NativeDartDetector(
     private val assetManager: AssetManager? = null
@@ -111,20 +111,19 @@ class NativeDartDetector(
         )
     }
 
+    // ARGB_8888 pixels sit in memory as R, G, B, A bytes, which is the RGBA layout the native side
+    // expects, so one bulk copy replaces a per-pixel loop and an extra int array per frame.
+    // Camera frames are opaque, so premultiplied alpha does not change the colors.
     private fun bitmapToByteArray(bitmap: Bitmap): ByteArray {
-        val width = bitmap.width
-        val height = bitmap.height
-        val pixels = IntArray(width * height)
-        bitmap.getPixels(pixels, 0, width, 0, 0, width, height)
-
-        val byteArray = ByteArray(width * height * 4)
-        for (i in pixels.indices) {
-            val pixel = pixels[i]
-            val offset = i * 4
-            byteArray[offset] = Color.red(pixel).toByte()
-            byteArray[offset + 1] = Color.green(pixel).toByte()
-            byteArray[offset + 2] = Color.blue(pixel).toByte()
-            byteArray[offset + 3] = Color.alpha(pixel).toByte()
+        val source = if (bitmap.config == Bitmap.Config.ARGB_8888) {
+            bitmap
+        } else {
+            bitmap.copy(Bitmap.Config.ARGB_8888, false)
+        }
+        val byteArray = ByteArray(source.width * source.height * 4)
+        source.copyPixelsToBuffer(ByteBuffer.wrap(byteArray))
+        if (source !== bitmap) {
+            source.recycle()
         }
         return byteArray
     }

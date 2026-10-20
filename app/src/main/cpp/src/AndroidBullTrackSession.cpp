@@ -489,18 +489,6 @@ cv::Rect SelectBestBoardBox(const YoloDetectionResult& detection, const cv::Size
     return board_box.value();
 }
 
-cv::Mat CropByReferenceBoardBox(const cv::Mat& image, const cv::Rect& board_box) {
-    return CropBoardByRect(
-        image,
-        ClampRectToImage(
-            cv::Rect2f(
-                static_cast<float>(board_box.x),
-                static_cast<float>(board_box.y),
-                static_cast<float>(board_box.width),
-                static_cast<float>(board_box.height)),
-            image.size()));
-}
-
 FirstFrameBoardBaseline BuildFirstFrameBoardBaseline(
     const cv::Mat& first_frame_bgr,
     const PipelineConfig& pipeline_config) {
@@ -539,13 +527,12 @@ FirstFrameBoardBaseline BuildFirstFrameBoardBaseline(
 TrackedYoloFrameState BuildTrackedYoloFrameState(
     int frame_index,
     const cv::Mat& frame_bgr,
-    const cv::Rect& reference_board_box,
     const YoloDetectionResult& detection,
     int max_dart_count) {
     TrackedYoloFrameState frame_state;
     frame_state.frame_index = frame_index;
-    frame_state.frame_bgr = frame_bgr.clone();
-    frame_state.reference_board_crop_bgr = CropByReferenceBoardBox(frame_bgr, reference_board_box);
+    // Frames are never modified after capture, so sharing the buffer is safe and saves a copy.
+    frame_state.frame_bgr = frame_bgr;
     std::optional<cv::Rect> detected_board_box = SelectOptionalBestBoardBox(detection, frame_bgr.size());
     if (detected_board_box.has_value()) {
         frame_state.board_box = detected_board_box.value();
@@ -736,25 +723,26 @@ cv::Mat DrawRedetectSummaryImage(
 }
 #endif
 
-LocalizedDartDetectionResult DetectLocalizedDartTip(
+// Board-wide preparation shared by every dart box of the same before/after pair.
+struct AlignedBoardPair {
+    cv::Size round_board_size;
+    cv::Mat before_gray_aligned;
+    cv::Mat after_gray_aligned;
+    // Colour view of the aligned after image, only filled while debug images are on.
+    cv::Mat after_view_aligned;
+};
+
+std::optional<AlignedBoardPair> PrepareAlignedBoardPair(
     const cv::Mat& first_preprocessed_gray,
     const cv::Mat& before_board_crop_bgr,
     const cv::Mat& after_board_crop_bgr,
-    const cv::Rect& after_board_box,
-    const YoloDetectionBox& dart_box,
-    const cv::Mat& point_rectification_h,
-    float rectified_radius,
-    const PipelineConfig& config,
-    int frame_index,
-    const std::string& debug_prefix) {
-    LocalizedDartDetectionResult result;
+    const PipelineConfig& config) {
     const cv::Size round_board_size = first_preprocessed_gray.size();
     if (round_board_size.width <= 0 || round_board_size.height <= 0) {
         throw std::runtime_error("首帧预处理图为空");
     }
     if (before_board_crop_bgr.empty() || after_board_crop_bgr.empty()) {
-        result.reason = "local_dart_box_invalid";
-        return result;
+        return std::nullopt;
     }
 
     cv::Mat before_resized = ResizeToTargetSize(before_board_crop_bgr, round_board_size);
@@ -783,28 +771,43 @@ LocalizedDartDetectionResult DetectLocalizedDartTip(
         3,
         "euclidean");
 
-    cv::Mat before_gray_aligned = before_alignment.aligned_target;
-    cv::Mat after_gray_aligned = after_alignment.aligned_target;
+    AlignedBoardPair pair;
+    pair.round_board_size = round_board_size;
+    pair.before_gray_aligned = before_alignment.aligned_target;
+    pair.after_gray_aligned = after_alignment.aligned_target;
 #if BT_ENABLE_DEBUG_IMAGES
-    cv::Mat after_view_aligned = WarpImageWithMatrix(
-        after_view,
-        after_alignment.warp_matrix,
-        "euclidean",
-        round_board_size);
+    if (DebugImagesActive()) {
+        pair.after_view_aligned = WarpImageWithMatrix(
+            after_view,
+            after_alignment.warp_matrix,
+            "euclidean",
+            round_board_size);
+    }
 #endif
+    return pair;
+}
 
+LocalizedDartDetectionResult LocateDartTipInAlignedPair(
+    const AlignedBoardPair& pair,
+    const cv::Rect& after_board_box,
+    const YoloDetectionBox& dart_box,
+    const cv::Mat& point_rectification_h,
+    float rectified_radius,
+    int frame_index,
+    const std::string& debug_prefix) {
+    LocalizedDartDetectionResult result;
     cv::Rect local_rect;
     try {
         local_rect = ExpandAndClampLocalRect(
-            MapDetectionBoxToBoardCrop(dart_box, after_board_box, round_board_size),
-            round_board_size);
+            MapDetectionBoxToBoardCrop(dart_box, after_board_box, pair.round_board_size),
+            pair.round_board_size);
     } catch (const std::exception&) {
         result.reason = "local_dart_box_invalid";
         return result;
     }
 
-    cv::Mat before_local_gray = before_gray_aligned(local_rect).clone();
-    cv::Mat after_local_gray = after_gray_aligned(local_rect).clone();
+    cv::Mat before_local_gray = pair.before_gray_aligned(local_rect).clone();
+    cv::Mat after_local_gray = pair.after_gray_aligned(local_rect).clone();
     cv::Mat diff_thresh = BuildLocalDiffBinary(before_local_gray, after_local_gray);
     cv::Mat filtered_local = FilterSinglePixelComponents(diff_thresh);
     std::optional<cv::Point> tip_point = SelectTipPointFromLocalMask(filtered_local, local_rect);
@@ -823,27 +826,60 @@ LocalizedDartDetectionResult DetectLocalizedDartTip(
         result.reason = "local_tip_resolved";
     }
 #if BT_ENABLE_DEBUG_IMAGES
-    AppendDebugImage(result.debug_images, frame_index, debug_prefix + "1", "local_before", before_local_gray);
-    AppendDebugImage(result.debug_images, frame_index, debug_prefix + "2", "local_after", after_local_gray);
-    AppendDebugImage(result.debug_images, frame_index, debug_prefix + "3", "local_diff_thresh", diff_thresh);
-    AppendDebugImage(result.debug_images, frame_index, debug_prefix + "4", "local_filtered", filtered_local);
-    AppendDebugImage(
-        result.debug_images,
-        frame_index,
-        debug_prefix + "5",
-        "tip_marked",
-        DrawTipPointOnBinaryImage(filtered_local, result.point_in_round_board));
-    AppendDebugImage(
-        result.debug_images,
-        frame_index,
-        debug_prefix + "6",
-        "after_board_tip",
-        DrawLocalRectAndTipOnBoardImage(after_view_aligned, local_rect, result.point_in_round_board));
+    if (DebugImagesActive()) {
+        AppendDebugImage(result.debug_images, frame_index, debug_prefix + "1", "local_before", before_local_gray);
+        AppendDebugImage(result.debug_images, frame_index, debug_prefix + "2", "local_after", after_local_gray);
+        AppendDebugImage(result.debug_images, frame_index, debug_prefix + "3", "local_diff_thresh", diff_thresh);
+        AppendDebugImage(result.debug_images, frame_index, debug_prefix + "4", "local_filtered", filtered_local);
+        AppendDebugImage(
+            result.debug_images,
+            frame_index,
+            debug_prefix + "5",
+            "tip_marked",
+            DrawTipPointOnBinaryImage(filtered_local, result.point_in_round_board));
+        AppendDebugImage(
+            result.debug_images,
+            frame_index,
+            debug_prefix + "6",
+            "after_board_tip",
+            DrawLocalRectAndTipOnBoardImage(pair.after_view_aligned, local_rect, result.point_in_round_board));
+    }
 #else
     (void)frame_index;
     (void)debug_prefix;
 #endif
     return result;
+}
+
+LocalizedDartDetectionResult DetectLocalizedDartTip(
+    const cv::Mat& first_preprocessed_gray,
+    const cv::Mat& before_board_crop_bgr,
+    const cv::Mat& after_board_crop_bgr,
+    const cv::Rect& after_board_box,
+    const YoloDetectionBox& dart_box,
+    const cv::Mat& point_rectification_h,
+    float rectified_radius,
+    const PipelineConfig& config,
+    int frame_index,
+    const std::string& debug_prefix) {
+    std::optional<AlignedBoardPair> pair = PrepareAlignedBoardPair(
+        first_preprocessed_gray,
+        before_board_crop_bgr,
+        after_board_crop_bgr,
+        config);
+    if (!pair.has_value()) {
+        LocalizedDartDetectionResult result;
+        result.reason = "local_dart_box_invalid";
+        return result;
+    }
+    return LocateDartTipInAlignedPair(
+        pair.value(),
+        after_board_box,
+        dart_box,
+        point_rectification_h,
+        rectified_radius,
+        frame_index,
+        debug_prefix);
 }
 
 std::optional<YoloDetectionBox> ResolveNewDartBox(
@@ -984,7 +1020,6 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
         BuildTrackedYoloFrameState(
             1,
             first_frame_bgr_,
-            first_frame_board_box_,
             baseline.yolo_detection,
             3));
     last_clean_frame_ = recent_frames_.back();
@@ -1002,7 +1037,7 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
         throw std::runtime_error("输入帧为空");
     }
 
-    latest_frame_bgr_ = frame_bgr.clone();
+    latest_frame_bgr_ = frame_bgr;
     AndroidFrameProcessResult result;
     YoloDetectionResult yolo_detection;
     try {
@@ -1018,7 +1053,6 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     TrackedYoloFrameState current_frame_state = BuildTrackedYoloFrameState(
         current_frame_index_,
         latest_frame_bgr_,
-        first_frame_board_box_,
         yolo_detection,
         max_candidate_count);
 #if BT_ENABLE_DEBUG_IMAGES
@@ -1132,7 +1166,7 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
     if (frame_bgr.empty()) {
         throw std::runtime_error("重新识别输入帧为空");
     }
-    latest_frame_bgr_ = frame_bgr.clone();
+    latest_frame_bgr_ = frame_bgr;
     AndroidRedetectResult result;
     result.yolo_status = "not_run";
 
@@ -1184,17 +1218,21 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
         std::vector<std::optional<cv::Point>> summary_points;
         summary_points.reserve(top_dart_boxes.size());
 
-        for (size_t i = 0; i < top_dart_boxes.size(); ++i) {
+        // The board-wide preparation (resize, enhance, blur, two ECC alignments) only depends on
+        // the before/after pair, so it runs once and every dart box reuses it.
+        std::optional<AlignedBoardPair> aligned_pair = PrepareAlignedBoardPair(
+            first_frame_preprocessed_for_alignment_,
+            before_board_crop_bgr,
+            after_board_crop_bgr,
+            pipeline_config_);
+        for (size_t i = 0; aligned_pair.has_value() && i < top_dart_boxes.size(); ++i) {
             const std::string prefix = "s9" + std::to_string(static_cast<int>(i + 1));
-            LocalizedDartDetectionResult localized = DetectLocalizedDartTip(
-                first_frame_preprocessed_for_alignment_,
-                before_board_crop_bgr,
-                after_board_crop_bgr,
+            LocalizedDartDetectionResult localized = LocateDartTipInAlignedPair(
+                aligned_pair.value(),
                 after_board_box.value(),
                 top_dart_boxes[i],
                 first_frame_point_rectification_h_,
                 first_frame_rectified_radius_,
-                pipeline_config_,
                 current_frame_index_,
                 prefix);
             summary_points.push_back(localized.point_in_round_board);
