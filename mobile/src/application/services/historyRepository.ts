@@ -163,15 +163,18 @@ const getTarget = (throwResult: ThrowResult) => {
   return throwResult.label.replace(/^[DST]/, '') || throwResult.label;
 };
 
-export const saveCompletedMatch = async (input: CompletedMatchInput) => {
+// Resolves with the new match id, so an undone final round can remove the match again.
+export const saveCompletedMatch = async (
+  input: CompletedMatchInput,
+): Promise<number | null> => {
   const database = await getDatabase();
   const now = Date.now();
+  let matchId: number | null = null;
 
   await new Promise<void>((resolve, reject) => {
     database.transaction(
       transaction => {
         const playerIdByRuntimeId = new Map<string, number>();
-        let matchId: number | null = null;
 
         const insertThrows = () => {
           input.rounds.forEach(round => {
@@ -268,6 +271,19 @@ export const saveCompletedMatch = async (input: CompletedMatchInput) => {
       },
     );
   });
+  return matchId;
+};
+
+// Removes one saved match; players left without any match are removed too.
+export const deleteMatch = async (matchId: number) => {
+  const database = await getDatabase();
+  await execute(database, 'DELETE FROM throws WHERE match_id = ?', [matchId]);
+  await execute(database, 'DELETE FROM match_players WHERE match_id = ?', [matchId]);
+  await execute(database, 'DELETE FROM matches WHERE id = ?', [matchId]);
+  await execute(
+    database,
+    'DELETE FROM players WHERE id NOT IN (SELECT player_id FROM match_players)',
+  );
 };
 
 // Returns known player names, most recently played first.

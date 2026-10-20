@@ -4,6 +4,7 @@ jest.mock('react-native-sqlite-storage', () => require('../jest/sqliteNodeAdapte
 
 import {
   clearHistory,
+  deleteMatch,
   getMatchDetail,
   getSetting,
   listKnownPlayerNames,
@@ -74,4 +75,25 @@ test('stores settings', async () => {
   await setSetting('showDebug', '1');
   await setSetting('showDebug', '0');
   expect(await getSetting('showDebug')).toBe('0');
+});
+
+test('deletes one match and players left without matches', async () => {
+  const keptId = await saveSampleMatch(1000);
+  const removedId = await saveCompletedMatch({
+    mode: 'game301',
+    modeLabel: '301',
+    createdAt: 2000,
+    players: [{ id: 'player-1', name: 'Carol' }, { id: 'player-2', name: 'Alice' }],
+    winnerId: 'player-1',
+    rounds: [{ playerId: 'player-1', roundIndex: 1, throws: [T20, T20, T20] }],
+  });
+  expect(removedId).not.toBeNull();
+  expect(removedId).not.toBe(keptId);
+
+  await deleteMatch(removedId as number);
+  expect((await listRecentMatches()).map(match => match.id)).toEqual([keptId]);
+  expect(await listKnownPlayerNames()).not.toContain('Carol');
+  expect(await getMatchDetail(removedId as number)).toBeNull();
+  const alice = (await listPlayerStats()).find(item => item.name === 'Alice');
+  expect(alice).toMatchObject({ matchesPlayed: 1, wins: 1 });
 });

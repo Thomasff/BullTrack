@@ -34,6 +34,10 @@ interface GameStoreState {
   throwsEdited: boolean;
   // True once native has taken the empty-board first frame and darts may be thrown.
   captureReady: boolean;
+  // The shown result is an undone round brought back for correction (no native session).
+  reopenedRound: boolean;
+  // History id of the saved finished game, so undoing its last round can remove it.
+  savedMatchId: number | null;
   selectMode: (mode: GameType, label: string) => void;
   configurePlayers: (playerNames: string[]) => void;
   setCurrentPlayer: (playerId: string | null) => void;
@@ -90,6 +94,8 @@ const initialState = {
   canRedetect: false,
   throwsEdited: false,
   captureReady: false,
+  reopenedRound: false,
+  savedMatchId: null as number | null,
 };
 
 export const useGameStore = create<GameStoreState>(set => ({
@@ -119,6 +125,8 @@ export const useGameStore = create<GameStoreState>(set => ({
       currentRoundResult: null,
       completedRounds: [],
       winnerId: null,
+      reopenedRound: false,
+      savedMatchId: null,
       gameStartedAt: Date.now(),
       status: 'waitingForThrow',
       statusMessage: '准备开始第一轮',
@@ -154,6 +162,7 @@ export const useGameStore = create<GameStoreState>(set => ({
       errorMessage: null,
       statusMessage: '本轮结果已确认',
       throwsEdited: false,
+      reopenedRound: false,
     }),
   replaceThrow: (index, throwResult) =>
     set(state => ({
@@ -203,6 +212,7 @@ export const useGameStore = create<GameStoreState>(set => ({
       currentRoundResult: null,
       canRedetect: false,
       throwsEdited: false,
+      reopenedRound: false,
       errorMessage: null,
       status: 'waitingForThrow',
       statusMessage: '准备开始下一轮',

@@ -12,7 +12,7 @@ import { useVisionDebugStore } from '../stores/visionDebugStore';
 import { useLiveFrameStore } from '../stores/liveFrameStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { createGameEngine, getGameEngine, resetGameEngine } from './gameRules';
-import { saveCompletedMatch } from './historyRepository';
+import { deleteMatch, saveCompletedMatch } from './historyRepository';
 import { toFriendlyErrorText } from './nativeErrorText';
 import type { SoundCue } from '../../native-bridge/bulltrack/types';
 import type {
@@ -251,18 +251,22 @@ export const redetectCurrentRound = async () => {
 
 export const confirmCurrentRound = async () => {
   const state = useGameStore.getState();
-  if (!state.roundId) {
+  if (!state.roundId && !state.reopenedRound) {
     throw new Error('No round result to confirm.');
   }
   const roundIndex = state.currentRoundNumber;
   // Manual corrections made in the UI take precedence over native detection.
   const editedThrows = state.throwsEdited ? state.currentThrows : null;
 
-  const finishResult = await bullTrackNativeBridge.finishRound({
-    roundId: state.roundId,
-  });
-  useVisionDebugStore.getState().setArtifacts(finishResult.debugArtifacts);
-  const appliedRound = applyRoundResult(editedThrows ?? finishResult.throws);
+  let throws = state.currentThrows;
+  if (state.roundId) {
+    const finishResult = await bullTrackNativeBridge.finishRound({
+      roundId: state.roundId,
+    });
+    useVisionDebugStore.getState().setArtifacts(finishResult.debugArtifacts);
+    throws = editedThrows ?? finishResult.throws;
+  }
+  const appliedRound = applyRoundResult(throws);
   if (!appliedRound) {
     return;
   }
@@ -281,7 +285,7 @@ export const confirmCurrentRound = async () => {
       if (!mode) {
         throw new Error('Game mode is missing.');
       }
-      await saveCompletedMatch({
+      const savedMatchId = await saveCompletedMatch({
         mode,
         modeLabel: latestState.selectedModeLabel,
         createdAt: latestState.gameStartedAt ?? Date.now(),
@@ -292,7 +296,7 @@ export const confirmCurrentRound = async () => {
         winnerId: appliedRound.winnerId,
         rounds: latestState.completedRounds,
       });
-      useGameStore.setState({ errorMessage: null });
+      useGameStore.setState({ errorMessage: null, savedMatchId });
     } catch (error) {
       useGameStore.setState({
         errorMessage:
@@ -306,6 +310,54 @@ export const confirmCurrentRound = async () => {
 
   const engine = getGameEngine();
   if (!engine?.isGameOver()) {
+    useGameStore.getState().clearRoundForNextTurn();
+  }
+};
+
+// Takes back the last confirmed round (also after the game ended) and shows its darts
+// again for correction. Engines are deterministic, so replaying the earlier rounds into
+// a fresh engine restores the exact state before that round for every game mode.
+export const undoLastRound = async () => {
+  const state = useGameStore.getState();
+  const lastRound = state.completedRounds[state.completedRounds.length - 1];
+  if (
+    !lastRound ||
+    !state.selectedMode ||
+    (state.status !== 'waitingForThrow' && state.status !== 'gameOver')
+  ) {
+    return;
+  }
+  if (state.savedMatchId !== null) {
+    await deleteMatch(state.savedMatchId);
+  }
+
+  const remainingRounds = state.completedRounds.slice(0, -1);
+  const engine = createGameEngine(state.selectedMode, state.players);
+  remainingRounds.forEach(round => engine.applyRound(round.throws));
+
+  useGameStore.setState({
+    scoreBoard: engine.getScoreBoard(),
+    currentPlayerId: engine.getCurrentPlayerId(),
+    currentRoundNumber: engine.getCurrentRoundNumber(),
+    completedRounds: remainingRounds,
+    winnerId: null,
+    savedMatchId: null,
+    roundId: null,
+    status: 'showingResult',
+    statusMessage: '已撤销上一轮，可修改后重新确认',
+    currentThrows: lastRound.throws,
+    currentThrowNumber: lastRound.throws.length,
+    currentRoundResult: null,
+    canRedetect: false,
+    throwsEdited: false,
+    reopenedRound: true,
+    errorMessage: null,
+  });
+};
+
+// Drops a reopened round so the same player throws it again.
+export const discardReopenedRound = () => {
+  if (useGameStore.getState().reopenedRound) {
     useGameStore.getState().clearRoundForNextTurn();
   }
 };

@@ -6,6 +6,7 @@ import { Camera, useCameraDevice, useCameraFormat } from 'react-native-vision-ca
 import {
   abandonCurrentRound,
   confirmCurrentRound,
+  discardReopenedRound,
   ensureBullTrackSubscriptions,
   getPreviewDiagnostics,
   prepareLiveCamera,
@@ -17,6 +18,7 @@ import {
   startGameSession,
   startLiveRound,
   stopLiveRound,
+  undoLastRound,
   updateLiveZoomRatio,
 } from '../../application/services/liveRoundService';
 import { useGameStore } from '../../application/stores/gameStore';
@@ -45,7 +47,7 @@ const ZOOM_THUMB_SIZE = 26;
 
 export const GameScreen = ({ navigation }: Props) => {
   const [runningAction, setRunningAction] = useState<
-    'permission' | 'prepare' | 'start' | 'stop' | 'redetect' | 'confirm' | 'reload' | null
+    'permission' | 'prepare' | 'start' | 'stop' | 'redetect' | 'confirm' | 'reload' | 'undo' | null
   >(null);
   const [previewDiagnosticsText, setPreviewDiagnosticsText] = useState('vision-camera');
   const [previewReady, setPreviewReady] = useState(false);
@@ -98,6 +100,8 @@ export const GameScreen = ({ navigation }: Props) => {
     setCameraStatus,
     replaceThrow,
     captureReady,
+    reopenedRound,
+    completedRounds,
   } = useGameStore();
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
   const previousStatusRef = useRef(status);
@@ -427,9 +431,20 @@ export const GameScreen = ({ navigation }: Props) => {
         : status === 'showingResult'
           ? '确认本轮结果'
           : `轮到 ${currentPlayer?.name ?? '玩家'} · 第 ${currentRoundNumber} 轮`;
+  // Only the latest confirmed round can be taken back, between rounds or after the game.
+  const undoButton =
+    completedRounds.length > 0 ? (
+      <SecondaryButton
+        label={runningAction === 'undo' ? '正在撤销…' : '撤销上一轮'}
+        onPress={() => runAction('undo', undoLastRound)}
+        disabled={isBusy}
+      />
+    ) : null;
   const turnHint =
     status === 'showingResult'
-      ? '识别不对可以点飞镖修改'
+      ? reopenedRound
+        ? '已撤销上一轮：点飞镖修改，或重投本轮'
+        : '识别不对可以点飞镖修改'
       : status === 'roundInProgress'
         ? captureReady
           ? '投满 3 镖自动结束，也可以手动结束'
@@ -604,8 +619,9 @@ export const GameScreen = ({ navigation }: Props) => {
       <View style={styles.actionGroup}>
         {status === 'gameOver' ? (
           <>
-            <PrimaryButton label="再来一局" onPress={playAgain} />
-            <SecondaryButton label="返回主页" onPress={exitGame} />
+            <PrimaryButton label="再来一局" onPress={playAgain} disabled={isBusy} />
+            {undoButton}
+            <SecondaryButton label="返回主页" onPress={exitGame} disabled={isBusy} />
           </>
         ) : status === 'roundInProgress' ? (
           <PrimaryButton
@@ -620,18 +636,29 @@ export const GameScreen = ({ navigation }: Props) => {
               onPress={() => runAction('confirm', confirmCurrentRound)}
               disabled={isBusy || currentThrows.length === 0}
             />
-            <SecondaryButton
-              label={runningAction === 'redetect' ? '正在重新识别…' : '重新识别'}
-              onPress={() => runAction('redetect', redetectCurrentRound)}
-              disabled={isBusy || !canRedetect || !device}
-            />
+            {reopenedRound ? (
+              <SecondaryButton
+                label="重投本轮"
+                onPress={discardReopenedRound}
+                disabled={isBusy}
+              />
+            ) : (
+              <SecondaryButton
+                label={runningAction === 'redetect' ? '正在重新识别…' : '重新识别'}
+                onPress={() => runAction('redetect', redetectCurrentRound)}
+                disabled={isBusy || !canRedetect || !device}
+              />
+            )}
           </>
         ) : (
-          <PrimaryButton
-            label={runningAction === 'start' ? '正在启动…' : '开始本轮'}
-            onPress={startRound}
-            disabled={isBusy || !cameraPermissionGranted || !device || !previewReady}
-          />
+          <>
+            <PrimaryButton
+              label={runningAction === 'start' ? '正在启动…' : '开始本轮'}
+              onPress={startRound}
+              disabled={isBusy || !cameraPermissionGranted || !device || !previewReady}
+            />
+            {undoButton}
+          </>
         )}
         {status !== 'gameOver' ? (
           <Pressable
