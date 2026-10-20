@@ -1235,32 +1235,40 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     // normal ECC score range (and what a hand in view or a hand-held phone does to it) before an
     // alignment-quality threshold is chosen.
     if (DebugImagesActive() && stored_current.has_board_box) {
+        const cv::Mat frame_gray = PreprocessImage(
+            EnhanceWarpedImage(
+                ResizeToTargetSize(stored_current.dart_search_crop_bgr, first_frame_preprocessed_for_alignment_.size()),
+                pipeline_config_.enhancement.saturation_scale,
+                pipeline_config_.enhancement.contrast_scale),
+            pipeline_config_.dart.preprocess_blur_kernel);
+        // Each model on its own, so one failing to converge still leaves the other's score; the
+        // full perspective model is compared against rotation+shift for a hand-held phone
+        // (distance and angle change). -1 means the alignment did not converge.
+        double euclidean_correlation = -1.0;
+        double homography_correlation = -1.0;
+        cv::Mat euclidean_warp = cv::Mat::eye(2, 3, CV_32F);
         try {
-            const cv::Mat frame_gray = PreprocessImage(
-                EnhanceWarpedImage(
-                    ResizeToTargetSize(stored_current.dart_search_crop_bgr, first_frame_preprocessed_for_alignment_.size()),
-                    pipeline_config_.enhancement.saturation_scale,
-                    pipeline_config_.enhancement.contrast_scale),
-                pipeline_config_.dart.preprocess_blur_kernel);
-            const PyramidECCResult alignment = AlignPyramidEcc(
-                first_frame_preprocessed_for_alignment_,
-                frame_gray,
-                3,
-                "euclidean");
-            const cv::Mat& warp = alignment.warp_matrix;
-            __android_log_print(
-                ANDROID_LOG_INFO,
-                "BullTrackNativeV2",
-                "frame %d ecc=%.3f tx=%.1f ty=%.1f rot=%.2f darts=%d",
-                current_frame_index_,
-                alignment.correlation,
-                warp.at<float>(0, 2),
-                warp.at<float>(1, 2),
-                std::atan2(warp.at<float>(1, 0), warp.at<float>(0, 0)) * 180.0 / CV_PI,
-                current_count);
-        } catch (const std::exception& error) {
-            __android_log_print(ANDROID_LOG_INFO, "BullTrackNativeV2", "frame %d ecc failed: %s", current_frame_index_, error.what());
+            const PyramidECCResult alignment = AlignPyramidEcc(first_frame_preprocessed_for_alignment_, frame_gray, 3, "euclidean");
+            euclidean_correlation = alignment.correlation;
+            euclidean_warp = alignment.warp_matrix;
+        } catch (const std::exception&) {
         }
+        try {
+            homography_correlation =
+                AlignPyramidEcc(first_frame_preprocessed_for_alignment_, frame_gray, 3, "homography").correlation;
+        } catch (const std::exception&) {
+        }
+        __android_log_print(
+            ANDROID_LOG_INFO,
+            "BullTrackNativeV2",
+            "frame %d ecc=%.3f ecc_h=%.3f tx=%.1f ty=%.1f rot=%.2f darts=%d",
+            current_frame_index_,
+            euclidean_correlation,
+            homography_correlation,
+            euclidean_warp.at<float>(0, 2),
+            euclidean_warp.at<float>(1, 2),
+            std::atan2(euclidean_warp.at<float>(1, 0), euclidean_warp.at<float>(0, 0)) * 180.0 / CV_PI,
+            current_count);
     }
 #endif
 

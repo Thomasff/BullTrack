@@ -64,6 +64,11 @@ cv::Mat ScaleWarpForNextLevel(const cv::Mat& warp_matrix) {
     scaled.convertTo(scaled, CV_32F);
     scaled.at<float>(0, 2) *= 2.0f;
     scaled.at<float>(1, 2) *= 2.0f;
+    if (scaled.rows == 3) {
+        // Homography: S * H * S^-1 with S = diag(2, 2, 1) also halves the perspective terms.
+        scaled.at<float>(2, 0) *= 0.5f;
+        scaled.at<float>(2, 1) *= 0.5f;
+    }
     return scaled;
 }
 
