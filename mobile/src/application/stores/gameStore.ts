@@ -54,6 +54,8 @@ interface GameStoreState {
   reopenedRound: boolean;
   // History id of the saved finished game, so undoing its last round can remove it.
   savedMatchId: number | null;
+  // Seed of the random parts of a game (Killer numbers), kept so undo rebuilds the same game.
+  gameSeed: number;
   selectMode: (mode: GameType, label: string) => void;
   configurePlayers: (playerNames: string[], teamIndexes?: number[]) => void;
   setCurrentPlayer: (playerId: string | null) => void;
@@ -113,6 +115,7 @@ const initialState = {
   captureReady: false,
   reopenedRound: false,
   savedMatchId: null as number | null,
+  gameSeed: 0,
 };
 
 export const useGameStore = create<GameStoreState>(set => ({

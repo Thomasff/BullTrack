@@ -34,7 +34,9 @@ interface SeatRef {
 export const PlayerSetupScreen = ({ navigation, route }: Props) => {
   const [teamMode, setTeamMode] = useState(false);
   // Solo: one group of names. Team game: one group per team, in A/B/C/D order.
-  const [soloNames, setSoloNames] = useState<string[]>(['']);
+  const [soloNames, setSoloNames] = useState<string[]>(() =>
+    Array.from({ length: getModeOption(route.params.modeOptionId)?.minSides ?? 1 }, () => ''),
+  );
   const [teamNames, setTeamNames] = useState<string[][]>([[''], ['']]);
   const [active, setActive] = useState<SeatRef>({ team: 0, index: 0 });
   const [knownNames, setKnownNames] = useState<string[]>([]);
@@ -63,6 +65,9 @@ export const PlayerSetupScreen = ({ navigation, route }: Props) => {
   const minGroupSize = teamMode ? 1 : MIN_PLAYERS;
   const resolvedNames = resolvePlayerNames(flatNames);
   const duplicateName = findDuplicatePlayerName(flatNames);
+  // Team games always have at least two teams; only solo games can be short of sides.
+  const minSides = selectedOption?.minSides ?? 1;
+  const tooFewSides = !teamMode && soloNames.length < minSides;
   const suggestions = knownNames.filter(name => !resolvedNames.includes(name));
   // Default names number the seats across all teams, matching resolvePlayerNames.
   const flatIndexOf = (seat: SeatRef) =>
@@ -240,6 +245,9 @@ export const PlayerSetupScreen = ({ navigation, route }: Props) => {
           {duplicateName ? (
             <Text style={styles.error}>名字重复：{duplicateName}</Text>
           ) : null}
+          {tooFewSides ? (
+            <Text style={styles.hint}>这个玩法至少需要 {minSides} 人</Text>
+          ) : null}
         </Panel>
       )}
 
@@ -262,7 +270,7 @@ export const PlayerSetupScreen = ({ navigation, route }: Props) => {
       <PrimaryButton
         label="开始"
         onPress={startGame}
-        disabled={!selectedOption || duplicateName !== null}
+        disabled={!selectedOption || duplicateName !== null || tooFewSides}
       />
     </ScrollView>
   );

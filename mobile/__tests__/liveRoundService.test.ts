@@ -144,6 +144,17 @@ test('undo restores cricket marks by replaying earlier rounds', async () => {
   expect(alice?.score).toBe(0);
 });
 
+test('undo keeps the Killer numbers dealt at the start of the game', async () => {
+  startGameSession('killer', ['Alice', 'Bob', 'Carol'], 'Killer');
+  const numbers = () =>
+    useGameStore.getState().scoreBoard?.players.map(player => player.killer?.number);
+  const dealt = numbers();
+  await playRound([S1, S1, S1]);
+  await playRound([S1, S1, S1]);
+  await undoLastRound();
+  expect(numbers()).toEqual(dealt);
+});
+
 test('rethrowing a reopened round goes back to waiting for the same player', async () => {
   startGameSession('game301', ['Alice', 'Bob'], '301');
   await playRound([T20, T20, T20]);

@@ -135,7 +135,9 @@ describe('99 darts at 20', () => {
 });
 
 describe('Round number', () => {
-  test.each(['game301', 'cricket', 'aroundTheClock', 'highScore'] as const)(
+  test.each(
+    ['game301', 'cricket', 'cutThroat', 'aroundTheClock', 'highScore', 'shanghai', 'halfIt', 'killer'] as const,
+  )(
     '%s counts rounds per player, not ahead of later seats',
     type => {
       const engine = createGameEngine(type, players(2));
@@ -146,4 +148,138 @@ describe('Round number', () => {
       expect(engine.getCurrentRoundNumber()).toBe(2);
     },
   );
+});
+
+describe('Cricket variants', () => {
+  test('No Score Cricket never scores and closing everything wins', () => {
+    const engine = createGameEngine('cricketNoScore', players(2));
+    expect(engine.applyRound([T(20), T(20), T(20)]).roundScore).toBe(0);
+    engine.applyRound([T(20), T(20), T(20)]); // P2 builds marks, still no points
+    engine.applyRound([T(15), T(16), T(17)]);
+    engine.applyRound([MISS(), MISS(), MISS()]);
+    engine.applyRound([T(18), T(19), MISS()]);
+    engine.applyRound([MISS(), MISS(), MISS()]);
+    engine.applyRound([createThrow('innerBull'), createThrow('outerBull'), MISS()]);
+    expect(engine.getWinnerId()).toBe('player-1');
+    expect(engine.getScoreBoard().players.every(player => player.score === 0)).toBe(true);
+  });
+
+  test('Tactics also needs 10-14', () => {
+    const engine = createGameEngine('tactics', players(1));
+    engine.applyRound([T(15), T(16), T(17)]);
+    engine.applyRound([T(18), T(19), T(20)]);
+    engine.applyRound([createThrow('innerBull'), createThrow('outerBull'), MISS()]);
+    expect(engine.isGameOver()).toBe(false);
+    engine.applyRound([T(10), T(11), T(12)]);
+    engine.applyRound([T(13), T(14), MISS()]);
+    expect(engine.getWinnerId()).toBe('player-1');
+  });
+
+  test('Cut Throat gives extra marks to every opponent still open on that target', () => {
+    const engine = createGameEngine('cutThroat', players(3));
+    engine.applyRound([MISS(), MISS(), MISS()]);
+    engine.applyRound([T(20), MISS(), MISS()]); // P2 closes 20
+    engine.applyRound([MISS(), MISS(), MISS()]);
+    engine.applyRound([T(20), T(20), MISS()]); // P1: 60 goes to P3 only
+    const scores = engine.getScoreBoard().players.map(player => player.score);
+    expect(scores).toEqual([0, 0, 60]);
+  });
+
+  test('Cut Throat: closing everything with a higher score does not win', () => {
+    const engine = createGameEngine('cutThroat', players(2));
+    engine.applyRound([T(20), MISS(), MISS()]);
+    engine.applyRound([T(19), T(19), MISS()]); // P1 gets 57
+    engine.applyRound([T(15), T(16), T(17)]);
+    engine.applyRound([MISS(), MISS(), MISS()]);
+    engine.applyRound([T(18), T(19), createThrow('innerBull')]);
+    engine.applyRound([MISS(), MISS(), MISS()]);
+    engine.applyRound([createThrow('outerBull'), MISS(), MISS()]); // P1 all closed, 57 > 0
+    expect(engine.isGameOver()).toBe(false);
+  });
+});
+
+describe('Shanghai', () => {
+  test('round N only scores on N', () => {
+    const engine = createGameEngine('shanghai', players(1));
+    expect(engine.applyRound([S(1), D(1), S(2)]).roundScore).toBe(3);
+    expect(engine.applyRound([T(2), S(1), MISS()]).roundScore).toBe(6);
+  });
+
+  test('single, double and triple of the target in one round wins at once', () => {
+    const engine = createGameEngine('shanghai', players(2));
+    engine.applyRound([T(1), D(1), S(1)]);
+    expect(engine.getWinnerId()).toBe('player-1');
+  });
+
+  test('after seven rounds the highest score wins', () => {
+    const engine = createGameEngine('shanghai', players(2));
+    for (let round = 1; round <= 7; round += 1) {
+      engine.applyRound([S(round), MISS(), MISS()]);
+      expect(engine.isGameOver()).toBe(false);
+      engine.applyRound([T(round), MISS(), MISS()]);
+    }
+    expect(engine.getWinnerId()).toBe('player-2');
+  });
+});
+
+describe('Half it', () => {
+  test('hits add their score, a round without a hit halves the total', () => {
+    const engine = createGameEngine('halfIt', players(1));
+    expect(engine.getScoreBoard().players[0].score).toBe(40);
+    engine.applyRound([S(15), T(15), S(20)]); // target 15
+    expect(engine.getScoreBoard().players[0].score).toBe(100);
+    expect(engine.applyRound([S(15), MISS(), MISS()]).roundScore).toBe(-50); // target 16
+    engine.applyRound([D(5), createThrow('innerBull'), S(3)]); // any double: 10 + 50
+    expect(engine.getScoreBoard().players[0].score).toBe(110);
+  });
+
+  test('ends after nine rounds', () => {
+    const engine = createGameEngine('halfIt', players(1));
+    for (let round = 0; round < 8; round += 1) {
+      engine.applyRound([MISS(), MISS(), MISS()]);
+    }
+    expect(engine.isGameOver()).toBe(false);
+    engine.applyRound([MISS(), MISS(), MISS()]);
+    expect(engine.getWinnerId()).toBe('player-1');
+  });
+});
+
+describe('Killer', () => {
+  const numbersOf = (engine: ReturnType<typeof createGameEngine>) =>
+    engine.getScoreBoard().players.map(player => player.killer?.number ?? 0);
+
+  test('the same seed deals the same distinct numbers', () => {
+    const first = numbersOf(createGameEngine('killer', players(4), 12345));
+    expect(numbersOf(createGameEngine('killer', players(4), 12345))).toEqual(first);
+    expect(new Set(first).size).toBe(4);
+    first.forEach(number => expect(number >= 1 && number <= 20).toBe(true));
+  });
+
+  test('become a killer on your own double, then take lives on the others', () => {
+    const engine = createGameEngine('killer', players(2), 7);
+    const [own, other] = numbersOf(engine);
+    engine.applyRound([D(other), D(own), D(other)]); // first dart does nothing yet
+    let [, second] = engine.getScoreBoard().players;
+    expect(second.killer?.lives).toBe(2);
+    engine.applyRound([MISS(), MISS(), MISS()]);
+    engine.applyRound([D(other), D(other), S(other)]);
+    [, second] = engine.getScoreBoard().players;
+    expect(second.killer?.lives).toBe(0);
+    expect(engine.getWinnerId()).toBe('player-1');
+  });
+
+  test('a killer hitting their own double loses a life, and players out are skipped', () => {
+    const engine = createGameEngine('killer', players(3), 99);
+    const [own, , third] = numbersOf(engine);
+    engine.applyRound([D(own), D(third), D(third)]);
+    engine.applyRound([MISS(), MISS(), MISS()]);
+    engine.applyRound([MISS(), MISS(), MISS()]);
+    engine.applyRound([D(third), D(own), MISS()]); // P3 out, P1 down to 2 lives
+    const board = engine.getScoreBoard().players;
+    expect(board[0].killer?.lives).toBe(2);
+    expect(board[2].killer?.lives).toBe(0);
+    expect(engine.isGameOver()).toBe(false);
+    engine.applyRound([MISS(), MISS(), MISS()]); // P2
+    expect(engine.getCurrentPlayerId()).toBe('player-1');
+  });
 });

@@ -5,7 +5,13 @@ export type GameType =
   | 'game301'
   | 'game501'
   | 'game701'
-  | 'cricket';
+  | 'cricket'
+  | 'cricketNoScore'
+  | 'tactics'
+  | 'cutThroat'
+  | 'shanghai'
+  | 'halfIt'
+  | 'killer';
 
 export type GameStatus =
   | 'idle'
@@ -45,6 +51,15 @@ export interface PlayerSummary {
   marks?: Record<string, number>;
   // Set for players of a team game (0 = A 队).
   teamIndex?: number;
+  // Killer only.
+  killer?: KillerState;
+}
+
+export interface KillerState {
+  // The side's own number (1-20); its doubles are what the others aim at.
+  number: number;
+  lives: number;
+  isKiller: boolean;
 }
 
 export interface ScoreBoard {

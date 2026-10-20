@@ -36,6 +36,8 @@ export interface ModeOptionDefinition {
   description: string;
   // Options without real rules yet; kept in the catalog but hidden from the UI.
   runtimeGameType: GameType | null;
+  // Fewest players (or teams) the game needs; 1 when omitted.
+  minSides?: number;
 }
 
 const allModeCategories: ModeCategoryDefinition[] = [
@@ -94,15 +96,15 @@ const allModeOptions: ModeOptionDefinition[] = [
     id: 'cricket-no-score',
     categoryId: 'cricket',
     title: 'No Score Cricket',
-    description: '不累计得分的 Cricket 入口。',
-    runtimeGameType: null,
+    description: '不计分，先把 15-20 和靶心全部关闭者胜。',
+    runtimeGameType: 'cricketNoScore',
   },
   {
     id: 'cricket-tactics',
     categoryId: 'cricket',
     title: 'Tactics',
-    description: '战术型 Cricket 入口。',
-    runtimeGameType: null,
+    description: '目标扩大到 10-20 和靶心，其余同标准 Cricket。',
+    runtimeGameType: 'tactics',
   },
   {
     id: 'cricket-random',
@@ -115,8 +117,8 @@ const allModeOptions: ModeOptionDefinition[] = [
     id: 'cricket-cut-throat',
     categoryId: 'cricket',
     title: 'Cut Throat',
-    description: 'Cut Throat Cricket 入口。',
-    runtimeGameType: null,
+    description: '关闭后再打，分数加给还没关闭的对手；全部关闭且分最低者胜。',
+    runtimeGameType: 'cutThroat',
   },
   {
     id: 'practice-around-the-clock',
@@ -164,22 +166,23 @@ const allModeOptions: ModeOptionDefinition[] = [
     id: 'party-half-it',
     categoryId: 'party',
     title: 'Half it',
-    description: 'Half it 入口。',
-    runtimeGameType: null,
+    description: '起始 40 分，每轮一个目标（15、16、任意双倍…靶心），三镖都没中目标则总分减半。',
+    runtimeGameType: 'halfIt',
   },
   {
     id: 'party-killer',
     categoryId: 'party',
     title: 'Killer',
-    description: 'Killer 入口。',
-    runtimeGameType: null,
+    description: '每人随机一个号码、3 条命。打中自己号码的双倍成为杀手，再打对手号码的双倍扣命，最后剩下的人胜。',
+    runtimeGameType: 'killer',
+    minSides: 2,
   },
   {
     id: 'party-shanghai',
     categoryId: 'party',
     title: 'Shanghai',
-    description: 'Shanghai 入口。',
-    runtimeGameType: null,
+    description: '共 7 轮，第 N 轮只计 N 区得分；一轮内单、双、三倍区都中直接获胜。',
+    runtimeGameType: 'shanghai',
   },
   {
     id: 'party-bermuda',

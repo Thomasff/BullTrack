@@ -204,7 +204,9 @@ export const startGameSession = (
   useGameStore.getState().selectMode(mode, modeLabel);
   useGameStore.getState().configurePlayers(playerNames, teamIndexes);
   const { players, teams } = useGameStore.getState();
-  const engine = createGameEngine(mode, getEngineSides(players, teams));
+  const gameSeed = Math.floor(Math.random() * 0x7fffffff);
+  useGameStore.setState({ gameSeed });
+  const engine = createGameEngine(mode, getEngineSides(players, teams), gameSeed);
   useGameStore.getState().setCurrentPlayer(engine.getCurrentPlayerId());
   useGameStore.getState().setScoreBoard(engine.getScoreBoard());
 };
@@ -344,6 +346,7 @@ export const undoLastRound = async () => {
   const engine = createGameEngine(
     state.selectedMode,
     getEngineSides(state.players, state.teams),
+    state.gameSeed,
   );
   remainingRounds.forEach(round => engine.applyRound(round.throws));
 
