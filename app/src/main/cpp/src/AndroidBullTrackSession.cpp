@@ -7,6 +7,8 @@
 #include "bulltrack_v2/Preprocessing.h"
 #include "YoloNcnnDetector.h"
 
+#include <android/log.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -763,6 +765,10 @@ struct AlignedBoardPair {
     cv::Mat after_gray_aligned;
     // Colour view of the aligned after image, only filled while debug images are on.
     cv::Mat after_view_aligned;
+    // ECC warp of the after image (inverse map, 2x3) and how well each image matched the template.
+    cv::Mat after_warp;
+    double before_correlation = 0.0;
+    double after_correlation = 0.0;
 };
 
 std::optional<AlignedBoardPair> PrepareAlignedBoardPair(
@@ -808,6 +814,9 @@ std::optional<AlignedBoardPair> PrepareAlignedBoardPair(
     pair.round_board_size = round_board_size;
     pair.before_gray_aligned = before_alignment.aligned_target;
     pair.after_gray_aligned = after_alignment.aligned_target;
+    pair.after_warp = after_alignment.warp_matrix.clone();
+    pair.before_correlation = before_alignment.correlation;
+    pair.after_correlation = after_alignment.correlation;
 #if BT_ENABLE_DEBUG_IMAGES
     if (DebugImagesActive()) {
         pair.after_view_aligned = WarpImageWithMatrix(
@@ -818,6 +827,30 @@ std::optional<AlignedBoardPair> PrepareAlignedBoardPair(
     }
 #endif
     return pair;
+}
+
+// YOLO found the dart box in the after image as captured, but the comparison runs on the
+// aligned image, which ECC may have shifted or turned by a few pixels; move the box the same way
+// so it still sits on the dart when the phone moved between frames.
+cv::Rect MapDartBoxIntoAlignedPair(
+    const AlignedBoardPair& pair,
+    const cv::Rect& after_search_rect,
+    const YoloDetectionBox& dart_box) {
+    const cv::Rect box_in_crop = MapDetectionBoxToBoardCrop(dart_box, after_search_rect, pair.round_board_size);
+    if (pair.after_warp.empty()) {
+        return box_in_crop;
+    }
+    // WARP_INVERSE_MAP: aligned(p) = after(W p), so a point q of the after image lands at W^-1 q.
+    cv::Mat inverse_warp;
+    cv::invertAffineTransform(pair.after_warp, inverse_warp);
+    const std::vector<cv::Point2f> corners{
+        cv::Point2f(static_cast<float>(box_in_crop.x), static_cast<float>(box_in_crop.y)),
+        cv::Point2f(static_cast<float>(box_in_crop.br().x), static_cast<float>(box_in_crop.y)),
+        cv::Point2f(static_cast<float>(box_in_crop.x), static_cast<float>(box_in_crop.br().y)),
+        cv::Point2f(static_cast<float>(box_in_crop.br().x), static_cast<float>(box_in_crop.br().y))};
+    std::vector<cv::Point2f> moved;
+    cv::transform(corners, moved, inverse_warp);
+    return cv::boundingRect(moved) & cv::Rect(cv::Point(0, 0), pair.round_board_size);
 }
 
 LocalizedDartDetectionResult LocateDartTipInAlignedPair(
@@ -833,7 +866,7 @@ LocalizedDartDetectionResult LocateDartTipInAlignedPair(
     cv::Rect local_rect;
     try {
         local_rect = ExpandAndClampLocalRect(
-            MapDetectionBoxToBoardCrop(dart_box, after_search_rect, pair.round_board_size),
+            MapDartBoxIntoAlignedPair(pair, after_search_rect, dart_box),
             pair.round_board_size);
     } catch (const std::exception&) {
         result.reason = "local_dart_box_invalid";
@@ -985,7 +1018,7 @@ BoxChange CountChangedPixelsInBox(
     cv::Rect local_rect;
     try {
         local_rect = ExpandAndClampLocalRect(
-            MapDetectionBoxToBoardCrop(dart_box, after_search_rect, pair.round_board_size),
+            MapDartBoxIntoAlignedPair(pair, after_search_rect, dart_box),
             pair.round_board_size);
     } catch (const std::exception&) {
         return {};
@@ -1098,7 +1131,8 @@ void AndroidBullTrackSession::ConfirmNewDart(
         }
     }
     const std::string change_text =
-        " changed=" + std::to_string(best_change.changed_pixels) + "/" + std::to_string(best_change.local_area);
+        " changed=" + std::to_string(best_change.changed_pixels) + "/" + std::to_string(best_change.local_area) +
+        cv::format(" ecc=%.3f/%.3f", pair->before_correlation, pair->after_correlation);
     const int min_changed_pixels = std::max(
         kMinNewDartChangedPixels,
         static_cast<int>(static_cast<double>(best_change.local_area) * kMinNewDartChangedRatio));
@@ -1195,6 +1229,40 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     const int current_count = static_cast<int>(current_frame_state.dart_boxes.size());
     PushRecentFrame(recent_frames_, current_frame_state);
     const TrackedYoloFrameState& stored_current = recent_frames_.back();
+
+#if BT_ENABLE_DEBUG_IMAGES
+    // Debug only: align every frame to the template and log how well it matched, to learn the
+    // normal ECC score range (and what a hand in view or a hand-held phone does to it) before an
+    // alignment-quality threshold is chosen.
+    if (DebugImagesActive() && stored_current.has_board_box) {
+        try {
+            const cv::Mat frame_gray = PreprocessImage(
+                EnhanceWarpedImage(
+                    ResizeToTargetSize(stored_current.dart_search_crop_bgr, first_frame_preprocessed_for_alignment_.size()),
+                    pipeline_config_.enhancement.saturation_scale,
+                    pipeline_config_.enhancement.contrast_scale),
+                pipeline_config_.dart.preprocess_blur_kernel);
+            const PyramidECCResult alignment = AlignPyramidEcc(
+                first_frame_preprocessed_for_alignment_,
+                frame_gray,
+                3,
+                "euclidean");
+            const cv::Mat& warp = alignment.warp_matrix;
+            __android_log_print(
+                ANDROID_LOG_INFO,
+                "BullTrackNativeV2",
+                "frame %d ecc=%.3f tx=%.1f ty=%.1f rot=%.2f darts=%d",
+                current_frame_index_,
+                alignment.correlation,
+                warp.at<float>(0, 2),
+                warp.at<float>(1, 2),
+                std::atan2(warp.at<float>(1, 0), warp.at<float>(0, 0)) * 180.0 / CV_PI,
+                current_count);
+        } catch (const std::exception& error) {
+            __android_log_print(ANDROID_LOG_INFO, "BullTrackNativeV2", "frame %d ecc failed: %s", current_frame_index_, error.what());
+        }
+    }
+#endif
 
     if (clean_refresh_frames_left_ > 0) {
         clean_refresh_frames_left_ -= 1;
