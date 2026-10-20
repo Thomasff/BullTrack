@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bullseye inside camera viewfinder corners; artwork stays within the 72dp visible area. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#F4F1E8"
+        android:pathData="M38.4,54a15.6,15.6 0,1 0,31.2 0a15.6,15.6 0,1 0,-31.2 0z" />
+    <path
+        android:fillColor="#B24C2C"
+        android:pathData="M43.2,54a10.8,10.8 0,1 0,21.6 0a10.8,10.8 0,1 0,-21.6 0z" />
+    <path
+        android:fillColor="#F4F1E8"
+        android:pathData="M48,54a6,6 0,1 0,12 0a6,6 0,1 0,-12 0z" />
+    <path
+        android:fillColor="#1E1A16"
+        android:pathData="M51.6,54a2.4,2.4 0,1 0,4.8 0a2.4,2.4 0,1 0,-4.8 0z" />
+    <path
+        android:pathData="M32.4,43.2V32.4H43.2M75.6,43.2V32.4H64.8M32.4,64.8V75.6H43.2M75.6,64.8V75.6H64.8"
+        android:strokeWidth="4.2"
+        android:strokeColor="#F4F1E8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>
