@@ -25,8 +25,15 @@ constexpr const char* kInputBlobName = "in0";
 constexpr const char* kOutputBlobName = "out0";
 constexpr int kInputSize = 640;
 constexpr float kScoreThreshold = 0.25f;
+// Darts on a dark or red bed (a red dart near the bull, a far board) often score 0.12-0.2; a box
+// that is not a new dart is still dropped by the board-change check and the settled-box check.
+constexpr float kDartScoreThreshold = 0.15f;
 // With debug images on, dart candidates down to this score are kept apart for the log.
 constexpr float kLowDartScoreThreshold = 0.10f;
+
+float CountedScoreThreshold(const std::string& label) {
+    return label == "dart" ? kDartScoreThreshold : kScoreThreshold;
+}
 constexpr float kNmsThreshold = 0.45f;
 // Darts are thin and often land side by side, so their boxes overlap a lot without being the
 // same dart; a low threshold merged neighbours into one box and the second dart was missed.
@@ -155,7 +162,7 @@ cv::Mat DrawOverlay(
     const std::string& status_detail) {
     cv::Mat overlay = image_bgr.clone();
     for (const YoloDetectionBox& box : boxes) {
-        const bool below_threshold = box.score < kScoreThreshold;
+        const bool below_threshold = box.score < CountedScoreThreshold(box.label);
         const cv::Scalar color = box.label == "board"
             ? cv::Scalar(0, 255, 255)
             : (below_threshold ? cv::Scalar(0, 140, 255) : cv::Scalar(0, 255, 0));
@@ -346,7 +353,7 @@ private:
         cv::Mat overlay = DebugImagesActive() ? DrawOverlay(image_bgr, kept_boxes, backend, status_detail) : cv::Mat();
         YoloDetectionResult result{{}, overlay, backend, status_detail, {}};
         for (YoloDetectionBox& box : kept_boxes) {
-            (box.score >= kScoreThreshold ? result.boxes : result.low_score_dart_boxes).push_back(std::move(box));
+            (box.score >= CountedScoreThreshold(box.label) ? result.boxes : result.low_score_dart_boxes).push_back(std::move(box));
         }
         return result;
     }
@@ -380,7 +387,7 @@ private:
 
         std::vector<YoloDetectionBox> boxes;
         boxes.reserve(rows);
-        const float min_dart_score = DebugImagesActive() ? kLowDartScoreThreshold : kScoreThreshold;
+        const float min_dart_score = DebugImagesActive() ? kLowDartScoreThreshold : kDartScoreThreshold;
 
         for (int i = 0; i < rows; ++i) {
             int best_class = -1;

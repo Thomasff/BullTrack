@@ -1031,6 +1031,8 @@ constexpr double kMinNewDartChangedRatio = 0.005;
 constexpr int kPhantomSkipFrames = 6;
 // Boxes this similar are taken as the same detection.
 constexpr float kSameBoxMinIou = 0.5f;
+// Looser match for a new dart seen in two frames in a row: small low-confidence boxes jitter.
+constexpr float kSettledDartMinIou = 0.3f;
 
 float BoxIou(const cv::Rect2f& a, const cv::Rect2f& b) {
     const float intersection = (a & b).area();
@@ -1187,6 +1189,7 @@ void AndroidBullTrackSession::ConfirmNewDart(
     int max_dart_count,
     AndroidFrameProcessResult& result) {
     const TrackedYoloFrameState base_frame = pending_candidate_->base_frame;
+    const TrackedYoloFrameState candidate_frame = pending_candidate_->candidate_frame;
     pending_candidate_.reset();
     const auto count_dart = [&]() {
         result.gate_triggered = true;
@@ -1233,9 +1236,26 @@ void AndroidBullTrackSession::ConfirmNewDart(
             candidates.push_back(i);
         }
     }
+    // The new dart must sit in the same place in the previous frame too: equal counts in two frames
+    // can come from different darts (YOLO missed a landed dart while a dart still in flight got a
+    // box), and a dart in flight or falling off moves between frames.
+    std::vector<size_t> settled;
+    for (size_t i : candidates) {
+        for (const YoloDetectionBox& previous : candidate_frame.dart_boxes) {
+            if (BoxIou(boxes[i].rect, previous.rect) >= kSettledDartMinIou) {
+                settled.push_back(i);
+                break;
+            }
+        }
+    }
+    if (settled.empty()) {
+        pending_candidate_ = PendingYoloCandidateState{base_frame, stable_frame};
+        result.gate_reason = "new_box_moved";
+        return;
+    }
     std::optional<size_t> best_index;
     BoxChange best_change;
-    for (size_t i : candidates) {
+    for (size_t i : settled) {
         const BoxChange change = CountChangedPixelsInBox(pair.value(), stable_frame.dart_search_rect, boxes[i]);
         if (!best_index.has_value() || change.changed_pixels > best_change.changed_pixels) {
             best_index = i;

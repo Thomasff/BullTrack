@@ -534,7 +534,9 @@ cv::Mat DrawFinalCenterRadiusDebugImage(
 // nearest to where the middle of a triple ring lies on that seat's line.
 constexpr double kExpectedTripleMiddleRadius = 0.6;
 constexpr double kMaxTripleOffsetScale = 0.15;
-constexpr int kMinMeasuredTripleCount = 6;
+// Weak red (far or dim board) breaks beds into thin pieces that would read too narrow; such a
+// board loses more triples, so require most of them before trusting the measurement.
+constexpr int kMinMeasuredTripleCount = 8;
 
 double RectifiedRadius(const cv::Mat& homography, const cv::Point2f& point) {
     std::vector<cv::Point2f> mapped;

@@ -438,6 +438,7 @@ class BullTrackLiveRoundController(
             return FrameLoopDecision(
                 shouldStop = false,
                 captureNextImmediately = frameUpdate.gateReason == "yolo_count_increased_wait_next_frame" ||
+                    frameUpdate.gateReason == "new_box_moved" ||
                     frameUpdate.gateReason.startsWith("alignment_low"),
             )
         }
@@ -665,6 +666,7 @@ class BullTrackLiveRoundController(
                 "YOLO 多出一个框，但靶上没有新变化，已忽略（${gateReason.substringAfter(" ", "")}）"
             gateReason.startsWith("yolo_detect_failed:") -> "YOLO 检测失败"
             gateReason.startsWith("alignment_low") -> "画面晃动或被遮挡，等下一张"
+            gateReason == "new_box_moved" -> "新镖还在移动（飞行或掉落），等下一张"
             gateReason.isBlank() -> "未知原因"
             else -> gateReason
         }
