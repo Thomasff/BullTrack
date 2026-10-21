@@ -31,10 +31,11 @@ object VirtualBoardScorer {
         3, 19, 7, 16, 8, 11, 14, 9, 12, 5
     )
 
-    // Ring edges of the real board, normalized so 1 is the outer edge of the double ring
-    // (the native rectification scale). Measured on the soft-tip board used for development;
-    // a standard steel-tip board is within about 1% except the bull.
-    private val REAL_RING_EDGES = floatArrayOf(0f, 0.032f, 0.110f, 0.581f, 0.626f, 0.952f, 1.0f)
+    // Ring edges of the real board, normalized so 1 is the native rectification scale (the outer
+    // edge of the red double segments as the board setup finds them). Measured on the rectified
+    // first frames of 7 rounds on the soft-tip board used for development (spread under 0.005);
+    // its triple and double rings are wider than a steel-tip board's (0.582-0.629, 0.953-1.0).
+    private val REAL_RING_EDGES = floatArrayOf(0f, 0.035f, 0.122f, 0.560f, 0.635f, 0.933f, 0.990f)
     private val VIRTUAL_RING_EDGES = floatArrayOf(
         0f, INNER_BULL_END, OUTER_BULL_END, INNER_SINGLE_END, TRIPLE_END, OUTER_SINGLE_END, DOUBLE_END
     )
