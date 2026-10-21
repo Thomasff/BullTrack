@@ -659,11 +659,35 @@ cv::Mat FilterSinglePixelComponents(const cv::Mat& binary_img) {
     return filtered;
 }
 
-std::optional<cv::Point> SelectTipPointFromLocalMask(const cv::Mat& filtered_binary, const cv::Rect& local_rect) {
+// A tall dart box means the dart points up in the image and its tip is the topmost changed
+// pixel; otherwise (camera at the left front) the tip is the leftmost one.
+bool IsTipOnTop(const cv::Rect& dart_box) {
+    return dart_box.height > ((dart_box.width * 5) / 4);
+}
+
+// YOLO boxes often stop short of the thin, dark tip, so the comparison area reaches a third of
+// the box further on the tip side.
+cv::Rect ExtendTowardTip(const cv::Rect& dart_box, bool tip_on_top) {
+    cv::Rect extended = dart_box;
+    if (tip_on_top) {
+        const int extra = dart_box.height / 3;
+        extended.y -= extra;
+        extended.height += extra;
+    } else {
+        const int extra = dart_box.width / 3;
+        extended.x -= extra;
+        extended.width += extra;
+    }
+    return extended;
+}
+
+std::optional<cv::Point> SelectTipPointFromLocalMask(
+    const cv::Mat& filtered_binary,
+    const cv::Rect& local_rect,
+    bool select_topmost) {
     if (filtered_binary.empty() || cv::countNonZero(filtered_binary) == 0) {
         return std::nullopt;
     }
-    const bool select_topmost = filtered_binary.rows > ((filtered_binary.cols * 5) / 4);
     if (select_topmost) {
         for (int y = 0; y < filtered_binary.rows; ++y) {
             const uchar* row = filtered_binary.ptr<uchar>(y);
@@ -895,11 +919,11 @@ LocalizedDartDetectionResult LocateDartTipInAlignedPair(
     int frame_index,
     const std::string& debug_prefix) {
     LocalizedDartDetectionResult result;
+    const cv::Rect box_in_pair = MapDartBoxIntoAlignedPair(pair, after_search_rect, dart_box);
+    const bool tip_on_top = IsTipOnTop(box_in_pair);
     cv::Rect local_rect;
     try {
-        local_rect = ExpandAndClampLocalRect(
-            MapDartBoxIntoAlignedPair(pair, after_search_rect, dart_box),
-            pair.round_board_size);
+        local_rect = ExpandAndClampLocalRect(ExtendTowardTip(box_in_pair, tip_on_top), pair.round_board_size);
     } catch (const std::exception&) {
         result.reason = "local_dart_box_invalid";
         return result;
@@ -909,7 +933,7 @@ LocalizedDartDetectionResult LocateDartTipInAlignedPair(
     cv::Mat after_local_gray = pair.after_gray_aligned(local_rect).clone();
     cv::Mat diff_thresh = BuildLocalDiffBinary(before_local_gray, after_local_gray);
     cv::Mat filtered_local = FilterSinglePixelComponents(diff_thresh);
-    std::optional<cv::Point> tip_point = SelectTipPointFromLocalMask(filtered_local, local_rect);
+    std::optional<cv::Point> tip_point = SelectTipPointFromLocalMask(filtered_local, local_rect, tip_on_top);
 
     if (cv::countNonZero(filtered_local) == 0) {
         result.reason = "local_mask_empty_after_filter";
