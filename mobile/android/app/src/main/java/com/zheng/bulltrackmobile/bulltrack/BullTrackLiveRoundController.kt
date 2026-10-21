@@ -469,6 +469,15 @@ class BullTrackLiveRoundController(
     private fun finalizeRound(manualStop: Boolean) {
         val session = currentSession ?: return
         val finalThrows = session.throws.toMutableList()
+        if (manualStop && finalThrows.size < MAX_DARTS) {
+            // A dart YOLO never saw is still on the board; look for it before padding misses.
+            runCatching { detector.findMissedDarts(session.nativeSessionId) }
+                .onSuccess { update ->
+                    artifactStore.saveArtifacts(session.roundId, update.debugImages)
+                    update.throws.take(MAX_DARTS - finalThrows.size).forEach { finalThrows += it }
+                }
+                .onFailure { Log.w(TAG, "Missed dart scan failed", it) }
+        }
         if (manualStop) {
             while (finalThrows.size < MAX_DARTS) {
                 finalThrows += createMissThrow(finalThrows.size)

@@ -65,6 +65,9 @@ public:
     AndroidStartRoundResult StartRound(const cv::Mat& first_frame_bgr);
     AndroidFrameProcessResult ProcessFrame(const cv::Mat& frame_bgr);
     AndroidRedetectResult RedetectRound(const cv::Mat& frame_bgr);
+    // On a manual end: darts never confirmed (YOLO never saw them), found by comparing the last
+    // frame with the clean frame. Points without a tip are left out (the round pads misses).
+    AndroidRedetectResult FindMissedDartsAtEnd();
 
 private:
     PipelineConfig pipeline_config_{};

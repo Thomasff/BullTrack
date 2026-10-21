@@ -307,4 +307,24 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRedetectRound(
     }
 }
 
+JNIEXPORT jobject JNICALL
+Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeFindMissedDarts(
+    JNIEnv* env,
+    jobject thiz,
+    jlong session_id) {
+    (void)thiz;
+    auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
+    if (session == nullptr) {
+        ThrowJavaRuntimeException(env, "native session 无效");
+        return nullptr;
+    }
+    try {
+        return CreateNativeRedetectResult(env, session->FindMissedDartsAtEnd());
+    } catch (const std::exception& error) {
+        LOGE("nativeFindMissedDarts failed: %s", error.what());
+        ThrowJavaRuntimeException(env, error.what());
+        return nullptr;
+    }
+}
+
 }  // extern "C"

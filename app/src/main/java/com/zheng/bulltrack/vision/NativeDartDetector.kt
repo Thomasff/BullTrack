@@ -39,6 +39,7 @@ class NativeDartDetector(
         width: Int,
         height: Int
     ): NativeRedetectResult
+    private external fun nativeFindMissedDarts(sessionId: Long): NativeRedetectResult
 
     override fun init() {
         nativeInit(assetManager)
@@ -100,6 +101,17 @@ class NativeDartDetector(
             width = frame.width,
             height = frame.height
         )
+        return RedetectDetectionUpdate(
+            throws = result.points.orEmpty().map { point ->
+                toThrowResult(point.normalizedX, point.normalizedY)
+            },
+            debugImages = result.debugImages.orEmpty().map(::toDebugImageArtifact),
+            yoloStatus = result.yoloStatus
+        )
+    }
+
+    override fun findMissedDarts(sessionId: Long): RedetectDetectionUpdate {
+        val result = nativeFindMissedDarts(sessionId)
         return RedetectDetectionUpdate(
             throws = result.points.orEmpty().map { point ->
                 toThrowResult(point.normalizedX, point.normalizedY)

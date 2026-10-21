@@ -53,6 +53,9 @@ class MockDartDetector(
         return delegate.redetect(sessionId, debugAfterBitmap ?: frame)
     }
 
+    override fun findMissedDarts(sessionId: Long): RedetectDetectionUpdate =
+        delegate.findMissedDarts(sessionId)
+
     private fun loadDebugBitmapsIfNeeded() {
         if (debugBeforeBitmap != null && debugAfterBitmap != null) {
             return

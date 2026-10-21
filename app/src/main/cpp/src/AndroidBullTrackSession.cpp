@@ -949,24 +949,6 @@ std::optional<AlignedBoardPair> PrepareAlignedBoardPair(
     return pair;
 }
 
-// ECC score of one frame's dart search crop against the template, or -1 when it does not converge.
-double AlignmentScoreAgainstTemplate(
-    const cv::Mat& template_gray,
-    const cv::Mat& search_crop_bgr,
-    const PipelineConfig& config) {
-    try {
-        const cv::Mat gray = PreprocessImage(
-            EnhanceWarpedImage(
-                ResizeToTargetSize(search_crop_bgr, template_gray.size()),
-                config.enhancement.saturation_scale,
-                config.enhancement.contrast_scale),
-            config.dart.preprocess_blur_kernel);
-        return AlignPyramidEcc(template_gray, gray, 3, kDartAlignmentMotion).correlation;
-    } catch (const std::exception&) {
-        return -1.0;
-    }
-}
-
 // YOLO found the dart box in the after image as captured, but the comparison runs on the
 // aligned image, which ECC may have shifted or turned by a few pixels; move the box the same way
 // so it still sits on the dart when the phone moved between frames.
@@ -997,17 +979,17 @@ cv::Rect MapDartBoxIntoAlignedPair(
     return cv::boundingRect(moved) & cv::Rect(cv::Point(0, 0), pair.round_board_size);
 }
 
-LocalizedDartDetectionResult LocateDartTipInAlignedPair(
+// Tip of the dart inside box_in_pair (aligned-pair coordinates): a mapped YOLO box, or a changed
+// region found by the board scan.
+LocalizedDartDetectionResult LocateDartTipInRegion(
     const AlignedBoardPair& pair,
-    const cv::Rect& after_search_rect,
-    const YoloDetectionBox& dart_box,
+    const cv::Rect& box_in_pair,
     const cv::Mat& point_rectification_h,
     float rectified_radius,
     const cv::Point& board_offset_in_search,
     int frame_index,
     const std::string& debug_prefix) {
     LocalizedDartDetectionResult result;
-    const cv::Rect box_in_pair = MapDartBoxIntoAlignedPair(pair, after_search_rect, dart_box);
     const bool tip_on_top = IsTipOnTop(box_in_pair);
     cv::Rect local_rect;
     try {
@@ -1060,6 +1042,25 @@ LocalizedDartDetectionResult LocateDartTipInAlignedPair(
     (void)debug_prefix;
 #endif
     return result;
+}
+
+LocalizedDartDetectionResult LocateDartTipInAlignedPair(
+    const AlignedBoardPair& pair,
+    const cv::Rect& after_search_rect,
+    const YoloDetectionBox& dart_box,
+    const cv::Mat& point_rectification_h,
+    float rectified_radius,
+    const cv::Point& board_offset_in_search,
+    int frame_index,
+    const std::string& debug_prefix) {
+    return LocateDartTipInRegion(
+        pair,
+        MapDartBoxIntoAlignedPair(pair, after_search_rect, dart_box),
+        point_rectification_h,
+        rectified_radius,
+        board_offset_in_search,
+        frame_index,
+        debug_prefix);
 }
 
 // Below this much change in the most changed box, a rise in the YOLO count is treated as an
@@ -1176,6 +1177,240 @@ BoxChange CountChangedPixelsInBox(
         pair.before_gray_aligned(local_rect),
         pair.after_gray_aligned(local_rect));
     return {cv::countNonZero(FilterSinglePixelComponents(diff_thresh)), local_rect.area()};
+}
+
+int CountChangedPixelsInRegion(const AlignedBoardPair& pair, const cv::Rect& region) {
+    const cv::Rect local_rect = region & cv::Rect(cv::Point(0, 0), pair.round_board_size);
+    if (local_rect.area() <= 0) {
+        return 0;
+    }
+    cv::Mat diff_thresh = BuildLocalDiffBinary(
+        pair.before_gray_aligned(local_rect),
+        pair.after_gray_aligned(local_rect));
+    return cv::countNonZero(FilterSinglePixelComponents(diff_thresh));
+}
+
+// Board scan for darts YOLO never boxed (a red dart on the bull can score under 0.1 in every
+// frame). It runs on a clean/current pair already aligned for a confirmation, at half size: the
+// images are blurred anyway, and averaging hides one-pixel misalignment along the wires.
+constexpr double kBoardScanScale = 0.5;
+constexpr double kBoardScanChangeThreshold = 30.0;
+// Changed area, in full-size pixels, of a region taken as a dart: real darts changed 40-1900
+// pixels of their box (2026-10-21); a person's shadow or a light change covers far more.
+constexpr int kMinMissedDartArea = 40;
+constexpr int kMaxMissedDartArea = 6000;
+// Smaller specks are noise; more pieces than this mean the whole image changed.
+constexpr int kMinMissedDartPieceArea = 8;
+constexpr size_t kMaxBoardScanPieces = 200;
+// Regions further out than this (rectified radius) are off the board.
+constexpr float kMaxMissedDartRadius = 1.05f;
+// Margins around known darts whose change the scan ignores: an old dart may wobble when hit; a
+// dart YOLO boxed (even one not confirmed yet) also changes its shadow and its tip side.
+constexpr double kOldDartMargin = 0.3;
+constexpr double kBoxedDartMargin = 0.5;
+
+struct ChangeRegion {
+    cv::Rect rect_in_pair;
+    int area = 0;
+};
+
+cv::Rect GrowRect(const cv::Rect& rect, double share_each_side) {
+    const int dx = static_cast<int>(std::lround(rect.width * share_each_side));
+    const int dy = static_cast<int>(std::lround(rect.height * share_each_side));
+    return cv::Rect(rect.x - dx, rect.y - dy, rect.width + 2 * dx, rect.height + 2 * dy);
+}
+
+std::vector<ChangeRegion> FindUnexplainedChangeRegions(
+    const AlignedBoardPair& pair,
+    const std::vector<cv::Rect>& explained_in_pair,
+    const cv::Mat& point_rectification_h,
+    float rectified_radius,
+    const cv::Point& board_offset_in_search) {
+    cv::Mat before_small;
+    cv::Mat after_small;
+    cv::resize(pair.before_gray_aligned, before_small, cv::Size(), kBoardScanScale, kBoardScanScale, cv::INTER_AREA);
+    cv::resize(pair.after_gray_aligned, after_small, cv::Size(), kBoardScanScale, kBoardScanScale, cv::INTER_AREA);
+    cv::Mat diff;
+    cv::absdiff(before_small, after_small, diff);
+    cv::Mat changed;
+    cv::threshold(diff, changed, kBoardScanChangeThreshold, 255, cv::THRESH_BINARY);
+    // Join the pieces of one dart cut apart by wires and holes.
+    cv::morphologyEx(changed, changed, cv::MORPH_CLOSE, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    const int label_count = cv::connectedComponentsWithStats(changed, labels, stats, centroids, 8, CV_32S);
+    const double to_full = 1.0 / kBoardScanScale;
+    const cv::Rect pair_bounds(cv::Point(0, 0), pair.round_board_size);
+    // Pieces first, then merge the ones close enough to be parts of one dart (flight and barrel
+    // separated by a wire, say); size limits apply to the merged region.
+    std::vector<ChangeRegion> pieces;
+    for (int label = 1; label < label_count; ++label) {
+        const int area = static_cast<int>(stats.at<int>(label, cv::CC_STAT_AREA) * to_full * to_full);
+        if (area < kMinMissedDartPieceArea) {
+            continue;
+        }
+        const cv::Rect rect = cv::Rect(
+            static_cast<int>(stats.at<int>(label, cv::CC_STAT_LEFT) * to_full),
+            static_cast<int>(stats.at<int>(label, cv::CC_STAT_TOP) * to_full),
+            static_cast<int>(std::ceil(stats.at<int>(label, cv::CC_STAT_WIDTH) * to_full)),
+            static_cast<int>(std::ceil(stats.at<int>(label, cv::CC_STAT_HEIGHT) * to_full))) & pair_bounds;
+        pieces.push_back(ChangeRegion{rect, area});
+    }
+    if (pieces.size() > kMaxBoardScanPieces) {
+        // The whole image changed (light, exposure, a bad alignment): nothing here is a dart.
+        __android_log_print(ANDROID_LOG_INFO, "BullTrackNativeV2", "board scan: %d pieces, skipped", static_cast<int>(pieces.size()));
+        return {};
+    }
+    for (bool merged = true; merged;) {
+        merged = false;
+        for (size_t i = 0; i < pieces.size() && !merged; ++i) {
+            for (size_t j = i + 1; j < pieces.size() && !merged; ++j) {
+                if ((GrowRect(pieces[i].rect_in_pair, 0.5) & pieces[j].rect_in_pair).area() > 0) {
+                    pieces[i].rect_in_pair |= pieces[j].rect_in_pair;
+                    pieces[i].area += pieces[j].area;
+                    pieces.erase(pieces.begin() + static_cast<std::ptrdiff_t>(j));
+                    merged = true;
+                }
+            }
+        }
+    }
+    std::vector<ChangeRegion> regions;
+    for (const ChangeRegion& piece : pieces) {
+        const int area = piece.area;
+        const cv::Rect& rect = piece.rect_in_pair;
+        if (area < kMinMissedDartArea || area > kMaxMissedDartArea) {
+            continue;
+        }
+        bool explained = rect.area() <= 0;
+        for (const cv::Rect& known : explained_in_pair) {
+            explained = explained || (known & rect).area() > 0;
+        }
+        if (explained) {
+            continue;
+        }
+        try {
+            const cv::Point center(rect.x + rect.width / 2, rect.y + rect.height / 2);
+            const cv::Point2f norm = NormalizePointFromRoundAlignedBoard(
+                center - board_offset_in_search,
+                point_rectification_h,
+                rectified_radius);
+            if (std::hypot(norm.x, norm.y) > kMaxMissedDartRadius) {
+                continue;
+            }
+        } catch (const std::exception&) {
+            continue;
+        }
+        regions.push_back(ChangeRegion{rect, area});
+    }
+    std::sort(regions.begin(), regions.end(), [](const ChangeRegion& lhs, const ChangeRegion& rhs) {
+        return lhs.area > rhs.area;
+    });
+    return regions;
+}
+
+// Areas of known darts for the scan: old darts of the clean frame, and every dart YOLO boxed in
+// the given frames (confirmed now, or still waiting) with its tip side.
+std::vector<cv::Rect> KnownDartAreas(
+    const AlignedBoardPair& pair,
+    const TrackedYoloFrameState& clean_frame,
+    const std::vector<const TrackedYoloFrameState*>& boxed_frames) {
+    std::vector<cv::Rect> areas;
+    for (const YoloDetectionBox& box : clean_frame.dart_boxes) {
+        areas.push_back(GrowRect(MapDartBoxIntoAlignedPair(pair, clean_frame.dart_search_rect, box), kOldDartMargin));
+    }
+    for (const TrackedYoloFrameState* frame : boxed_frames) {
+        for (const YoloDetectionBox& box : frame->dart_boxes) {
+            const cv::Rect in_pair = MapDartBoxIntoAlignedPair(pair, frame->dart_search_rect, box);
+            areas.push_back(GrowRect(ExtendTowardTip(in_pair, IsTipOnTop(in_pair)), kBoxedDartMargin));
+        }
+    }
+    return areas;
+}
+
+// Changed regions no known dart explains that also sat still since previous_frame (not a dart
+// in flight). Without a previous frame aligned well enough, nothing is reported.
+std::vector<ChangeRegion> FindStillMissedDartRegions(
+    const AlignedBoardPair& pair,
+    const std::vector<cv::Rect>& known_areas,
+    const TrackedYoloFrameState& previous_frame,
+    const TrackedYoloFrameState& current_frame,
+    const cv::Mat& template_gray,
+    const PipelineConfig& config,
+    const cv::Mat& point_rectification_h,
+    float rectified_radius,
+    const cv::Point& board_offset_in_search) {
+    std::vector<ChangeRegion> regions = FindUnexplainedChangeRegions(
+        pair,
+        known_areas,
+        point_rectification_h,
+        rectified_radius,
+        board_offset_in_search);
+    if (regions.empty()) {
+        return regions;
+    }
+    std::optional<AlignedBoardPair> still_pair;
+    try {
+        still_pair = PrepareAlignedBoardPair(
+            template_gray,
+            previous_frame.dart_search_crop_bgr,
+            current_frame.dart_search_crop_bgr,
+            config);
+    } catch (const std::exception&) {
+    }
+    std::vector<ChangeRegion> still;
+    std::string log_text;
+    for (const ChangeRegion& region : regions) {
+        bool keep = false;
+        if (still_pair.has_value() && still_pair->before_correlation >= kMinAlignmentCorrelation) {
+            const int change = CountChangedPixelsInRegion(pair, region.rect_in_pair);
+            const int moved = CountChangedPixelsInRegion(still_pair.value(), region.rect_in_pair);
+            keep = change > 0 && moved <= change * kMaxStillChangeShare;
+        }
+        log_text += cv::format(
+            " %d@(%d,%d)%s",
+            region.area,
+            region.rect_in_pair.x + region.rect_in_pair.width / 2,
+            region.rect_in_pair.y + region.rect_in_pair.height / 2,
+            keep ? "" : "moved");
+        if (keep) {
+            still.push_back(region);
+        }
+    }
+    __android_log_print(ANDROID_LOG_INFO, "BullTrackNativeV2", "board scan regions:%s", log_text.c_str());
+    return still;
+}
+
+// A settled view may replace the clean frame only if both align well and it shows no change the
+// known darts do not explain: a dart YOLO cannot see landing right now would be swallowed.
+bool CanRefreshCleanFrame(
+    const TrackedYoloFrameState& clean_frame,
+    const TrackedYoloFrameState& current_frame,
+    const cv::Mat& template_gray,
+    const PipelineConfig& config,
+    const cv::Mat& point_rectification_h,
+    float rectified_radius,
+    const cv::Point& board_offset_in_search) {
+    std::optional<AlignedBoardPair> pair;
+    try {
+        pair = PrepareAlignedBoardPair(
+            template_gray,
+            clean_frame.dart_search_crop_bgr,
+            current_frame.dart_search_crop_bgr,
+            config);
+    } catch (const std::exception&) {
+        return false;
+    }
+    if (!pair.has_value() || pair->before_correlation < kMinAlignmentCorrelation ||
+        pair->after_correlation < kMinAlignmentCorrelation) {
+        return false;
+    }
+    return FindUnexplainedChangeRegions(
+        pair.value(),
+        KnownDartAreas(pair.value(), clean_frame, {&current_frame}),
+        point_rectification_h,
+        rectified_radius,
+        board_offset_in_search).empty();
 }
 
 }  // namespace
@@ -1429,6 +1664,25 @@ void AndroidBullTrackSession::ConfirmNewDarts(
     if (static_cast<int>(new_dart_boxes.size()) > remaining) {
         new_dart_boxes.resize(static_cast<size_t>(remaining));
     }
+    // Darts YOLO never boxed (none in this frame, the previous one or the clean one), found on
+    // the same aligned pair; they would otherwise go into the new clean frame and be lost.
+    std::vector<ChangeRegion> missed_regions;
+    if (static_cast<int>(new_dart_boxes.size()) < remaining) {
+        missed_regions = FindStillMissedDartRegions(
+            pair.value(),
+            KnownDartAreas(pair.value(), base_frame, {&stable_frame, &candidate_frame}),
+            candidate_frame,
+            stable_frame,
+            first_frame_preprocessed_for_alignment_,
+            pipeline_config_,
+            first_frame_point_rectification_h_,
+            first_frame_rectified_radius_,
+            board_offset_in_search_);
+        const size_t room = static_cast<size_t>(remaining) - new_dart_boxes.size();
+        if (missed_regions.size() > room) {
+            missed_regions.resize(room);
+        }
+    }
 
     std::vector<std::optional<cv::Point2f>> points;
     for (size_t i = 0; i < new_dart_boxes.size(); ++i) {
@@ -1464,8 +1718,26 @@ void AndroidBullTrackSession::ConfirmNewDarts(
                 ? std::optional<cv::Point2f>(MapOntoDefaultRings(localized.point_norm.value(), ring_edges_))
                 : std::nullopt);
     }
+    for (size_t i = 0; i < missed_regions.size(); ++i) {
+        LocalizedDartDetectionResult localized = LocateDartTipInRegion(
+            pair.value(),
+            missed_regions[i].rect_in_pair,
+            first_frame_point_rectification_h_,
+            first_frame_rectified_radius_,
+            board_offset_in_search_,
+            current_frame_index_,
+            cv::format("s3m%c", static_cast<char>('a' + i)));
+        std::move(
+            localized.debug_images.begin(),
+            localized.debug_images.end(),
+            std::back_inserter(result.precise_debug_images));
+        points.push_back(
+            localized.has_dart && localized.point_norm.has_value()
+                ? std::optional<cv::Point2f>(MapOntoDefaultRings(localized.point_norm.value(), ring_edges_))
+                : std::nullopt);
+    }
     result.gate_reason = std::string(yolo_sees_new_dart ? "trigger_precise_detection" : "trigger_lost_box_on_image") +
-        change_text + cv::format(" darts=%d", static_cast<int>(points.size()));
+        change_text + cv::format(" darts=%d missed=%d", static_cast<int>(points.size()), static_cast<int>(missed_regions.size()));
     count_darts(points);
 }
 
@@ -1539,15 +1811,19 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
 
     if (clean_refresh_frames_left_ > 0) {
         clean_refresh_frames_left_ -= 1;
-        // Only a frame that still shows exactly the confirmed darts (no box elsewhere) and aligns
-        // well (no hand in view, no blur) may stand in.
+        // Only a frame that still shows exactly the confirmed darts (no box elsewhere), aligns well
+        // (no hand in view, no blur) and shows no unexplained change may stand in.
         if (!pending_candidate_.has_value() && stored_current.has_board_box && last_clean_frame_.has_value() &&
             current_count >= last_confirmed_dart_count_ &&
             BoxesMatchOneToOne(stored_current.dart_boxes, last_clean_frame_->dart_boxes) &&
-            AlignmentScoreAgainstTemplate(
+            CanRefreshCleanFrame(
+                last_clean_frame_.value(),
+                stored_current,
                 first_frame_preprocessed_for_alignment_,
-                stored_current.dart_search_crop_bgr,
-                pipeline_config_) >= kMinAlignmentCorrelation) {
+                pipeline_config_,
+                first_frame_point_rectification_h_,
+                first_frame_rectified_radius_,
+                board_offset_in_search_)) {
             last_clean_frame_ = stored_current;
         }
     }
@@ -1599,6 +1875,67 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
 
     current_frame_index_ += 1;
 
+    return result;
+}
+
+AndroidRedetectResult AndroidBullTrackSession::FindMissedDartsAtEnd() {
+    AndroidRedetectResult result;
+    result.yolo_status = "board_scan";
+    const int remaining = round_start_dart_count_ + 3 - last_confirmed_dart_count_;
+    if (!started_ || remaining <= 0 || recent_frames_.size() < 2 || !last_clean_frame_.has_value()) {
+        return result;
+    }
+    const TrackedYoloFrameState& current = recent_frames_.back();
+    const TrackedYoloFrameState& previous = recent_frames_[recent_frames_.size() - 2];
+    if (!current.has_board_box || !previous.has_board_box || !last_clean_frame_->has_board_box) {
+        return result;
+    }
+    std::optional<AlignedBoardPair> pair;
+    try {
+        pair = PrepareAlignedBoardPair(
+            first_frame_preprocessed_for_alignment_,
+            last_clean_frame_->dart_search_crop_bgr,
+            current.dart_search_crop_bgr,
+            pipeline_config_);
+    } catch (const std::exception&) {
+        return result;
+    }
+    if (!pair.has_value() || pair->before_correlation < kMinAlignmentCorrelation ||
+        pair->after_correlation < kMinAlignmentCorrelation) {
+        return result;
+    }
+    // Only the confirmed darts are known here: a dart YOLO boxed but never confirmed counts too.
+    std::vector<ChangeRegion> regions = FindStillMissedDartRegions(
+        pair.value(),
+        KnownDartAreas(pair.value(), last_clean_frame_.value(), {}),
+        previous,
+        current,
+        first_frame_preprocessed_for_alignment_,
+        pipeline_config_,
+        first_frame_point_rectification_h_,
+        first_frame_rectified_radius_,
+        board_offset_in_search_);
+    if (static_cast<int>(regions.size()) > remaining) {
+        regions.resize(static_cast<size_t>(remaining));
+    }
+    for (size_t i = 0; i < regions.size(); ++i) {
+        LocalizedDartDetectionResult localized = LocateDartTipInRegion(
+            pair.value(),
+            regions[i].rect_in_pair,
+            first_frame_point_rectification_h_,
+            first_frame_rectified_radius_,
+            board_offset_in_search_,
+            current_frame_index_,
+            cv::format("s3e%c", static_cast<char>('a' + i)));
+        std::move(
+            localized.debug_images.begin(),
+            localized.debug_images.end(),
+            std::back_inserter(result.debug_images));
+        if (localized.has_dart && localized.point_norm.has_value()) {
+            result.points.push_back(MapOntoDefaultRings(localized.point_norm.value(), ring_edges_));
+        }
+    }
+    last_confirmed_dart_count_ += static_cast<int>(regions.size());
     return result;
 }
 
