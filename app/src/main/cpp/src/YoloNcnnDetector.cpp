@@ -25,6 +25,8 @@ constexpr const char* kInputBlobName = "in0";
 constexpr const char* kOutputBlobName = "out0";
 constexpr int kInputSize = 640;
 constexpr float kScoreThreshold = 0.25f;
+// With debug images on, dart candidates down to this score are kept apart for the log.
+constexpr float kLowDartScoreThreshold = 0.10f;
 constexpr float kNmsThreshold = 0.45f;
 // Darts are thin and often land side by side, so their boxes overlap a lot without being the
 // same dart; a low threshold merged neighbours into one box and the second dart was missed.
@@ -153,15 +155,16 @@ cv::Mat DrawOverlay(
     const std::string& status_detail) {
     cv::Mat overlay = image_bgr.clone();
     for (const YoloDetectionBox& box : boxes) {
+        const bool below_threshold = box.score < kScoreThreshold;
         const cv::Scalar color = box.label == "board"
             ? cv::Scalar(0, 255, 255)
-            : cv::Scalar(0, 255, 0);
+            : (below_threshold ? cv::Scalar(0, 140, 255) : cv::Scalar(0, 255, 0));
         const cv::Rect rect(
             static_cast<int>(std::round(box.rect.x)),
             static_cast<int>(std::round(box.rect.y)),
             static_cast<int>(std::round(box.rect.width)),
             static_cast<int>(std::round(box.rect.height)));
-        cv::rectangle(overlay, rect, color, 3);
+        cv::rectangle(overlay, rect, color, below_threshold ? 1 : 3);
         std::ostringstream label_stream;
         label_stream.setf(std::ios::fixed);
         label_stream.precision(2);
@@ -337,10 +340,15 @@ private:
         }
 
         std::vector<YoloDetectionBox> boxes = DecodeOutput(output, letterbox, image_bgr.size());
-        std::vector<YoloDetectionBox> final_boxes = ApplyNms(std::move(boxes));
+        // Sorted by score, so a low candidate never suppresses a counted box.
+        std::vector<YoloDetectionBox> kept_boxes = ApplyNms(std::move(boxes));
         // The overlay is only a debug image; skip the full-frame copy and drawing otherwise.
-        cv::Mat overlay = DebugImagesActive() ? DrawOverlay(image_bgr, final_boxes, backend, status_detail) : cv::Mat();
-        return {final_boxes, overlay, backend, status_detail};
+        cv::Mat overlay = DebugImagesActive() ? DrawOverlay(image_bgr, kept_boxes, backend, status_detail) : cv::Mat();
+        YoloDetectionResult result{{}, overlay, backend, status_detail, {}};
+        for (YoloDetectionBox& box : kept_boxes) {
+            (box.score >= kScoreThreshold ? result.boxes : result.low_score_dart_boxes).push_back(std::move(box));
+        }
+        return result;
     }
 
     std::vector<YoloDetectionBox> DecodeOutput(
@@ -372,6 +380,7 @@ private:
 
         std::vector<YoloDetectionBox> boxes;
         boxes.reserve(rows);
+        const float min_dart_score = DebugImagesActive() ? kLowDartScoreThreshold : kScoreThreshold;
 
         for (int i = 0; i < rows; ++i) {
             int best_class = -1;
@@ -383,7 +392,8 @@ private:
                     best_class = c;
                 }
             }
-            if (best_class < 0 || best_score < kScoreThreshold) {
+            if (best_class < 0 ||
+                best_score < (class_names_[best_class] == "dart" ? min_dart_score : kScoreThreshold)) {
                 continue;
             }
 

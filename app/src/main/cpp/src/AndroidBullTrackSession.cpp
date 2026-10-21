@@ -328,10 +328,25 @@ cv::Point2f BoxCenter(const YoloDetectionBox& box) {
         box.rect.y + (box.rect.height * 0.5f));
 }
 
-std::vector<YoloDetectionBox> SelectTopDartBoxes(const YoloDetectionResult& detection, int max_count) {
+bool BoxCenterInside(const YoloDetectionBox& box, const std::optional<cv::Rect>& area) {
+    if (!area.has_value()) {
+        return true;
+    }
+    const cv::Point center(
+        static_cast<int>(std::lround(box.rect.x + box.rect.width * 0.5f)),
+        static_cast<int>(std::lround(box.rect.y + box.rect.height * 0.5f)));
+    return area->contains(center);
+}
+
+// Darts whose box centre lies outside the dart search area (a clock hand, a door frame) are not
+// darts on this board and would only make the count flicker.
+std::vector<YoloDetectionBox> SelectTopDartBoxes(
+    const YoloDetectionResult& detection,
+    int max_count,
+    const std::optional<cv::Rect>& search_area) {
     std::vector<YoloDetectionBox> dart_boxes;
     for (const YoloDetectionBox& box : detection.boxes) {
-        if (box.label == "dart") {
+        if (box.label == "dart" && BoxCenterInside(box, search_area)) {
             dart_boxes.push_back(box);
         }
     }
@@ -575,7 +590,10 @@ TrackedYoloFrameState BuildTrackedYoloFrameState(
         frame_state.dart_search_rect = ExpandToDartSearchRect(frame_state.board_box);
         frame_state.dart_search_crop_bgr = CropWithBlackPadding(frame_bgr, frame_state.dart_search_rect);
     }
-    frame_state.dart_boxes = SelectTopDartBoxes(detection, max_dart_count);
+    frame_state.dart_boxes = SelectTopDartBoxes(
+        detection,
+        max_dart_count,
+        frame_state.has_board_box ? std::optional<cv::Rect>(frame_state.dart_search_rect) : std::nullopt);
     frame_state.overlay_bgr = detection.overlay_bgr;
     frame_state.yolo_status = detection.execution_backend;
     if (!detection.status_detail.empty()) {
@@ -1148,7 +1166,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     pending_candidate_.reset();
     phantom_boxes_.clear();
     clean_refresh_frames_left_ = 0;
-    last_confirmed_dart_count_ = static_cast<int>(SelectTopDartBoxes(baseline.yolo_detection, 3).size());
+    last_confirmed_dart_count_ = static_cast<int>(SelectTopDartBoxes(baseline.yolo_detection, 3, baseline.dart_search_rect).size());
     round_start_dart_count_ = last_confirmed_dart_count_;
     PushRecentFrame(
         recent_frames_,
@@ -1325,15 +1343,27 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     const TrackedYoloFrameState& stored_current = recent_frames_.back();
 
 #if BT_ENABLE_DEBUG_IMAGES
-    // Debug only: the YOLO dart count of every frame, to see why a confirmation came late.
+    // Debug only: the YOLO dart count of every frame, to see why a confirmation came late, and the
+    // scores of darts YOLO saw on the board but below the threshold, to choose the threshold.
     if (DebugImagesActive()) {
+        std::string low_scores;
+        for (const YoloDetectionBox& box : yolo_detection.low_score_dart_boxes) {
+            if (stored_current.has_board_box && BoxCenterInside(box, stored_current.dart_search_rect)) {
+                low_scores += cv::format(
+                    " %.2f@(%d,%d)",
+                    box.score,
+                    static_cast<int>(box.rect.x + box.rect.width * 0.5f),
+                    static_cast<int>(box.rect.y + box.rect.height * 0.5f));
+            }
+        }
         __android_log_print(
             ANDROID_LOG_INFO,
             "BullTrackNativeV2",
-            "frame %d darts=%d board=%d",
+            "frame %d darts=%d board=%d low=[%s ]",
             current_frame_index_,
             current_count,
-            stored_current.has_board_box ? 1 : 0);
+            stored_current.has_board_box ? 1 : 0,
+            low_scores.c_str());
     }
 #endif
 
@@ -1430,7 +1460,7 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
         }
         const cv::Rect after_search_rect = ExpandToDartSearchRect(after_board_box.value());
 
-        std::vector<YoloDetectionBox> top_dart_boxes = SelectTopDartBoxes(yolo_detection, 3);
+        std::vector<YoloDetectionBox> top_dart_boxes = SelectTopDartBoxes(yolo_detection, 3, after_search_rect);
         if (top_dart_boxes.empty()) {
             result.yolo_status += " no_dart_boxes";
 #if BT_ENABLE_DEBUG_IMAGES

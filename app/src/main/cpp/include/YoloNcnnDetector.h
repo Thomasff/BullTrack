@@ -19,6 +19,9 @@ struct YoloDetectionResult {
     cv::Mat overlay_bgr;
     std::string execution_backend;
     std::string status_detail;
+    // Debug images only: darts scored below the detection threshold, logged and drawn to choose
+    // the threshold from real rounds. Never counted as darts.
+    std::vector<YoloDetectionBox> low_score_dart_boxes;
 };
 
 void SetNcnnAssetManager(AAssetManager* asset_manager);
