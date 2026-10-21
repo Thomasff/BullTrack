@@ -664,16 +664,23 @@ cv::Mat BuildLocalDiffBinary(const cv::Mat& before_local_gray, const cv::Mat& af
 
 // For the tip only: a thin grey barrel over a dark bed changes the blurred image by just 20-29,
 // under the change threshold, so the mask stopped short of the tip. Weak change (>= 15) is kept
-// where it connects to strong change (>= 30): the mask follows the barrel to its front while
-// isolated weak specks (wobble, noise) stay out.
+// where it connects to strong change (> 30): the mask follows the barrel to its front while
+// isolated weak specks (wobble, noise) stay out. Only weak change that brightens counts: the
+// barrel over a dark bed brightens it, while the dart's shadow only darkens and would otherwise
+// lead the mask away from the dart (2026-10-21: a shadow trail became the "tip").
 constexpr double kStrongTipDiff = 30.0;
 constexpr double kWeakTipDiff = 15.0;
 
 cv::Mat BuildTipDiffBinary(const cv::Mat& before_local_gray, const cv::Mat& after_local_gray) {
     cv::Mat diff;
     cv::absdiff(before_local_gray, after_local_gray, diff);
+    cv::Mat brightened;
+    cv::subtract(after_local_gray, before_local_gray, brightened);
+    cv::Mat strong;
+    cv::threshold(diff, strong, kStrongTipDiff, 255, cv::THRESH_BINARY);
     cv::Mat weak;
-    cv::threshold(diff, weak, kWeakTipDiff - 1.0, 255, cv::THRESH_BINARY);
+    cv::threshold(brightened, weak, kWeakTipDiff - 1.0, 255, cv::THRESH_BINARY);
+    cv::bitwise_or(weak, strong, weak);
     cv::Mat labels;
     const int label_count = cv::connectedComponents(weak, labels, 8, CV_32S);
     std::vector<uchar> keep(static_cast<size_t>(label_count), 0);
