@@ -4,9 +4,20 @@
 #include "DebugImageConfig.h"
 
 #include <array>
+#include <optional>
 #include <vector>
 
 namespace bulltrack {
+
+// Triple and double ring edges measured on the red beds of this board, in the rectified scale
+// (1 = outer edge of the red doubles as the seat fit found them).
+struct MeasuredRingEdges {
+    float triple_inner = 0.0f;
+    float triple_outer = 0.0f;
+    float double_inner = 0.0f;
+    float double_outer = 0.0f;
+    int triple_count = 0;
+};
 
 struct BoardCircleDetectionResult {
     BoardCircle circle;
@@ -35,6 +46,8 @@ struct BoardCircleDetectionResult {
     // Largest bed-to-seat gap after the homography fit (board radii) and how many seats it used.
     double seat_fit_max_residual = 0.0;
     int seat_count = 0;
+    // Empty when the measurement failed its checks; scoring then uses the default ring table.
+    std::optional<MeasuredRingEdges> measured_ring_edges;
 };
 
 BoardCircleDetectionResult DetectBoardCircleDetailed(

@@ -10,6 +10,7 @@
 #include <android/log.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -709,6 +710,33 @@ std::optional<cv::Point> SelectTipPointFromLocalMask(
     return std::nullopt;
 }
 
+// Ring edges the Kotlin scorer expects (VirtualBoardScorer.REAL_RING_EDGES from the outer bull
+// on). A board measured at setup has its own edges moved onto these ring by ring, keeping the
+// angle, so the scorer needs no per-board table. The bull is not measured and stays as it is.
+constexpr std::array<float, 5> kDefaultRingEdges{0.122f, 0.560f, 0.635f, 0.933f, 0.990f};
+
+cv::Point2f MapOntoDefaultRings(const cv::Point2f& point_norm, const std::optional<MeasuredRingEdges>& measured) {
+    const float radius = std::hypot(point_norm.x, point_norm.y);
+    if (!measured.has_value() || radius <= kDefaultRingEdges[0]) {
+        return point_norm;
+    }
+    const std::array<float, 5> board_edges{
+        kDefaultRingEdges[0],
+        measured->triple_inner,
+        measured->triple_outer,
+        measured->double_inner,
+        measured->double_outer};
+    float mapped = kDefaultRingEdges.back() + (radius - board_edges.back());
+    for (size_t i = 1; i < board_edges.size(); ++i) {
+        if (radius < board_edges[i]) {
+            const float t = (radius - board_edges[i - 1]) / (board_edges[i] - board_edges[i - 1]);
+            mapped = kDefaultRingEdges[i - 1] + t * (kDefaultRingEdges[i] - kDefaultRingEdges[i - 1]);
+            break;
+        }
+    }
+    return point_norm * (mapped / radius);
+}
+
 cv::Point2f NormalizePointFromRoundAlignedBoard(
     const cv::Point& point_in_round_board,
     const cv::Mat& point_rectification_h,
@@ -1115,6 +1143,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     board_offset_in_search_ = baseline.board_box.tl() - baseline.dart_search_rect.tl();
     first_frame_point_rectification_h_ = baseline.point_rectification_h.clone();
     first_frame_rectified_radius_ = baseline.rectified_radius;
+    ring_edges_ = baseline.board_detection.measured_ring_edges;
     recent_frames_.clear();
     pending_candidate_.reset();
     phantom_boxes_.clear();
@@ -1245,7 +1274,7 @@ void AndroidBullTrackSession::ConfirmNewDart(
     result.gate_reason = "trigger_precise_detection" + change_text;
     result.has_detection = localized.has_dart && localized.point_norm.has_value();
     if (localized.point_norm.has_value()) {
-        result.detected_point_norm = localized.point_norm.value();
+        result.detected_point_norm = MapOntoDefaultRings(localized.point_norm.value(), ring_edges_);
     }
     count_dart();
     // The dart may still wobble in this frame; the next frames showing the same boxes replace the
@@ -1446,7 +1475,7 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
                 prefix);
             summary_points.push_back(localized.point_in_round_board);
             if (localized.point_norm.has_value()) {
-                result.points.push_back(localized.point_norm.value());
+                result.points.push_back(MapOntoDefaultRings(localized.point_norm.value(), ring_edges_));
             }
             std::move(
                 localized.debug_images.begin(),

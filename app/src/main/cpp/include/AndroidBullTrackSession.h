@@ -1,5 +1,6 @@
 #pragma once
 
+#include "BoardDetectorAndroid.h"
 #include "bulltrack_v2/Config.h"
 #include "DebugImageConfig.h"
 #include "YoloNcnnDetector.h"
@@ -72,6 +73,8 @@ private:
     cv::Mat first_frame_preprocessed_for_alignment_;
     cv::Mat first_frame_point_rectification_h_;
     float first_frame_rectified_radius_ = 1.0f;
+    // Triple/double edges measured on this board at setup; empty means the default table.
+    std::optional<MeasuredRingEdges> ring_edges_;
     cv::Rect first_frame_dart_search_rect_{};
     // Board box corner inside the dart search crop, to map tips back to board-crop coordinates.
     cv::Point board_offset_in_search_{};

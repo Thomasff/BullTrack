@@ -78,6 +78,7 @@ struct RedRadiusCorrectionResult {
     std::string reason;
     double seat_fit_max_residual = 0.0;
     int seat_count = 0;
+    std::optional<MeasuredRingEdges> measured_ring_edges;
 };
 
 std::vector<ComponentCandidate> ExtractComponentCandidates(
@@ -189,7 +190,9 @@ bool IsComponentPerpendicularToCenterVector(
     return angle_deg >= min_angle_deg && angle_deg <= max_angle_deg;
 }
 
-cv::Point2f SelectFarthestLongEdgeMidpoint(const cv::RotatedRect& rect, const cv::Point2f& rough_center) {
+// Midpoint of the long edge farther from (or nearer to) the centre. On a ring bed the far long
+// edge touches the outer arc at its middle; the near one is the chord through the inner arc's ends.
+cv::Point2f SelectLongEdgeMidpoint(const cv::RotatedRect& rect, const cv::Point2f& rough_center, bool farthest) {
     std::array<cv::Point2f, 4> box_points{};
     rect.points(box_points.data());
 
@@ -207,8 +210,8 @@ cv::Point2f SelectFarthestLongEdgeMidpoint(const cv::RotatedRect& rect, const cv
             continue;
         }
         const cv::Point2f midpoint = (box_points[i] + box_points[(i + 1) % 4]) * 0.5f;
-        const double distance = cv::norm(midpoint - rough_center);
-        if (distance > best_distance) {
+        const double distance = farthest ? cv::norm(midpoint - rough_center) : -cv::norm(midpoint - rough_center);
+        if (distance > best_distance || !best_midpoint.has_value()) {
             best_distance = distance;
             best_midpoint = midpoint;
         }
@@ -217,6 +220,10 @@ cv::Point2f SelectFarthestLongEdgeMidpoint(const cv::RotatedRect& rect, const cv
         throw std::runtime_error("无法从双倍区旋转框提取纠正点");
     }
     return best_midpoint.value();
+}
+
+cv::Point2f SelectFarthestLongEdgeMidpoint(const cv::RotatedRect& rect, const cv::Point2f& rough_center) {
+    return SelectLongEdgeMidpoint(rect, rough_center, true);
 }
 
 // Point on the unit circle (y up) for double seat k, counted clockwise from the 20 at the top.
@@ -519,6 +526,108 @@ cv::Mat DrawFinalCenterRadiusDebugImage(
 }
 #endif
 
+// Ring edges of this board from the red beds, measured after the seat fit so the double search
+// is untouched. A bed is a ring piece 18 degrees wide: the far long edge of its rotated box
+// touches the outer arc at its middle, the near long edge is the chord through the inner arc's
+// ends, so its distance to the centre is the inner radius * cos(9 deg). Doubles reuse the seat
+// boxes; the triple of each seat is the red piece, among those cut away with the inner ellipse,
+// nearest to where the middle of a triple ring lies on that seat's line.
+constexpr double kExpectedTripleMiddleRadius = 0.6;
+constexpr double kMaxTripleOffsetScale = 0.15;
+constexpr int kMinMeasuredTripleCount = 6;
+
+double RectifiedRadius(const cv::Mat& homography, const cv::Point2f& point) {
+    std::vector<cv::Point2f> mapped;
+    cv::perspectiveTransform(std::vector<cv::Point2f>{point}, mapped, homography);
+    return cv::norm(mapped.front());
+}
+
+float MedianOf(std::vector<double> values) {
+    std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+    return static_cast<float>(values[values.size() / 2]);
+}
+
+std::optional<MeasuredRingEdges> MeasureRingEdges(
+    const cv::Mat& inner_red_mask,
+    const DoubleSeatFit& seat_fit,
+    int min_area,
+    const cv::Point2f& rough_center,
+    float rough_radius) {
+    const double chord_scale = std::cos(9.0 * CV_PI / 180.0);
+    const cv::Mat inverse_h = seat_fit.homography.inv();
+    const std::vector<ComponentCandidate> red_pieces = ExtractComponentCandidates(inner_red_mask, min_area, rough_center);
+
+    std::vector<double> double_inner;
+    std::vector<double> double_outer;
+    std::vector<double> triple_inner;
+    std::vector<double> triple_outer;
+    for (size_t seat = 0; seat < seat_fit.seat_rects.size(); ++seat) {
+        const cv::RotatedRect& double_rect = seat_fit.seat_rects[seat];
+        double_outer.push_back(RectifiedRadius(seat_fit.homography, seat_fit.src_points[seat]));
+        double_inner.push_back(
+            RectifiedRadius(seat_fit.homography, SelectLongEdgeMidpoint(double_rect, rough_center, false)) / chord_scale);
+
+        std::vector<cv::Point2f> expected;
+        cv::perspectiveTransform(
+            std::vector<cv::Point2f>{seat_fit.dst_points[seat] * static_cast<float>(kExpectedTripleMiddleRadius)},
+            expected,
+            inverse_h);
+        const ComponentCandidate* nearest = nullptr;
+        double nearest_distance = rough_radius * kMaxTripleOffsetScale;
+        for (const auto& piece : red_pieces) {
+            const double distance = cv::norm(piece.rect.center - expected.front());
+            if (distance < nearest_distance) {
+                nearest_distance = distance;
+                nearest = &piece;
+            }
+        }
+        if (nearest == nullptr) {
+            continue;
+        }
+        triple_outer.push_back(RectifiedRadius(seat_fit.homography, SelectLongEdgeMidpoint(nearest->rect, rough_center, true)));
+        triple_inner.push_back(
+            RectifiedRadius(seat_fit.homography, SelectLongEdgeMidpoint(nearest->rect, rough_center, false)) / chord_scale);
+    }
+    if (static_cast<int>(triple_inner.size()) < kMinMeasuredTripleCount) {
+        __android_log_print(
+            ANDROID_LOG_WARN,
+            "BullTrackNativeV2",
+            "ring edges: only %d triple beds found",
+            static_cast<int>(triple_inner.size()));
+        return std::nullopt;
+    }
+
+    MeasuredRingEdges edges;
+    edges.triple_inner = MedianOf(triple_inner);
+    edges.triple_outer = MedianOf(triple_outer);
+    edges.double_inner = MedianOf(double_inner);
+    edges.double_outer = MedianOf(double_outer);
+    edges.triple_count = static_cast<int>(triple_inner.size());
+    // Loose bounds around every common board, so a dart or a stray red blob in a few seats cannot
+    // produce an impossible table.
+    const float triple_width = edges.triple_outer - edges.triple_inner;
+    const float double_width = edges.double_outer - edges.double_inner;
+    const bool plausible =
+        edges.triple_inner > 0.45f && edges.triple_outer < 0.75f &&
+        triple_width >= 0.03f && triple_width <= 0.12f &&
+        edges.double_outer >= 0.95f && edges.double_outer <= 1.05f &&
+        double_width >= 0.03f && double_width <= 0.10f &&
+        edges.double_inner - edges.triple_outer >= 0.15f;
+    if (!plausible) {
+        __android_log_print(
+            ANDROID_LOG_WARN,
+            "BullTrackNativeV2",
+            "ring edges rejected: triple=%.3f-%.3f double=%.3f-%.3f n=%d",
+            edges.triple_inner,
+            edges.triple_outer,
+            edges.double_inner,
+            edges.double_outer,
+            edges.triple_count);
+        return std::nullopt;
+    }
+    return edges;
+}
+
 RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     const cv::Mat& img_before,
     const cv::Point2f& rough_center,
@@ -616,6 +725,14 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     }
     const cv::Mat& point_rectification_h = seat_fit->homography;
     const float rectified_radius = 1.0f;
+    // The red cut away with the inner ellipse holds the triples (and the bull), without the doubles.
+    const cv::Mat inner_red_mask = red_only_mask - red_binary_pre;
+    const std::optional<MeasuredRingEdges> ring_edges = MeasureRingEdges(
+        inner_red_mask,
+        seat_fit.value(),
+        circle_config.red_region_min_area,
+        rough_center,
+        rough_radius);
 
     std::vector<ComponentCandidate> seat_candidates;
     std::vector<cv::Mat> selected_masks;
@@ -660,6 +777,16 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         const cv::Point preview_center(static_cast<int>(std::lround(rough_center.x)), static_cast<int>(std::lround(rough_center.y)));
         cv::circle(perspective_corrected_preview_debug, preview_center, static_cast<int>(std::lround(rough_radius)), cv::Scalar(0, 255, 255), 3);
         cv::circle(perspective_corrected_preview_debug, preview_center, 8, cv::Scalar(0, 0, 255), -1);
+        if (ring_edges.has_value()) {
+            for (const float edge : {ring_edges->triple_inner, ring_edges->triple_outer, ring_edges->double_inner}) {
+                cv::circle(
+                    perspective_corrected_preview_debug,
+                    preview_center,
+                    static_cast<int>(std::lround(edge * rough_radius)),
+                    cv::Scalar(0, 255, 0),
+                    1);
+            }
+        }
         for (size_t i = 0; i < seat_fit->dst_points.size(); ++i) {
             const cv::Point point(
                 static_cast<int>(std::lround(rough_center.x + seat_fit->dst_points[i].x * rough_radius)),
@@ -693,7 +820,8 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         point_rectification_h,
         "透视双倍区纠正成功",
         seat_fit->max_residual,
-        static_cast<int>(seat_fit->src_points.size())
+        static_cast<int>(seat_fit->src_points.size()),
+        ring_edges
     };
 }
 
@@ -741,13 +869,21 @@ BoardCircleDetectionResult DetectBoardCircleDetailed(
     detection_result.point_rectification_h = red_radius_result.point_rectification_h.clone();
     detection_result.seat_fit_max_residual = red_radius_result.seat_fit_max_residual;
     detection_result.seat_count = red_radius_result.seat_count;
+    detection_result.measured_ring_edges = red_radius_result.measured_ring_edges;
+    const MeasuredRingEdges logged_edges = red_radius_result.measured_ring_edges.value_or(MeasuredRingEdges{});
     __android_log_print(
         ANDROID_LOG_INFO,
         "BullTrackNativeV2",
-        "board setup: %s seats=%d residual=%.4f",
+        "board setup: %s seats=%d residual=%.4f rings=%s triple=%.3f-%.3f double=%.3f-%.3f n=%d",
         red_radius_result.reason.c_str(),
         red_radius_result.seat_count,
-        red_radius_result.seat_fit_max_residual);
+        red_radius_result.seat_fit_max_residual,
+        red_radius_result.measured_ring_edges.has_value() ? "measured" : "default",
+        logged_edges.triple_inner,
+        logged_edges.triple_outer,
+        logged_edges.double_inner,
+        logged_edges.double_outer,
+        logged_edges.triple_count);
     if (!red_radius_result.corrected_radius.has_value()) {
         detection_result.success = false;
         detection_result.error_message = red_radius_result.reason;
