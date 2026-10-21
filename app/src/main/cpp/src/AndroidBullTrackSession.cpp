@@ -1304,6 +1304,14 @@ void AndroidBullTrackSession::ConfirmNewDart(
         kMinNewDartChangedPixels,
         static_cast<int>(static_cast<double>(best_change.local_area) * kMinNewDartChangedRatio));
     if (!best_index.has_value() || best_change.changed_pixels < min_changed_pixels) {
+        if (settled.size() < candidates.size()) {
+            // The settled boxes hold nothing new, but another new box has only just appeared (a
+            // dart that just landed next to a duplicate box): wait for it instead of filing the
+            // whole box set, the new dart included, as a phantom.
+            pending_candidate_ = PendingYoloCandidateState{base_frame, stable_frame};
+            result.gate_reason = "new_box_moved";
+            return;
+        }
         // Nothing new on the board: YOLO drew an extra box, often a duplicate of an old dart.
         phantom_boxes_ = boxes;
         phantom_frame_index_ = current_frame_index_;

@@ -27,7 +27,8 @@ constexpr int kInputSize = 640;
 constexpr float kScoreThreshold = 0.25f;
 // Darts on a dark or red bed (a red dart near the bull, a far board) often score 0.12-0.2; a box
 // that is not a new dart is still dropped by the board-change check and the settled-box check.
-constexpr float kDartScoreThreshold = 0.15f;
+// Measured 2026-10-21: real darts 0.12-0.17 below the old 0.25, a false box at 0.10.
+constexpr float kDartScoreThreshold = 0.12f;
 // With debug images on, dart candidates down to this score are kept apart for the log.
 constexpr float kLowDartScoreThreshold = 0.10f;
 
