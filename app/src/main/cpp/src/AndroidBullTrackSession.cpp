@@ -1204,6 +1204,10 @@ constexpr int kMinMissedDartPieceArea = 8;
 constexpr size_t kMaxBoardScanPieces = 200;
 // Regions further out than this (rectified radius) are off the board.
 constexpr float kMaxMissedDartRadius = 1.05f;
+// Share of a region's changed pixels that must have brightened. Darts YOLO cannot see sit on dark
+// beds (a red dart on the blue/black bull) and brighten them; a shadow (the player, an arm) only
+// darkens, and darkened a whole cream bed into a false dart (2026-10-21).
+constexpr double kMinMissedDartBrightShare = 0.25;
 // Margins around known darts whose change the scan ignores: an old dart may wobble when hit; a
 // dart YOLO boxed (even one not confirmed yet) also changes its shadow and its tip side.
 constexpr double kOldDartMargin = 0.3;
@@ -1234,6 +1238,10 @@ std::vector<ChangeRegion> FindUnexplainedChangeRegions(
     cv::absdiff(before_small, after_small, diff);
     cv::Mat changed;
     cv::threshold(diff, changed, kBoardScanChangeThreshold, 255, cv::THRESH_BINARY);
+    cv::Mat brightened;
+    cv::subtract(after_small, before_small, brightened);
+    cv::threshold(brightened, brightened, kBoardScanChangeThreshold, 255, cv::THRESH_BINARY);
+    const cv::Mat changed_raw = changed.clone();
     // Join the pieces of one dart cut apart by wires and holes.
     cv::morphologyEx(changed, changed, cv::MORPH_CLOSE, cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(5, 5)));
     cv::Mat labels;
@@ -1280,6 +1288,16 @@ std::vector<ChangeRegion> FindUnexplainedChangeRegions(
         const int area = piece.area;
         const cv::Rect& rect = piece.rect_in_pair;
         if (area < kMinMissedDartArea || area > kMaxMissedDartArea) {
+            continue;
+        }
+        const cv::Rect rect_small = cv::Rect(
+            static_cast<int>(rect.x * kBoardScanScale),
+            static_cast<int>(rect.y * kBoardScanScale),
+            static_cast<int>(std::ceil(rect.width * kBoardScanScale)),
+            static_cast<int>(std::ceil(rect.height * kBoardScanScale))) & cv::Rect(cv::Point(0, 0), changed_raw.size());
+        const int changed_count = rect_small.area() > 0 ? cv::countNonZero(changed_raw(rect_small)) : 0;
+        const int bright_count = rect_small.area() > 0 ? cv::countNonZero(brightened(rect_small)) : 0;
+        if (changed_count == 0 || bright_count < changed_count * kMinMissedDartBrightShare) {
             continue;
         }
         bool explained = rect.area() <= 0;
