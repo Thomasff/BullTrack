@@ -424,8 +424,8 @@ class BullTrackLiveRoundController(
         artifactStore.saveArtifacts(session.roundId, frameUpdate.gateDebugImages)
         artifactStore.saveArtifacts(session.roundId, frameUpdate.preciseDebugImages)
 
-        if (frameUpdate.gateTriggered || frameUpdate.gateReason.startsWith("yolo_count_increased_no_board_change")) {
-            // Change counts per confirmation, to tune the "no new dart" threshold from real rounds.
+        if (frameUpdate.gateReason != "yolo_count_not_increased") {
+            // Every gate decision besides "nothing new", to trace slow or wrong confirmations.
             Log.i(TAG, "Frame $frameIndex: ${frameUpdate.gateReason}")
         }
         if (!frameUpdate.gateTriggered) {
@@ -437,7 +437,8 @@ class BullTrackLiveRoundController(
             )
             return FrameLoopDecision(
                 shouldStop = false,
-                captureNextImmediately = frameUpdate.gateReason == "yolo_count_increased_wait_next_frame",
+                captureNextImmediately = frameUpdate.gateReason == "yolo_count_increased_wait_next_frame" ||
+                    frameUpdate.gateReason.startsWith("alignment_low"),
             )
         }
 
@@ -663,6 +664,7 @@ class BullTrackLiveRoundController(
             gateReason.startsWith("yolo_count_increased_no_board_change") ->
                 "YOLO 多出一个框，但靶上没有新变化，已忽略（${gateReason.substringAfter(" ", "")}）"
             gateReason.startsWith("yolo_detect_failed:") -> "YOLO 检测失败"
+            gateReason.startsWith("alignment_low") -> "画面晃动或被遮挡，等下一张"
             gateReason.isBlank() -> "未知原因"
             else -> gateReason
         }

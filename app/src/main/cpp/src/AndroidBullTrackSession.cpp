@@ -1272,44 +1272,15 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     const TrackedYoloFrameState& stored_current = recent_frames_.back();
 
 #if BT_ENABLE_DEBUG_IMAGES
-    // Debug only: align every frame to the template and log how well it matched, to learn the
-    // normal ECC score range (and what a hand in view or a hand-held phone does to it) before an
-    // alignment-quality threshold is chosen.
-    if (DebugImagesActive() && stored_current.has_board_box) {
-        const cv::Mat frame_gray = PreprocessImage(
-            EnhanceWarpedImage(
-                ResizeToTargetSize(stored_current.dart_search_crop_bgr, first_frame_preprocessed_for_alignment_.size()),
-                pipeline_config_.enhancement.saturation_scale,
-                pipeline_config_.enhancement.contrast_scale),
-            pipeline_config_.dart.preprocess_blur_kernel);
-        // Each model on its own, so one failing to converge still leaves the other's score; the
-        // full perspective model is compared against rotation+shift for a hand-held phone
-        // (distance and angle change). -1 means the alignment did not converge.
-        double euclidean_correlation = -1.0;
-        double homography_correlation = -1.0;
-        cv::Mat euclidean_warp = cv::Mat::eye(2, 3, CV_32F);
-        try {
-            const PyramidECCResult alignment = AlignPyramidEcc(first_frame_preprocessed_for_alignment_, frame_gray, 3, "euclidean");
-            euclidean_correlation = alignment.correlation;
-            euclidean_warp = alignment.warp_matrix;
-        } catch (const std::exception&) {
-        }
-        try {
-            homography_correlation =
-                AlignPyramidEcc(first_frame_preprocessed_for_alignment_, frame_gray, 3, "homography").correlation;
-        } catch (const std::exception&) {
-        }
+    // Debug only: the YOLO dart count of every frame, to see why a confirmation came late.
+    if (DebugImagesActive()) {
         __android_log_print(
             ANDROID_LOG_INFO,
             "BullTrackNativeV2",
-            "frame %d ecc=%.3f ecc_h=%.3f tx=%.1f ty=%.1f rot=%.2f darts=%d",
+            "frame %d darts=%d board=%d",
             current_frame_index_,
-            euclidean_correlation,
-            homography_correlation,
-            euclidean_warp.at<float>(0, 2),
-            euclidean_warp.at<float>(1, 2),
-            std::atan2(euclidean_warp.at<float>(1, 0), euclidean_warp.at<float>(0, 0)) * 180.0 / CV_PI,
-            current_count);
+            current_count,
+            stored_current.has_board_box ? 1 : 0);
     }
 #endif
 
@@ -1353,8 +1324,11 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
     } else {
         const int candidate_count = static_cast<int>(pending_candidate_->candidate_frame.dart_boxes.size());
         if (current_count < candidate_count) {
-            pending_candidate_.reset();
-            result.gate_reason = "yolo_count_not_stable";
+            // YOLO often flickers by one box (a dart split in two, a flight seen as a dart), so
+            // 4-3-4-3 boxes would restart the wait forever; this frame still shows more darts than
+            // confirmed, so let it be the candidate and check it against the next frame.
+            pending_candidate_->candidate_frame = stored_current;
+            result.gate_reason = "yolo_count_increased_wait_next_frame";
         } else if (!pending_candidate_->base_frame.has_board_box || !stored_current.has_board_box) {
             pending_candidate_.reset();
             result.gate_reason = "yolo_detect_failed: precise_board_box_missing";

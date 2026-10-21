@@ -13,7 +13,9 @@ class BullTrackArtifactStore(
 ) {
 
     private val appContext = context.applicationContext
-    private val baseDir = File(appContext.filesDir, "BullTrackDebug")
+    // App-specific external storage: no permission needed, removed with the app, and readable over
+    // adb from a release build (Android/data/<package>/files), so test rounds can be pulled for analysis.
+    private val baseDir = File(appContext.getExternalFilesDir(null) ?: appContext.filesDir, "BullTrackDebug")
 
     fun saveArtifacts(roundId: String, artifacts: List<DebugImageArtifact>): List<WritableMap> {
         if (artifacts.isEmpty()) {
@@ -28,6 +30,8 @@ class BullTrackArtifactStore(
 
     /** Keeps only the newest rounds' debug images so app storage does not grow without bound. */
     fun pruneOldRounds(keep: Int = KEEP_ROUNDS) {
+        // Rounds saved before debug images moved to external storage.
+        File(appContext.filesDir, "BullTrackDebug").takeIf { it != baseDir }?.deleteRecursively()
         baseDir
             .listFiles()
             .orEmpty()
