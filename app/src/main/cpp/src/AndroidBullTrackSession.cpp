@@ -1210,8 +1210,15 @@ constexpr float kMaxMissedDartRadius = 1.05f;
 constexpr double kMinMissedDartBrightShare = 0.25;
 // Margins around known darts whose change the scan ignores: an old dart may wobble when hit; a
 // dart YOLO boxed (even one not confirmed yet) also changes its shadow and its tip side.
+// Shadows no longer need wide margins (a missed-dart region must brighten), and wide ones hid a
+// dart YOLO never boxed that sat next to a boxed group (2026-10-21).
 constexpr double kOldDartMargin = 0.3;
-constexpr double kBoxedDartMargin = 0.5;
+constexpr double kBoxedDartMargin = 0.25;
+// A region belongs to a known dart when at least this share of its change lies in the known
+// areas; a dart that merely touches the edge of one is still reported.
+constexpr double kMinKnownShare = 0.5;
+// Pieces closer than this (share of the piece size) are merged as parts of one dart.
+constexpr double kPieceMergeMargin = 0.3;
 
 struct ChangeRegion {
     cv::Rect rect_in_pair;
@@ -1274,7 +1281,7 @@ std::vector<ChangeRegion> FindUnexplainedChangeRegions(
         merged = false;
         for (size_t i = 0; i < pieces.size() && !merged; ++i) {
             for (size_t j = i + 1; j < pieces.size() && !merged; ++j) {
-                if ((GrowRect(pieces[i].rect_in_pair, 0.5) & pieces[j].rect_in_pair).area() > 0) {
+                if ((GrowRect(pieces[i].rect_in_pair, kPieceMergeMargin) & pieces[j].rect_in_pair).area() > 0) {
                     pieces[i].rect_in_pair |= pieces[j].rect_in_pair;
                     pieces[i].area += pieces[j].area;
                     pieces.erase(pieces.begin() + static_cast<std::ptrdiff_t>(j));
@@ -1283,43 +1290,72 @@ std::vector<ChangeRegion> FindUnexplainedChangeRegions(
             }
         }
     }
-    std::vector<ChangeRegion> regions;
-    for (const ChangeRegion& piece : pieces) {
-        const int area = piece.area;
-        const cv::Rect& rect = piece.rect_in_pair;
-        if (area < kMinMissedDartArea || area > kMaxMissedDartArea) {
-            continue;
-        }
-        const cv::Rect rect_small = cv::Rect(
+    const cv::Rect small_bounds(cv::Point(0, 0), changed_raw.size());
+    const auto to_small = [&](const cv::Rect& rect) {
+        return cv::Rect(
             static_cast<int>(rect.x * kBoardScanScale),
             static_cast<int>(rect.y * kBoardScanScale),
             static_cast<int>(std::ceil(rect.width * kBoardScanScale)),
-            static_cast<int>(std::ceil(rect.height * kBoardScanScale))) & cv::Rect(cv::Point(0, 0), changed_raw.size());
+            static_cast<int>(std::ceil(rect.height * kBoardScanScale))) & small_bounds;
+    };
+    cv::Mat known_small = cv::Mat::zeros(changed_raw.size(), CV_8U);
+    for (const cv::Rect& known : explained_in_pair) {
+        const cv::Rect known_rect = to_small(known);
+        if (known_rect.area() > 0) {
+            known_small(known_rect).setTo(255);
+        }
+    }
+
+    // Every region of dart size is logged with why it was dropped, to tune the rules from rounds.
+    std::vector<ChangeRegion> regions;
+    std::string log_text;
+    for (const ChangeRegion& piece : pieces) {
+        const int area = piece.area;
+        const cv::Rect& rect = piece.rect_in_pair;
+        if (area < kMinMissedDartArea) {
+            continue;
+        }
+        const char* verdict = "";
+        const cv::Rect rect_small = to_small(rect);
         const int changed_count = rect_small.area() > 0 ? cv::countNonZero(changed_raw(rect_small)) : 0;
         const int bright_count = rect_small.area() > 0 ? cv::countNonZero(brightened(rect_small)) : 0;
-        if (changed_count == 0 || bright_count < changed_count * kMinMissedDartBrightShare) {
-            continue;
+        cv::Mat known_change;
+        if (rect_small.area() > 0) {
+            cv::bitwise_and(changed_raw(rect_small), known_small(rect_small), known_change);
         }
-        bool explained = rect.area() <= 0;
-        for (const cv::Rect& known : explained_in_pair) {
-            explained = explained || (known & rect).area() > 0;
-        }
-        if (explained) {
-            continue;
-        }
-        try {
-            const cv::Point center(rect.x + rect.width / 2, rect.y + rect.height / 2);
-            const cv::Point2f norm = NormalizePointFromRoundAlignedBoard(
-                center - board_offset_in_search,
-                point_rectification_h,
-                rectified_radius);
-            if (std::hypot(norm.x, norm.y) > kMaxMissedDartRadius) {
-                continue;
+        const int known_count = known_change.empty() ? 0 : cv::countNonZero(known_change);
+        if (area > kMaxMissedDartArea) {
+            verdict = "large";
+        } else if (changed_count == 0 || bright_count < changed_count * kMinMissedDartBrightShare) {
+            verdict = "dark";
+        } else if (known_count >= changed_count * kMinKnownShare) {
+            verdict = "known";
+        } else {
+            try {
+                const cv::Point center(rect.x + rect.width / 2, rect.y + rect.height / 2);
+                const cv::Point2f norm = NormalizePointFromRoundAlignedBoard(
+                    center - board_offset_in_search,
+                    point_rectification_h,
+                    rectified_radius);
+                if (std::hypot(norm.x, norm.y) > kMaxMissedDartRadius) {
+                    verdict = "off";
+                }
+            } catch (const std::exception&) {
+                verdict = "off";
             }
-        } catch (const std::exception&) {
-            continue;
         }
-        regions.push_back(ChangeRegion{rect, area});
+        log_text += cv::format(
+            " %d@(%d,%d)%s",
+            area,
+            rect.x + rect.width / 2,
+            rect.y + rect.height / 2,
+            verdict);
+        if (verdict[0] == '\0') {
+            regions.push_back(ChangeRegion{rect, area});
+        }
+    }
+    if (!log_text.empty()) {
+        __android_log_print(ANDROID_LOG_INFO, "BullTrackNativeV2", "board scan candidates:%s", log_text.c_str());
     }
     std::sort(regions.begin(), regions.end(), [](const ChangeRegion& lhs, const ChangeRegion& rhs) {
         return lhs.area > rhs.area;
