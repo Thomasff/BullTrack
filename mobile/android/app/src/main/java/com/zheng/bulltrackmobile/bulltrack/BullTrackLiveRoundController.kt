@@ -443,13 +443,16 @@ class BullTrackLiveRoundController(
             )
         }
 
-        // The native gate only triggers once YOLO confirmed one more dart, so every trigger adds a
-        // dart (darts grouped in one bed are close but distinct). Without a tip point it becomes a
-        // miss the player can correct, keeping the count in step with the native session.
-        if (session.throws.size < MAX_DARTS) {
-            session.throws += frameUpdate.newThrow ?: createMissThrow(session.throws.size)
+        // The native gate only triggers once it confirmed new darts (usually one, two when a dart
+        // was thrown before the previous one was confirmed), so every entry adds a dart. Without a
+        // tip point it becomes a miss the player can correct, keeping the count in step with the
+        // native session.
+        frameUpdate.newThrows.forEach { newThrow ->
+            if (session.throws.size < MAX_DARTS) {
+                session.throws += newThrow ?: createMissThrow(session.throws.size)
+            }
         }
-        val statusMessage = if (frameUpdate.newThrow == null) {
+        val statusMessage = if (frameUpdate.newThrows.all { it == null }) {
             "第 $frameIndex 张图片触发精检，但未找到镖尖，先记为脱靶: ${frameUpdate.gateReason}"
         } else {
             "第 $frameIndex 张图片识别到新飞镖，当前共 ${session.throws.size} 支"
@@ -667,6 +670,7 @@ class BullTrackLiveRoundController(
             gateReason.startsWith("yolo_detect_failed:") -> "YOLO 检测失败"
             gateReason.startsWith("alignment_low") -> "画面晃动或被遮挡，等下一张"
             gateReason == "new_box_moved" -> "新镖还在移动（飞行或掉落），等下一张"
+            gateReason.startsWith("lost_box_") -> "YOLO 这张没认出新镖，图像对比也未确认"
             gateReason.isBlank() -> "未知原因"
             else -> gateReason
         }

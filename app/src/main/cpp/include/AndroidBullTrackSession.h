@@ -27,8 +27,9 @@ struct AndroidStartRoundResult {
 struct AndroidFrameProcessResult {
     bool gate_triggered = false;
     std::string gate_reason;
-    bool has_detection = false;
-    std::optional<cv::Point2f> detected_point_norm;
+    // One entry per dart confirmed on this frame (usually one; two when a dart was thrown before
+    // the previous one was confirmed). Empty optional: the dart counts but has no tip point.
+    std::vector<std::optional<cv::Point2f>> detected_points;
     std::vector<DebugImageArtifact> gate_debug_images;
     std::vector<DebugImageArtifact> precise_debug_images;
 };
@@ -93,9 +94,12 @@ private:
     // Frames left in which a settled view may replace the clean frame after a confirmation.
     int clean_refresh_frames_left_ = 0;
 
-    void ConfirmNewDart(
+    // Confirms the new dart(s) of the pending candidate on stable_frame. yolo_sees_new_dart is
+    // false when YOLO lost the new dart in this frame and its earlier box is checked on the image.
+    void ConfirmNewDarts(
         const TrackedYoloFrameState& stable_frame,
         int max_dart_count,
+        bool yolo_sees_new_dart,
         AndroidFrameProcessResult& result);
     bool started_ = false;
     int current_frame_index_ = 2;

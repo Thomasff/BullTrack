@@ -81,15 +81,13 @@ class NativeDartDetector(
             width = frame.width,
             height = frame.height
         )
-        val newThrow = if (result.hasDetection) {
-            toThrowResult(result.normalizedX, result.normalizedY)
-        } else {
-            null
+        val newThrows = result.detectedPoints.orEmpty().map { point ->
+            point?.let { toThrowResult(it.normalizedX, it.normalizedY) }
         }
         return FrameDetectionUpdate(
             gateTriggered = result.gateTriggered,
             gateReason = result.gateReason,
-            newThrow = newThrow,
+            newThrows = newThrows,
             gateDebugImages = result.gateDebugImages.orEmpty().map(::toDebugImageArtifact),
             preciseDebugImages = result.preciseDebugImages.orEmpty().map(::toDebugImageArtifact)
         )

@@ -100,10 +100,20 @@ jobject CreateNativeFrameProcessResult(JNIEnv* env, const bulltrack::AndroidFram
     jmethodID constructor = env->GetMethodID(
         result_class,
         "<init>",
-        "(ZLjava/lang/String;ZFF[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;)V");
+        "(ZLjava/lang/String;[Lcom/zheng/bulltrack/vision/NativePointResult;[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;)V");
     jstring reason = env->NewStringUTF(result.gate_reason.c_str());
-    const float normalized_x = result.detected_point_norm.has_value() ? result.detected_point_norm->x : 0.0f;
-    const float normalized_y = result.detected_point_norm.has_value() ? result.detected_point_norm->y : 0.0f;
+    // One element per confirmed dart; null when the dart has no tip point.
+    jclass point_class = env->FindClass("com/zheng/bulltrack/vision/NativePointResult");
+    jmethodID point_constructor = env->GetMethodID(point_class, "<init>", "(FF)V");
+    jobjectArray detected_points = env->NewObjectArray(static_cast<jsize>(result.detected_points.size()), point_class, nullptr);
+    for (size_t i = 0; i < result.detected_points.size(); ++i) {
+        if (!result.detected_points[i].has_value()) {
+            continue;
+        }
+        jobject point_obj = env->NewObject(point_class, point_constructor, result.detected_points[i]->x, result.detected_points[i]->y);
+        env->SetObjectArrayElement(detected_points, static_cast<jsize>(i), point_obj);
+        env->DeleteLocalRef(point_obj);
+    }
     jobjectArray gate_debug_images = CreateNativeDebugImageArray(env, result.gate_debug_images);
     jobjectArray precise_debug_images = CreateNativeDebugImageArray(env, result.precise_debug_images);
     jobject obj = env->NewObject(
@@ -111,12 +121,11 @@ jobject CreateNativeFrameProcessResult(JNIEnv* env, const bulltrack::AndroidFram
         constructor,
         static_cast<jboolean>(result.gate_triggered),
         reason,
-        static_cast<jboolean>(result.has_detection),
-        normalized_x,
-        normalized_y,
+        detected_points,
         gate_debug_images,
         precise_debug_images);
     env->DeleteLocalRef(reason);
+    env->DeleteLocalRef(detected_points);
     env->DeleteLocalRef(gate_debug_images);
     env->DeleteLocalRef(precise_debug_images);
     return obj;

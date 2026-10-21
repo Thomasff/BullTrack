@@ -213,9 +213,9 @@ class CaptureRoundUseCase(
 
         val addedCount = mergeNewThrows(
             existing = session.throws,
-            detected = listOfNotNull(frameUpdate.newThrow)
+            detected = frameUpdate.newThrows.filterNotNull()
         )
-        val statusMessage = if (frameUpdate.newThrow == null) {
+        val statusMessage = if (frameUpdate.newThrows.all { it == null }) {
             "第 $frameIndex 张图片触发精检，但未识别到新飞镖: ${frameUpdate.gateReason}"
         } else if (addedCount > 0) {
             "第 $frameIndex 张图片识别到新飞镖，当前共 ${session.throws.size} 支"
