@@ -662,6 +662,41 @@ cv::Mat BuildLocalDiffBinary(const cv::Mat& before_local_gray, const cv::Mat& af
     return thresh;
 }
 
+// For the tip only: a thin grey barrel over a dark bed changes the blurred image by just 20-29,
+// under the change threshold, so the mask stopped short of the tip. Weak change (>= 15) is kept
+// where it connects to strong change (>= 30): the mask follows the barrel to its front while
+// isolated weak specks (wobble, noise) stay out.
+constexpr double kStrongTipDiff = 30.0;
+constexpr double kWeakTipDiff = 15.0;
+
+cv::Mat BuildTipDiffBinary(const cv::Mat& before_local_gray, const cv::Mat& after_local_gray) {
+    cv::Mat diff;
+    cv::absdiff(before_local_gray, after_local_gray, diff);
+    cv::Mat weak;
+    cv::threshold(diff, weak, kWeakTipDiff - 1.0, 255, cv::THRESH_BINARY);
+    cv::Mat labels;
+    const int label_count = cv::connectedComponents(weak, labels, 8, CV_32S);
+    std::vector<uchar> keep(static_cast<size_t>(label_count), 0);
+    for (int y = 0; y < diff.rows; ++y) {
+        const uchar* diff_row = diff.ptr<uchar>(y);
+        const int* label_row = labels.ptr<int>(y);
+        for (int x = 0; x < diff.cols; ++x) {
+            if (diff_row[x] > kStrongTipDiff) {
+                keep[static_cast<size_t>(label_row[x])] = 255;
+            }
+        }
+    }
+    cv::Mat result(diff.size(), CV_8U);
+    for (int y = 0; y < diff.rows; ++y) {
+        const int* label_row = labels.ptr<int>(y);
+        uchar* result_row = result.ptr<uchar>(y);
+        for (int x = 0; x < diff.cols; ++x) {
+            result_row[x] = label_row[x] == 0 ? 0 : keep[static_cast<size_t>(label_row[x])];
+        }
+    }
+    return result;
+}
+
 cv::Mat FilterSinglePixelComponents(const cv::Mat& binary_img) {
     cv::Mat labels;
     cv::Mat stats;
@@ -977,7 +1012,7 @@ LocalizedDartDetectionResult LocateDartTipInAlignedPair(
 
     cv::Mat before_local_gray = pair.before_gray_aligned(local_rect).clone();
     cv::Mat after_local_gray = pair.after_gray_aligned(local_rect).clone();
-    cv::Mat diff_thresh = BuildLocalDiffBinary(before_local_gray, after_local_gray);
+    cv::Mat diff_thresh = BuildTipDiffBinary(before_local_gray, after_local_gray);
     cv::Mat filtered_local = FilterSinglePixelComponents(diff_thresh);
     std::optional<cv::Point> tip_point = SelectTipPointFromLocalMask(filtered_local, local_rect, tip_on_top);
 
