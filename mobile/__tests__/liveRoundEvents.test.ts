@@ -53,12 +53,26 @@ test('sound cues: ready, each new live dart, and a failed live round', () => {
   emit('onThrowsUpdated', { roundId: 'r1', throws: darts.slice(0, 2), statusMessage: '', canRedetect: false });
   // Manual end fills misses: the final result is not a new dart.
   emit('onThrowsUpdated', { roundId: 'r1', throws: darts, statusMessage: '', canRedetect: true });
-  expect(mockPlayedCues).toEqual(['ready', 'dart', 'dart']);
+  expect(mockPlayedCues).toEqual(['ready', 'dart', 'double']);
 
   mockPlayedCues.length = 0;
   emit('onRoundStateChanged', { roundId: 'r2', phase: 'starting', statusMessage: '' });
   emit('onNativeError', { message: '首帧未检测到 board' });
   expect(mockPlayedCues).toEqual(['error']);
+});
+
+test('sound cues: ring cues, and darts confirmed together play the highest-scoring one', () => {
+  emit('onRoundStateChanged', { roundId: 'r1', phase: 'capturing', statusMessage: '' });
+  const bull = [createThrow('outerBull'), createThrow('innerBull'), createThrow('triple', 1)];
+  emit('onThrowsUpdated', { roundId: 'r1', throws: bull.slice(0, 1), statusMessage: '', canRedetect: false });
+  emit('onThrowsUpdated', { roundId: 'r1', throws: bull, statusMessage: '', canRedetect: false });
+  expect(mockPlayedCues).toEqual(['ready', 'outerBull', 'innerBull']);
+
+  mockPlayedCues.length = 0;
+  emit('onRoundStateChanged', { roundId: 'r2', phase: 'capturing', statusMessage: '' });
+  const triple = [createThrow('miss'), createThrow('triple', 20), createThrow('double', 5)];
+  emit('onThrowsUpdated', { roundId: 'r2', throws: triple, statusMessage: '', canRedetect: false });
+  expect(mockPlayedCues).toEqual(['ready', 'triple']);
 });
 
 test('capture readiness follows starting -> capturing', () => {

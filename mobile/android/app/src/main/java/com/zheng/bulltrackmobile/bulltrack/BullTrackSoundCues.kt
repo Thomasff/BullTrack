@@ -81,6 +81,10 @@ class BullTrackSoundCues(private val context: Context) {
             "ready" to R.raw.cue_ready,
             "dart" to R.raw.cue_dart,
             "error" to R.raw.cue_error,
+            "double" to R.raw.cue_double,
+            "triple" to R.raw.cue_triple,
+            "outerBull" to R.raw.cue_outer_bull,
+            "innerBull" to R.raw.cue_inner_bull,
         )
     }
 }

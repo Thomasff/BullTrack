@@ -37,6 +37,21 @@ export const playSoundCue = (cue: SoundCue) => {
   }
 };
 
+// Doubles, triples and the bull have their own cue. Darts confirmed together play only the
+// highest-scoring one's cue, so cues never run into each other.
+const cueForNewThrows = (newThrows: ThrowResult[]): SoundCue => {
+  const best = newThrows.reduce((top, item) => (item.score > top.score ? item : top));
+  switch (best.ring) {
+    case 'double':
+    case 'triple':
+    case 'outerBull':
+    case 'innerBull':
+      return best.ring;
+    default:
+      return 'dart';
+  }
+};
+
 const applyRoundResult = (throws: ThrowResult[]) => {
   const engine = getGameEngine();
   if (!engine) {
@@ -136,7 +151,7 @@ export const ensureBullTrackSubscriptions = () => {
         previous.status === 'roundInProgress' &&
         event.throws.length > previous.currentThrows.length
       ) {
-        playSoundCue('dart');
+        playSoundCue(cueForNewThrows(event.throws.slice(previous.currentThrows.length)));
       }
       useGameStore.getState().setRoundState({
         roundId: event.roundId,

@@ -43,7 +43,15 @@ export interface FinishRoundResult {
   debugArtifacts: DebugArtifact[];
 }
 
-export type SoundCue = 'ready' | 'dart' | 'error';
+// A new dart in a double, triple or the bull has its own cue; others use 'dart'.
+export type SoundCue =
+  | 'ready'
+  | 'dart'
+  | 'error'
+  | 'double'
+  | 'triple'
+  | 'outerBull'
+  | 'innerBull';
 
 export interface BullTrackNativeBridge {
   prepareRoundCamera(): Promise<CameraReadyState>;

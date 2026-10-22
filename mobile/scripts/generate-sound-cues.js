@@ -37,9 +37,50 @@ const addKnock = (buffer, startSeconds, { modes, noise, gain = 1 }) => {
   }
 };
 
-const renderCue = (lengthSeconds, knocks) => {
+// One struck metal tone: decaying partials given as multiples of its frequency.
+// 1-3 kHz tones come through phone speakers clearly.
+const addTone = (buffer, startSeconds, { frequency, partials, gain = 1 }) => {
+  const start = Math.round(startSeconds * SAMPLE_RATE);
+  for (let i = 0; start + i < buffer.length; i += 1) {
+    const t = i / SAMPLE_RATE;
+    const attack = Math.min(1, t / 0.002);
+    let sample = 0;
+    partials.forEach(({ ratio, amplitude, decay }) => {
+      sample += amplitude * Math.exp(-t / decay) * Math.sin(2 * Math.PI * frequency * ratio * t);
+    });
+    buffer[start + i] += gain * attack * sample;
+  }
+};
+
+// A crisp ding of a small struck metal bar (glockenspiel): overtones at 2.76x and 5.4x make it
+// ring like metal; strong overtones and a short ring keep it bright and clipped.
+const ding = (frequency, at, { gain = 0.6, decay = 0.12 } = {}) => ({
+  at,
+  frequency,
+  gain,
+  partials: [
+    { ratio: 1, amplitude: 1, decay },
+    { ratio: 2.76, amplitude: 0.6, decay: decay * 0.5 },
+    { ratio: 5.4, amplitude: 0.25, decay: decay * 0.2 },
+  ],
+});
+
+// A tuning fork: an almost pure tone that rings for a long time, with a faint metallic clang
+// (its first overtone, near 6.25x) only at the strike.
+const fork = (frequency, at, { gain = 0.6, decay = 0.3 } = {}) => ({
+  at,
+  frequency,
+  gain,
+  partials: [
+    { ratio: 1, amplitude: 1, decay },
+    { ratio: 6.25, amplitude: 0.4, decay: 0.008 },
+  ],
+});
+
+const renderCue = (lengthSeconds, knocks, tones = []) => {
   const buffer = new Float64Array(Math.round(lengthSeconds * SAMPLE_RATE));
   knocks.forEach(knock => addKnock(buffer, knock.at, knock));
+  tones.forEach(tone => addTone(buffer, tone.at, tone));
   // Gentle overall low-pass keeps the sound dull rather than clicky.
   let previous = 0;
   for (let i = 0; i < buffer.length; i += 1) {
@@ -126,3 +167,15 @@ writeWav(
     { at: 0.22, ...thudKnock(130), gain: 0.9 },
   ]),
 );
+
+// Scored rings: the same landing knock, then a sound told apart by its kind and count, not
+// by pitch (most players cannot judge pitch from one cue). Doubles and triples get crisp, short
+// dings (one / two); the bull gets a long tuning-fork ring (one strike / two strikes). The dings
+// share the fork's pitch so the two kinds differ only in ring length.
+const A5 = 880.0;
+const E6 = 1318.5;
+const landing = [{ at: 0, ...dartKnock }];
+writeWav('cue_double.wav', renderCue(0.5, landing, [ding(A5, 0.04)]));
+writeWav('cue_triple.wav', renderCue(0.57, landing, [ding(A5, 0.04), ding(A5, 0.12)]));
+writeWav('cue_outer_bull.wav', renderCue(1.1, landing, [fork(A5, 0.04)]));
+writeWav('cue_inner_bull.wav', renderCue(1.3, landing, [fork(A5, 0.04), fork(E6, 0.24, { gain: 0.5 })]));
