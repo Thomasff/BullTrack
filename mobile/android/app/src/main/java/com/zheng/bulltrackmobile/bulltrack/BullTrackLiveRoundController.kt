@@ -55,6 +55,9 @@ class BullTrackLiveRoundController(
         File(reactContext.cacheDir, "BullTrackLive").apply { mkdirs() }
     }
     private var liveFrameCounter = 0L
+    // Debug images of the current round also get its log lines saved next to them.
+    private var roundDebugImages = false
+    private var roundStartedAtMs = 0L
 
     @Volatile
     private var detectorInitialized = false
@@ -126,6 +129,8 @@ class BullTrackLiveRoundController(
         }
         detector.setDebugImagesEnabled(debugImages)
         artifactStore.pruneOldRounds()
+        roundDebugImages = debugImages
+        roundStartedAtMs = System.currentTimeMillis()
         stopRequested = false
         val roundId = createRoundId()
         if (recordFrames) {
@@ -141,6 +146,7 @@ class BullTrackLiveRoundController(
                 releaseRoundOwnershipOnMain()
                 Log.e(TAG, "Live round failed", error)
                 frameRecorder.recordFailure(error.message ?: "unknown")
+                saveRoundLog(roundId)
                 emitNativeError("BT_LIVE_ROUND_FAILED", error.message ?: "Unknown native round error")
                 emitRoundState(
                     phase = "finished",
@@ -242,6 +248,7 @@ class BullTrackLiveRoundController(
         currentSession = null
         detector.destroySession(session.nativeSessionId)
         releaseRoundOwnershipOnMain()
+        saveRoundLog(roundId)
         val artifacts = artifactStore.listArtifacts(roundId)
         emitRoundState(
             phase = "finished",
@@ -261,6 +268,26 @@ class BullTrackLiveRoundController(
 
     fun loadDebugArtifacts(roundId: String): WritableArray {
         return artifactStore.listArtifactsArray(roundId)
+    }
+
+    fun listDebugRounds(): WritableArray = artifactStore.listRoundsArray()
+
+    fun exportDebugRound(roundId: String): File {
+        // A round still awaiting confirmation has no saved log yet.
+        if (roundId == currentSession?.roundId) {
+            artifactStore.saveRoundLog(roundId, roundStartedAtMs)
+        }
+        return artifactStore.exportRound(roundId)
+    }
+
+    private fun saveRoundLog(roundId: String) {
+        if (!roundDebugImages) {
+            return
+        }
+        val startedAtMs = roundStartedAtMs
+        scope.launch(Dispatchers.IO) {
+            artifactStore.saveRoundLog(roundId, startedAtMs)
+        }
     }
 
     fun invalidate() {

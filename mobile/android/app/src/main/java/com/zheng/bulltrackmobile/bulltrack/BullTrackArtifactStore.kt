@@ -1,12 +1,20 @@
 package com.zheng.bulltrackmobile.bulltrack
 
 import android.content.Context
+import android.os.Build
+import android.os.Process
+import android.util.Log
+import androidx.core.content.pm.PackageInfoCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.WritableArray
 import com.facebook.react.bridge.WritableMap
 import com.zheng.bulltrack.vision.DebugImageArtifact
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class BullTrackArtifactStore(
     context: Context
@@ -32,13 +40,84 @@ class BullTrackArtifactStore(
     fun pruneOldRounds(keep: Int = KEEP_ROUNDS) {
         // Rounds saved before debug images moved to external storage.
         File(appContext.filesDir, "BullTrackDebug").takeIf { it != baseDir }?.deleteRecursively()
+        roundDirs()
+            .drop(keep)
+            .forEach { it.deleteRecursively() }
+    }
+
+    private fun roundDirs(): List<File> =
         baseDir
             .listFiles()
             .orEmpty()
             .filter { it.isDirectory }
             .sortedByDescending { it.lastModified() }
-            .drop(keep)
-            .forEach { it.deleteRecursively() }
+
+    private fun imageFiles(roundDir: File): List<File> =
+        roundDir.listFiles().orEmpty().filter { it.isFile && it.name != LOG_NAME }
+
+    private fun buildInfo(roundId: String, savedAt: Date): String {
+        val packageInfo = appContext.packageManager.getPackageInfo(appContext.packageName, 0)
+        return listOf(
+            "BullTrack debug bundle",
+            "App: ${packageInfo.versionName} (${PackageInfoCompat.getLongVersionCode(packageInfo)})",
+            "Device: ${Build.MANUFACTURER} ${Build.MODEL}",
+            "Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})",
+            "Round: $roundId",
+            "Saved: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(savedAt)}",
+        ).joinToString("\n", postfix = "\n")
+    }
+
+    /**
+     * Saves this app's log lines since the round started next to the round's debug images, so a
+     * debug bundle exported later still has them after the system log buffer has rotated.
+     */
+    fun saveRoundLog(roundId: String, startedAtMs: Long) {
+        runCatching {
+            val since = String.format(Locale.US, "%d.%03d", startedAtMs / 1000, startedAtMs % 1000)
+            val process = ProcessBuilder(
+                "logcat", "-t", since, "-v", "threadtime", "--pid=${Process.myPid()}", "*:I"
+            ).redirectErrorStream(true).start()
+            val text = process.inputStream.bufferedReader().use { it.readText() }
+            process.waitFor()
+            File(baseDir, roundId).apply { mkdirs() }.resolve(LOG_NAME).writeText(text)
+        }.onFailure { Log.w(TAG, "Round log save failed", it) }
+    }
+
+    /** Saved rounds, newest first. */
+    fun listRoundsArray(): WritableArray {
+        val array = Arguments.createArray()
+        roundDirs().forEach { dir ->
+            array.pushMap(Arguments.createMap().apply {
+                putString("roundId", dir.name)
+                putDouble("savedAt", dir.lastModified().toDouble())
+                putInt("imageCount", imageFiles(dir).size)
+            })
+        }
+        return array
+    }
+
+    /** Zips one round's debug images and log with app and device info, for sharing. */
+    fun exportRound(roundId: String): File {
+        val roundDir = File(baseDir, roundId)
+        require(roundDir.isDirectory) { "Debug round not found: $roundId" }
+        val exportDir = File(appContext.cacheDir, EXPORT_DIR_NAME)
+        // Only the latest bundle is kept; older ones were already shared or abandoned.
+        exportDir.deleteRecursively()
+        exportDir.mkdirs()
+        val savedAt = Date(roundDir.lastModified())
+        val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(savedAt)
+        val zipFile = File(exportDir, "BullTrack-debug-$stamp.zip")
+        ZipOutputStream(zipFile.outputStream().buffered()).use { zip ->
+            zip.putNextEntry(ZipEntry(INFO_NAME))
+            zip.write(buildInfo(roundId, savedAt).toByteArray())
+            zip.closeEntry()
+            roundDir.listFiles().orEmpty().filter { it.isFile }.sortedBy { it.name }.forEach { file ->
+                zip.putNextEntry(ZipEntry(file.name))
+                file.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+            }
+        }
+        return zipFile
     }
 
     fun listArtifacts(roundId: String): List<WritableMap> {
@@ -46,10 +125,7 @@ class BullTrackArtifactStore(
         if (!roundDir.exists() || !roundDir.isDirectory) {
             return emptyList()
         }
-        return roundDir
-            .listFiles()
-            .orEmpty()
-            .filter { it.isFile }
+        return imageFiles(roundDir)
             .sortedBy { it.name.lowercase(Locale.US) }
             .map { file ->
                 val descriptor = describeArtifact(file)
@@ -107,5 +183,10 @@ class BullTrackArtifactStore(
 
     private companion object {
         const val KEEP_ROUNDS = 10
+        const val LOG_NAME = "log.txt"
+        const val INFO_NAME = "info.txt"
+        const val TAG = "BullTrackRound"
+        // Shared through the FileProvider declared in AndroidManifest.xml (res/xml/export_paths.xml).
+        const val EXPORT_DIR_NAME = "BullTrackExport"
     }
 }

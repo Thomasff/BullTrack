@@ -49,6 +49,14 @@ export interface FinishRoundResult {
   debugArtifacts: DebugArtifact[];
 }
 
+// A round that still has debug images (and its log) saved; only the newest few are kept.
+export interface DebugRoundSummary {
+  roundId: string;
+  // Epoch milliseconds of the round's last saved file.
+  savedAt: number;
+  imageCount: number;
+}
+
 // A new dart in a double, triple or the bull has its own cue; others use 'dart'.
 export type SoundCue =
   | 'ready'
@@ -66,6 +74,10 @@ export interface BullTrackNativeBridge {
   redetectCurrentRound(input: RedetectCurrentRoundInput): Promise<ActionAcceptedResult>;
   finishRound(input: FinishRoundInput): Promise<FinishRoundResult>;
   loadDebugArtifacts(roundId: string): Promise<DebugArtifact[]>;
+  listDebugRounds(): Promise<DebugRoundSummary[]>;
+  // Zips the round's debug images, log and app/device info and opens the share sheet;
+  // resolves with the bundle's file name.
+  shareDebugRound(roundId: string): Promise<string>;
   setZoomRatio(zoomRatio: number): Promise<CameraReadyState>;
   preloadSoundCues(): void;
   playSoundCue(cue: SoundCue): void;

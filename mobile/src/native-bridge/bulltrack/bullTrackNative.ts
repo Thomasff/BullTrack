@@ -4,6 +4,7 @@ import type {
   ActionAcceptedResult,
   BullTrackNativeBridge,
   CameraReadyState,
+  DebugRoundSummary,
   FinishRoundInput,
   FinishRoundResult,
   SoundCue,
@@ -28,6 +29,9 @@ const nativeBridge: BullTrackNativeBridge | null = bullTrackNativeModule
         bullTrackNativeModule.finishRound(input) as Promise<FinishRoundResult>,
       loadDebugArtifacts: async (roundId: string) =>
         bullTrackNativeModule.loadDebugArtifacts(roundId) as Promise<any>,
+      listDebugRounds: async () =>
+        bullTrackNativeModule.listDebugRounds() as Promise<DebugRoundSummary[]>,
+      shareDebugRound: async (roundId: string) => bullTrackNativeModule.shareDebugRound(roundId),
       setZoomRatio: async (zoomRatio: number) =>
         bullTrackNativeModule.setZoomRatio(zoomRatio) as Promise<CameraReadyState>,
       preloadSoundCues: () => bullTrackNativeModule.preloadSoundCues(),

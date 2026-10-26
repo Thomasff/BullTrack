@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { useVisionDebugStore } from '../../application/stores/visionDebugStore';
 import { useGameStore } from '../../application/stores/gameStore';
-import { reloadDebugArtifacts } from '../../application/services/liveRoundService';
+import { bullTrackNativeBridge } from '../../native-bridge/bulltrack/bullTrackNative';
+import type { DebugRoundSummary } from '../../native-bridge/bulltrack/types';
+import type { DebugArtifact } from '../../domain/vision/types';
 import { DebugImageViewer } from '../components/DebugImageViewer';
 import { DartBoard } from '../components/DartBoard';
 import { throwAt } from '../../domain/game/boardGeometry';
@@ -23,21 +24,80 @@ const sampleThrows = (): ThrowResult[] => [
   throwAt({ x: -0.05, y: 0.08 }, 'sample-3'),
 ];
 
+const pad = (value: number) => `${value}`.padStart(2, '0');
+
+const roundLabel = (round: DebugRoundSummary, currentRoundId: string | null) => {
+  const time = new Date(round.savedAt);
+  const clock = `${pad(time.getHours())}:${pad(time.getMinutes())}:${pad(time.getSeconds())}`;
+  return round.roundId === currentRoundId ? `${clock}（本轮）` : clock;
+};
+
 export const DebugScreen = ({ navigation }: Props) => {
-  const artifacts = useVisionDebugStore(state => state.artifacts);
-  const roundId = useGameStore(state => state.roundId);
+  const currentRoundId = useGameStore(state => state.roundId);
   const [boardThrows, setBoardThrows] = useState(sampleThrows);
+  const [rounds, setRounds] = useState<DebugRoundSummary[]>([]);
+  const [selectedRoundId, setSelectedRoundId] = useState<string | null>(null);
+  const [artifacts, setArtifacts] = useState<DebugArtifact[]>([]);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  // Rounds are listed newest first; the current round is preselected when it has debug images.
+  const loadRounds = useCallback(async () => {
+    const list = await bullTrackNativeBridge.listDebugRounds();
+    setRounds(list);
+    setSelectedRoundId(selected => {
+      if (selected && list.some(round => round.roundId === selected)) {
+        return selected;
+      }
+      return list.find(round => round.roundId === currentRoundId)?.roundId ?? list[0]?.roundId ?? null;
+    });
+  }, [currentRoundId]);
 
   useEffect(() => {
-    reloadDebugArtifacts().catch(() => undefined);
-  }, [roundId]);
+    loadRounds().catch(() => undefined);
+  }, [loadRounds]);
+
+  useEffect(() => {
+    setExportError(null);
+    if (!selectedRoundId) {
+      setArtifacts([]);
+      return;
+    }
+    let cancelled = false;
+    bullTrackNativeBridge
+      .loadDebugArtifacts(selectedRoundId)
+      .then(list => {
+        if (!cancelled) {
+          setArtifacts(list);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRoundId]);
+
+  const shareSelectedRound = async () => {
+    if (!selectedRoundId) {
+      return;
+    }
+    setExporting(true);
+    setExportError(null);
+    try {
+      await bullTrackNativeBridge.shareDebugRound(selectedRoundId);
+    } catch (error) {
+      setExportError(`导出失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
       <SectionHeader
         eyebrow="Debug"
-        title="Native debug artifacts"
-        description="调试图继续由原生层落到应用私有目录，并通过 file:// 路径交给 RN 预览。"
+        title="调试图"
+        description="保存最近 10 轮的调试图和日志。识别出错时选中那一轮导出调试包，反馈问题时附上。"
       />
 
       <Panel>
@@ -58,16 +118,36 @@ export const DebugScreen = ({ navigation }: Props) => {
       </Panel>
 
       <Panel>
-        <Text style={styles.panelTitle}>Current round</Text>
-        <Text style={styles.body}>{roundId ?? '当前没有已保存的 roundId'}</Text>
+        <Text style={styles.panelTitle}>轮次</Text>
+        {rounds.length === 0 ? (
+          <Text style={styles.body}>还没有保存的调试图。打开「显示调试信息」后打一轮，这里就会出现。</Text>
+        ) : (
+          <View style={styles.chips}>
+            {rounds.map(round => {
+              const selected = round.roundId === selectedRoundId;
+              return (
+                <Pressable
+                  key={round.roundId}
+                  onPress={() => setSelectedRoundId(round.roundId)}
+                  style={({ pressed }) => [
+                    styles.chip,
+                    selected && styles.chipSelected,
+                    pressed && styles.chipPressed,
+                  ]}>
+                  <Text style={[styles.chipLabel, selected && styles.chipLabelSelected]}>
+                    {roundLabel(round, currentRoundId)}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
+        {exportError ? <Text style={styles.error}>{exportError}</Text> : null}
       </Panel>
 
-      {artifacts.length === 0 ? (
+      {selectedRoundId && artifacts.length === 0 ? (
         <Panel>
-          <Text style={styles.panelTitle}>No artifacts yet</Text>
-          <Text style={styles.body}>
-            在对局页完成一次识别或重检后，这里会显示当前回合的本地调试图。
-          </Text>
+          <Text style={styles.body}>这一轮没有调试图（比如开局就失败了），调试包里只有日志。</Text>
         </Panel>
       ) : (
         <View style={styles.list}>
@@ -79,12 +159,19 @@ export const DebugScreen = ({ navigation }: Props) => {
 
       <View style={styles.actionGroup}>
         <SecondaryButton
-          label="重新加载调试图"
+          label={exporting ? '正在打包…' : '导出调试包'}
           onPress={() => {
-            reloadDebugArtifacts().catch(() => undefined);
+            shareSelectedRound().catch(() => undefined);
+          }}
+          disabled={!selectedRoundId || exporting}
+        />
+        <SecondaryButton
+          label="重新加载"
+          onPress={() => {
+            loadRounds().catch(() => undefined);
           }}
         />
-        <SecondaryButton label="返回对局" onPress={() => navigation.goBack()} />
+        <SecondaryButton label="返回" onPress={() => navigation.goBack()} />
       </View>
     </ScrollView>
   );
@@ -108,6 +195,35 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
     color: colors.textSecondary,
+  },
+  error: {
+    fontSize: 14,
+    color: colors.danger,
+  },
+  chips: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  chip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: colors.panelStrong,
+  },
+  chipSelected: {
+    backgroundColor: colors.accent,
+  },
+  chipPressed: {
+    opacity: 0.7,
+  },
+  chipLabel: {
+    fontSize: 15,
+    color: colors.textPrimary,
+  },
+  chipLabelSelected: {
+    color: colors.panel,
+    fontWeight: '700',
   },
   list: {
     gap: 12,
