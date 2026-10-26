@@ -405,20 +405,26 @@ class AroundTheClockEngine implements GameEngine {
 
 export const SHANGHAI_ROUNDS = 7;
 
-// Half it: hit the round's target or your score is halved.
-export type HalfItTarget = number | 'double' | 'triple';
+// Half it and Bermuda: hit the round's target or your score is halved. 25 is either bull.
+export type HalfItTarget = number | 'double' | 'triple' | 'innerBull';
 export const HALF_IT_TARGETS: HalfItTarget[] = [15, 16, 'double', 17, 18, 'triple', 19, 20, 25];
 export const HALF_IT_START_SCORE = 40;
+export const BERMUDA_TARGETS: HalfItTarget[] = [
+  12, 13, 14, 'double', 15, 16, 17, 'triple', 18, 19, 20, 25, 'innerBull',
+];
+
+export type TargetRoundsType = 'shanghai' | 'halfIt' | 'bermuda';
 
 // The target a side throws at in its round with the given number (1-based); null once done.
 export const getRoundTarget = (
-  type: 'shanghai' | 'halfIt',
+  type: TargetRoundsType,
   roundNumber: number,
 ): HalfItTarget | null => {
   if (type === 'shanghai') {
     return roundNumber <= SHANGHAI_ROUNDS ? roundNumber : null;
   }
-  return HALF_IT_TARGETS[roundNumber - 1] ?? null;
+  const targets = type === 'bermuda' ? BERMUDA_TARGETS : HALF_IT_TARGETS;
+  return targets[roundNumber - 1] ?? null;
 };
 
 const hitsTarget = (throwResult: ThrowResult, target: HalfItTarget) => {
@@ -428,25 +434,38 @@ const hitsTarget = (throwResult: ThrowResult, target: HalfItTarget) => {
   if (target === 'triple') {
     return throwResult.ring === 'triple';
   }
+  if (target === 'innerBull') {
+    return throwResult.ring === 'innerBull';
+  }
   return getThrowSector(throwResult) === target;
 };
 
 // Every round has its own target and only darts on it score. Shanghai: round N aims at N,
-// and single + double + triple of N in one round wins at once. Half it: missing the target
-// with all three darts halves the score. After the last round the highest score wins.
+// and single + double + triple of N in one round wins at once. Half it and Bermuda: missing
+// the target with all three darts halves the score; in the Bermuda bull round either bull is
+// worth 25. After the last round the highest score wins.
 class TargetRoundsEngine implements GameEngine {
-  readonly type: 'shanghai' | 'halfIt';
+  readonly type: TargetRoundsType;
   private readonly players: PlayerSummary[];
   private currentPlayerIndex = 0;
   private winnerId: string | null = null;
   private readonly startScore: number;
   private readonly totalRounds: number;
 
-  constructor(type: 'shanghai' | 'halfIt', players: PlayerSummary[]) {
+  constructor(type: TargetRoundsType, players: PlayerSummary[]) {
     this.type = type;
     this.startScore = type === 'halfIt' ? HALF_IT_START_SCORE : 0;
-    this.totalRounds = type === 'halfIt' ? HALF_IT_TARGETS.length : SHANGHAI_ROUNDS;
+    this.totalRounds =
+      type === 'shanghai'
+        ? SHANGHAI_ROUNDS
+        : type === 'bermuda'
+          ? BERMUDA_TARGETS.length
+          : HALF_IT_TARGETS.length;
     this.players = clonePlayers(players).map(player => ({ ...player, score: this.startScore }));
+  }
+
+  private scoreHit(throwResult: ThrowResult, target: HalfItTarget) {
+    return this.type === 'bermuda' && target === 25 ? 25 : throwResult.score;
   }
 
   getCurrentPlayerId() {
@@ -461,8 +480,8 @@ class TargetRoundsEngine implements GameEngine {
     const player = this.players[this.currentPlayerIndex];
     const target = getRoundTarget(this.type, player.roundScores.length + 1) ?? 0;
     const hits = throws.filter(throwResult => hitsTarget(throwResult, target));
-    let roundScore = hits.reduce((sum, throwResult) => sum + throwResult.score, 0);
-    if (this.type === 'halfIt' && hits.length === 0) {
+    let roundScore = hits.reduce((sum, throwResult) => sum + this.scoreHit(throwResult, target), 0);
+    if (this.type !== 'shanghai' && hits.length === 0) {
       roundScore = Math.floor(player.score / 2) - player.score;
     }
     player.score += roundScore;
@@ -648,6 +667,99 @@ class KillerEngine implements GameEngine {
   }
 }
 
+export const GOTCHA_TARGET = 301;
+
+// Count up from 0 to exactly 301, no double needed. A dart that brings you level with an
+// opponent sends that opponent back to 0. Going over 301 is a bust: the whole round is void,
+// the resets it caused included.
+class GotchaEngine implements GameEngine {
+  readonly type = 'gotcha301' as const;
+  private readonly players: PlayerSummary[];
+  private currentPlayerIndex = 0;
+  private winnerId: string | null = null;
+
+  constructor(players: PlayerSummary[]) {
+    this.players = clonePlayers(players).map(player => ({ ...player, score: 0 }));
+  }
+
+  getCurrentPlayerId() {
+    return this.players[this.currentPlayerIndex].id;
+  }
+
+  getScoreBoard() {
+    return { players: clonePlayers(this.players) };
+  }
+
+  applyRound(throws: ThrowResult[]): RoundResult {
+    const player = this.players[this.currentPlayerIndex];
+    const scoresBefore = this.players.map(candidate => candidate.score);
+    let score = player.score;
+    let bust = false;
+
+    for (const throwResult of throws) {
+      if (throwResult.score === 0) {
+        continue;
+      }
+      score += throwResult.score;
+      if (score > GOTCHA_TARGET) {
+        bust = true;
+        break;
+      }
+      this.players.forEach(candidate => {
+        if (candidate.id !== player.id && candidate.score === score) {
+          candidate.score = 0;
+        }
+      });
+      if (score === GOTCHA_TARGET) {
+        this.winnerId = player.id;
+        break;
+      }
+    }
+
+    if (bust) {
+      this.players.forEach((candidate, index) => {
+        candidate.score = scoresBefore[index];
+      });
+    } else {
+      player.score = score;
+    }
+    const roundScore = player.score - scoresBefore[this.currentPlayerIndex];
+    player.roundScores = [...player.roundScores, roundScore];
+    if (this.winnerId === null) {
+      this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
+    }
+
+    return {
+      playerId: player.id,
+      playerName: player.name,
+      throws,
+      roundScore,
+    };
+  }
+
+  isGameOver() {
+    return this.winnerId !== null;
+  }
+
+  getWinnerId() {
+    return this.winnerId;
+  }
+
+  getCurrentRoundNumber() {
+    const roundsPlayed = this.players[this.currentPlayerIndex].roundScores.length;
+    return roundsPlayed + (this.winnerId ? 0 : 1);
+  }
+
+  reset() {
+    this.currentPlayerIndex = 0;
+    this.winnerId = null;
+    this.players.forEach(player => {
+      player.score = 0;
+      player.roundScores = [];
+    });
+  }
+}
+
 let engine: GameEngine | null = null;
 
 // seed only matters for games that deal something at random (Killer numbers); pass the same
@@ -669,10 +781,14 @@ export const createGameEngine = (type: GameType, players: PlayerSummary[], seed 
       break;
     case 'shanghai':
     case 'halfIt':
+    case 'bermuda':
       engine = new TargetRoundsEngine(type, players);
       break;
     case 'killer':
       engine = new KillerEngine(players, seed);
+      break;
+    case 'gotcha301':
+      engine = new GotchaEngine(players);
       break;
     default:
       engine = new X01Engine(type, players);

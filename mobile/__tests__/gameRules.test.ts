@@ -136,7 +136,18 @@ describe('99 darts at 20', () => {
 
 describe('Round number', () => {
   test.each(
-    ['game301', 'cricket', 'cutThroat', 'aroundTheClock', 'highScore', 'shanghai', 'halfIt', 'killer'] as const,
+    [
+      'game301',
+      'cricket',
+      'cutThroat',
+      'aroundTheClock',
+      'highScore',
+      'shanghai',
+      'halfIt',
+      'bermuda',
+      'killer',
+      'gotcha301',
+    ] as const,
   )(
     '%s counts rounds per player, not ahead of later seats',
     type => {
@@ -241,6 +252,67 @@ describe('Half it', () => {
     expect(engine.isGameOver()).toBe(false);
     engine.applyRound([MISS(), MISS(), MISS()]);
     expect(engine.getWinnerId()).toBe('player-1');
+  });
+});
+
+describe('Bermuda', () => {
+  test('starts at 0, scores hits on the target and halves a round without one', () => {
+    const engine = createGameEngine('bermuda', players(1));
+    expect(engine.getScoreBoard().players[0].score).toBe(0);
+    expect(engine.applyRound([S(12), T(12), S(20)]).roundScore).toBe(48); // target 12
+    expect(engine.applyRound([S(12), MISS(), MISS()]).roundScore).toBe(-24); // target 13
+    engine.applyRound([S(14), MISS(), MISS()]); // 38
+    engine.applyRound([D(5), createThrow('innerBull'), S(3)]); // any double: 10 + 50
+    expect(engine.getScoreBoard().players[0].score).toBe(98);
+  });
+
+  test('either bull is worth 25 in the bull round, only the inner bull counts in the last', () => {
+    const engine = createGameEngine('bermuda', players(1));
+    for (let round = 0; round < 11; round += 1) {
+      engine.applyRound([MISS(), MISS(), MISS()]);
+    }
+    const bulls = [createThrow('innerBull'), createThrow('outerBull'), MISS()];
+    expect(engine.applyRound(bulls).roundScore).toBe(50);
+    expect(engine.isGameOver()).toBe(false);
+    expect(engine.applyRound(bulls).roundScore).toBe(50); // inner bull only
+    expect(engine.getScoreBoard().players[0].score).toBe(100);
+    expect(engine.getWinnerId()).toBe('player-1');
+  });
+});
+
+describe('Gotcha 301', () => {
+  test('counts up and wins on exactly 301 without a double', () => {
+    const engine = createGameEngine('gotcha301', players(1));
+    engine.applyRound([T(20), T(20), T(20)]); // 180
+    engine.applyRound([T(20), T(20), S(1)]); // 301
+    expect(engine.getWinnerId()).toBe('player-1');
+  });
+
+  test('going over 301 voids the round', () => {
+    const engine = createGameEngine('gotcha301', players(1));
+    engine.applyRound([T(20), T(20), T(20)]); // 180
+    engine.applyRound([T(20), T(20), MISS()]); // 300
+    expect(engine.applyRound([D(1), MISS(), MISS()]).roundScore).toBe(0); // 302
+    expect(engine.getScoreBoard().players[0].score).toBe(300);
+    expect(engine.isGameOver()).toBe(false);
+  });
+
+  test('landing on an opponent score sends them back to 0, unless the round busts', () => {
+    const engine = createGameEngine('gotcha301', players(2));
+    engine.applyRound([S(20), MISS(), MISS()]); // P1 20
+    engine.applyRound([S(10), S(10), MISS()]); // P2 reaches 20 with its second dart
+    expect(engine.getScoreBoard().players.map(player => player.score)).toEqual([0, 20]);
+  });
+
+  test('a bust also undoes the resets earlier in the round', () => {
+    const engine = createGameEngine('gotcha301', players(2));
+    engine.applyRound([T(20), T(20), T(20)]); // P1 180
+    engine.applyRound([T(20), T(20), MISS()]); // P2 120
+    engine.applyRound([T(20), T(20), MISS()]); // P1 300
+    engine.applyRound([T(20), T(20), MISS()]); // P2 240
+    engine.applyRound([MISS(), MISS(), MISS()]); // P1
+    engine.applyRound([T(20), D(1), MISS()]); // P2 300 sends P1 to 0, then 302 busts
+    expect(engine.getScoreBoard().players.map(player => player.score)).toEqual([300, 240]);
   });
 });
 

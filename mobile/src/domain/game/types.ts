@@ -11,7 +11,9 @@ export type GameType =
   | 'cutThroat'
   | 'shanghai'
   | 'halfIt'
-  | 'killer';
+  | 'bermuda'
+  | 'killer'
+  | 'gotcha301';
 
 export type GameStatus =
   | 'idle'

@@ -188,15 +188,15 @@ const allModeOptions: ModeOptionDefinition[] = [
     id: 'party-bermuda',
     categoryId: 'party',
     title: 'Bermuda',
-    description: 'Bermuda 入口。',
-    runtimeGameType: null,
+    description: '从 0 分开始共 13 轮，目标依次为 12、13、14、任意双倍…20、靶心、内牛，三镖都没中目标则总分减半。',
+    runtimeGameType: 'bermuda',
   },
   {
     id: 'party-gotcha-301',
     categoryId: 'party',
     title: 'Gotcha 301',
-    description: 'Gotcha 301 入口。',
-    runtimeGameType: null,
+    description: '从 0 加到正好 301 获胜，超过则本轮作废；分数与对手相同时，对手归零。',
+    runtimeGameType: 'gotcha301',
   },
 ];
 

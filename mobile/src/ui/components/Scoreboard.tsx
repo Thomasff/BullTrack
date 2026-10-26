@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { colors, teamColors } from '../theme/colors';
 import {
   DARTS_99_ROUNDS,
+  GOTCHA_TARGET,
   HIGH_SCORE_ROUNDS,
   KILLER_LIVES,
   getAroundTheClockTarget,
@@ -40,7 +41,9 @@ const targetText = (target: number | string | null) =>
         ? '双倍'
         : target === 'triple'
           ? '三倍'
-          : `${target}`;
+          : target === 'innerBull'
+            ? '内牛'
+            : `${target}`;
 
 const killerLives = (lives: number) =>
   `${'♥'.repeat(Math.max(0, lives))}${'♡'.repeat(Math.max(0, KILLER_LIVES - lives))}`;
@@ -73,8 +76,11 @@ const describePlayer = (gameType: GameType | null, player: PlayerSummary) => {
     }
     case 'cutThroat':
       return { value: `${player.score}`, detail: '分 · 低者胜' };
+    case 'gotcha301':
+      return { value: `${player.score}`, detail: `还差 ${GOTCHA_TARGET - player.score}` };
     case 'shanghai':
-    case 'halfIt': {
+    case 'halfIt':
+    case 'bermuda': {
       const target = getRoundTarget(gameType, rounds + 1);
       return {
         value: `${player.score}`,
