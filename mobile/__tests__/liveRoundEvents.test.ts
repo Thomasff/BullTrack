@@ -82,10 +82,10 @@ test('setup hint: darts left on the board and phone position, kept until the nex
     phase: 'capturing',
     statusMessage: '',
     startDartCount: 2,
-    leftRightHalfRatio: 0.9,
+    leftRightHalfRatio: 1.02,
   });
   expect(useGameStore.getState().setupHint).toBe(
-    '开局时靶上还有 2 支镖，识别可能不准，下次请先拔镖再开始；手机好像在靶的右侧，飞镖可能识别不全，建议放到靶的左前方斜拍',
+    '开局时靶上还有镖，识别可能不准，下次请先拔镖再开始；手机几乎正对靶盘，建议放到靶的左前方斜拍，识别更稳',
   );
   emit('onRoundStateChanged', { roundId: 'r1', phase: 'showingResult', statusMessage: '', throws: darts, canRedetect: true });
   expect(useGameStore.getState().setupHint).not.toBeNull();
@@ -106,7 +106,14 @@ test('setup hint: a front view, and an unknown ratio says nothing about position
   const { describeBoardSetup } = require('../src/application/services/liveRoundService');
   expect(describeBoardSetup(0, 1.0)).toBe('手机几乎正对靶盘，建议放到靶的左前方斜拍，识别更稳');
   expect(describeBoardSetup(0, 0)).toBeNull();
-  expect(describeBoardSetup(1, 0)).toBe('开局时靶上还有 1 支镖，识别可能不准，下次请先拔镖再开始');
+  expect(describeBoardSetup(1, 0)).toBe('开局时靶上还有镖，识别可能不准，下次请先拔镖再开始');
+});
+
+test('a round refused for a phone right of the board says where to move it', () => {
+  emit('onRoundStateChanged', { roundId: 'r1', phase: 'starting', statusMessage: '' });
+  emit('onNativeError', { message: 'phone right of the board' });
+  expect(mockPlayedCues).toEqual(['error']);
+  expect(useGameStore.getState().errorMessage).toBe('手机在靶的右侧，请移到靶的左前方再开始');
 });
 
 test('capture readiness follows starting -> capturing', () => {

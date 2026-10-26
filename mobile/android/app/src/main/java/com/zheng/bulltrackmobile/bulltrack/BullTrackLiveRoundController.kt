@@ -315,6 +315,16 @@ class BullTrackLiveRoundController(
             }
         }
 
+        // From the right, dart tails stick out to the left of the board where the search area has
+        // no room and darts get lost, so such a round is not started at all. The board setup still
+        // ran, so the player gets the same quick failure as when no board is found.
+        val sideRatio = boardSetup?.leftRightHalfRatio ?: 0f
+        if (sideRatio > 0f && sideRatio < RIGHT_SIDE_MAX_RATIO) {
+            detector.destroySession(sessionId)
+            Log.w(TAG, "Round refused: phone right of the board (left/right half ratio $sideRatio)")
+            error(PHONE_RIGHT_OF_BOARD_ERROR)
+        }
+
         val session = RoundSession(
             roundId = roundId,
             nativeSessionId = sessionId,
@@ -463,6 +473,9 @@ class BullTrackLiveRoundController(
             if (session.throws.size < MAX_DARTS) {
                 // A confirmed dart without a tip point is a guess; flag it for the player.
                 session.throws += newThrow ?: createMissThrow(session.throws.size).copy(needsCheck = true)
+                if (session.throws.last().needsCheck) {
+                    Log.i(TAG, "Frame $frameIndex: dart ${session.throws.size} flagged for checking")
+                }
             }
         }
         val statusMessage = if (frameUpdate.newThrows.all { it == null }) {
@@ -819,6 +832,11 @@ class BullTrackLiveRoundController(
         private const val CAMERA_READY_TIMEOUT_MS = 4_000L
         private const val FRAME_INTERVAL_MS = 333L
         private const val START_ROUND_ATTEMPTS = 3
+        // Board's left half over its right half in the image; below 1 the phone is right of the
+        // board's centre line (user-tested 2026-10-26: front-left 1.04-1.11, right 0.92-0.96).
+        private const val RIGHT_SIDE_MAX_RATIO = 1.0f
+        // Matched by RN's nativeErrorText.
+        private const val PHONE_RIGHT_OF_BOARD_ERROR = "phone right of the board"
         private const val TAG = "BullTrackRound"
         private const val FRAME_WAIT_SLICE_MS = 50L
         private const val NANOS_PER_MILLISECOND = 1_000_000L

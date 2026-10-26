@@ -2,6 +2,9 @@
 // The raw message stays available in the debug panel.
 export const toFriendlyErrorText = (rawMessage: string) => {
   const message = rawMessage.toLowerCase();
+  if (message.includes('phone right of the board')) {
+    return '手机在靶的右侧，请移到靶的左前方再开始';
+  }
   if (message.includes('board') || message.includes('双倍区') || message.includes('首帧')) {
     return '没看到完整的靶盘，请把手机对准飞镖盘后重试';
   }
