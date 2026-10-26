@@ -35,6 +35,9 @@ struct AndroidFrameProcessResult {
     // One entry per dart confirmed on this frame (usually one; two when a dart was thrown before
     // the previous one was confirmed). Empty optional: the dart counts but has no tip point.
     std::vector<std::optional<cv::Point2f>> detected_points;
+    // Per detected point: found by a fallback (YOLO lost the new dart and it was confirmed on the
+    // image, or the board scan found a dart YOLO never boxed), so the player should check it.
+    std::vector<bool> detected_by_fallback;
     std::vector<DebugImageArtifact> gate_debug_images;
     std::vector<DebugImageArtifact> precise_debug_images;
 };

@@ -84,8 +84,14 @@ class NativeDartDetector(
             width = frame.width,
             height = frame.height
         )
-        val newThrows = result.detectedPoints.orEmpty().map { point ->
-            point?.let { toThrowResult(it.normalizedX, it.normalizedY) }
+        val newThrows = result.detectedPoints.orEmpty().mapIndexed { index, point ->
+            point?.let {
+                toThrowResult(
+                    it.normalizedX,
+                    it.normalizedY,
+                    byFallback = result.detectedByFallback?.getOrNull(index) == true
+                )
+            }
         }
         return FrameDetectionUpdate(
             gateTriggered = result.gateTriggered,
@@ -116,7 +122,7 @@ class NativeDartDetector(
         val result = nativeFindMissedDarts(sessionId)
         return RedetectDetectionUpdate(
             throws = result.points.orEmpty().map { point ->
-                toThrowResult(point.normalizedX, point.normalizedY)
+                toThrowResult(point.normalizedX, point.normalizedY, byFallback = true)
             },
             debugImages = result.debugImages.orEmpty().map(::toDebugImageArtifact),
             yoloStatus = result.yoloStatus
@@ -147,9 +153,10 @@ class NativeDartDetector(
         )
     }
 
-    private fun toThrowResult(normalizedX: Float, normalizedY: Float): ThrowResult {
-        return VirtualBoardScorer.calculateScore(
-            VirtualBoardScorer.fromRealBoard(DartPosition(normalizedX, normalizedY))
+    private fun toThrowResult(normalizedX: Float, normalizedY: Float, byFallback: Boolean = false): ThrowResult {
+        val realPosition = DartPosition(normalizedX, normalizedY)
+        return VirtualBoardScorer.calculateScore(VirtualBoardScorer.fromRealBoard(realPosition)).copy(
+            needsCheck = byFallback || VirtualBoardScorer.isNearLine(realPosition)
         )
     }
 }

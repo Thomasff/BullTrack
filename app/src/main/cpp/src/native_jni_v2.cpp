@@ -106,7 +106,7 @@ jobject CreateNativeFrameProcessResult(JNIEnv* env, const bulltrack::AndroidFram
     jmethodID constructor = env->GetMethodID(
         result_class,
         "<init>",
-        "(ZLjava/lang/String;[Lcom/zheng/bulltrack/vision/NativePointResult;[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;)V");
+        "(ZLjava/lang/String;[Lcom/zheng/bulltrack/vision/NativePointResult;[Z[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;)V");
     jstring reason = env->NewStringUTF(result.gate_reason.c_str());
     // One element per confirmed dart; null when the dart has no tip point.
     jclass point_class = env->FindClass("com/zheng/bulltrack/vision/NativePointResult");
@@ -120,6 +120,16 @@ jobject CreateNativeFrameProcessResult(JNIEnv* env, const bulltrack::AndroidFram
         env->SetObjectArrayElement(detected_points, static_cast<jsize>(i), point_obj);
         env->DeleteLocalRef(point_obj);
     }
+    std::vector<jboolean> by_fallback_values;
+    for (bool value : result.detected_by_fallback) {
+        by_fallback_values.push_back(value ? JNI_TRUE : JNI_FALSE);
+    }
+    jbooleanArray detected_by_fallback = env->NewBooleanArray(static_cast<jsize>(by_fallback_values.size()));
+    env->SetBooleanArrayRegion(
+        detected_by_fallback,
+        0,
+        static_cast<jsize>(by_fallback_values.size()),
+        by_fallback_values.data());
     jobjectArray gate_debug_images = CreateNativeDebugImageArray(env, result.gate_debug_images);
     jobjectArray precise_debug_images = CreateNativeDebugImageArray(env, result.precise_debug_images);
     jobject obj = env->NewObject(
@@ -128,10 +138,12 @@ jobject CreateNativeFrameProcessResult(JNIEnv* env, const bulltrack::AndroidFram
         static_cast<jboolean>(result.gate_triggered),
         reason,
         detected_points,
+        detected_by_fallback,
         gate_debug_images,
         precise_debug_images);
     env->DeleteLocalRef(reason);
     env->DeleteLocalRef(detected_points);
+    env->DeleteLocalRef(detected_by_fallback);
     env->DeleteLocalRef(gate_debug_images);
     env->DeleteLocalRef(precise_debug_images);
     return obj;

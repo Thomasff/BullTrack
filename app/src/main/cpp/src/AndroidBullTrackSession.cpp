@@ -1557,14 +1557,16 @@ void AndroidBullTrackSession::ConfirmNewDarts(
     const TrackedYoloFrameState base_frame = pending_candidate_->base_frame;
     const TrackedYoloFrameState candidate_frame = pending_candidate_->candidate_frame;
     pending_candidate_.reset();
-    const auto count_darts = [&](const std::vector<std::optional<cv::Point2f>>& points) {
+    const auto count_darts = [&](const std::vector<std::optional<cv::Point2f>>& points,
+                                 const std::vector<bool>& by_fallback) {
         result.gate_triggered = true;
-        for (const auto& point : points) {
+        for (size_t i = 0; i < points.size(); ++i) {
             if (last_confirmed_dart_count_ >= max_dart_count) {
                 break;
             }
             last_confirmed_dart_count_ += 1;
-            result.detected_points.push_back(point);
+            result.detected_points.push_back(points[i]);
+            result.detected_by_fallback.push_back(by_fallback[i]);
         }
         last_clean_frame_ = stable_frame;
         // The dart may still wobble in this frame; the next frames showing the same boxes replace
@@ -1583,14 +1585,14 @@ void AndroidBullTrackSession::ConfirmNewDarts(
         result.gate_reason = std::string("precise_detection_failed: ") + error.what();
         if (yolo_sees_new_dart) {
             // YOLO saw one more dart in two frames in a row, so it counts; it just has no tip point.
-            count_darts({std::nullopt});
+            count_darts({std::nullopt}, {false});
         }
         return;
     }
     if (!pair.has_value()) {
         result.gate_reason = "precise_detection_failed: board_crop_empty";
         if (yolo_sees_new_dart) {
-            count_darts({std::nullopt});
+            count_darts({std::nullopt}, {false});
         }
         return;
     }
@@ -1770,6 +1772,7 @@ void AndroidBullTrackSession::ConfirmNewDarts(
     }
 
     std::vector<std::optional<cv::Point2f>> points;
+    std::vector<bool> by_fallback;
     for (size_t i = 0; i < new_dart_boxes.size(); ++i) {
 #if BT_ENABLE_DEBUG_IMAGES
         if (DebugImagesActive()) {
@@ -1802,6 +1805,7 @@ void AndroidBullTrackSession::ConfirmNewDarts(
             localized.has_dart && localized.point_norm.has_value()
                 ? std::optional<cv::Point2f>(MapOntoDefaultRings(localized.point_norm.value(), ring_edges_))
                 : std::nullopt);
+        by_fallback.push_back(!yolo_sees_new_dart);
     }
     for (size_t i = 0; i < missed_regions.size(); ++i) {
         LocalizedDartDetectionResult localized = LocateDartTipInRegion(
@@ -1820,10 +1824,11 @@ void AndroidBullTrackSession::ConfirmNewDarts(
             localized.has_dart && localized.point_norm.has_value()
                 ? std::optional<cv::Point2f>(MapOntoDefaultRings(localized.point_norm.value(), ring_edges_))
                 : std::nullopt);
+        by_fallback.push_back(true);
     }
     result.gate_reason = std::string(yolo_sees_new_dart ? "trigger_precise_detection" : "trigger_lost_box_on_image") +
         change_text + cv::format(" darts=%d missed=%d", static_cast<int>(points.size()), static_cast<int>(missed_regions.size()));
-    count_darts(points);
+    count_darts(points, by_fallback);
 }
 
 AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& frame_bgr) {

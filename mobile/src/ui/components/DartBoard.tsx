@@ -152,6 +152,7 @@ const BoardFace = memo(({ size }: { size: number }) => {
 
 interface MarkerProps {
   index: number;
+  needsCheck: boolean;
   point: BoardPoint;
   scale: number;
   center: number;
@@ -164,6 +165,7 @@ interface MarkerProps {
 
 const Marker = ({
   index,
+  needsCheck,
   point,
   scale,
   center,
@@ -221,7 +223,7 @@ const Marker = ({
           { backgroundColor: color },
           dragging && styles.markerDragging,
         ]}>
-        <Text style={styles.markerLabel}>{index + 1}</Text>
+        <Text style={styles.markerLabel}>{needsCheck ? '?' : index + 1}</Text>
       </View>
     </View>
   );
@@ -248,6 +250,7 @@ export const DartBoard = ({ size, throws, editable, onThrowChange }: DartBoardPr
         <Marker
           key={index}
           index={index}
+          needsCheck={throwResult.needsCheck === true}
           point={drag?.index === index ? drag.point : markerPoint(throwResult, index)}
           scale={scale}
           center={center}

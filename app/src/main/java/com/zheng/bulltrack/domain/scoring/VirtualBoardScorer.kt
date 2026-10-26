@@ -4,8 +4,10 @@ import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.RingType
 import com.zheng.bulltrack.domain.model.ThrowResult
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -41,6 +43,10 @@ object VirtualBoardScorer {
     )
     // Real radius 1.15 lands on the virtual board edge; anything further is clamped.
     private const val REAL_MISS_SPAN = 0.15f
+    // A tip closer than this to a ring edge or sector line (real board units, about 1 mm) may
+    // belong to the neighbouring region, since a small tip error changes the score there. Kept
+    // tight at first so only clear cases are flagged (2 mm flagged about a quarter of all darts).
+    private const val NEAR_LINE_DISTANCE = 0.006f
 
     /**
      * Maps a native point (real board proportions) onto the widened virtual board used for
@@ -58,6 +64,21 @@ object VirtualBoardScorer {
         }
         val scale = virtualRadius / realRadius
         return DartPosition(position.x * scale, position.y * scale)
+    }
+
+    /** Whether a native point (real board proportions) lies on or next to a scoring line. */
+    fun isNearLine(position: DartPosition): Boolean {
+        val r = radius(position)
+        if ((1 until REAL_RING_EDGES.size).any { abs(r - REAL_RING_EDGES[it]) < NEAR_LINE_DISTANCE }) {
+            return true
+        }
+        // Sector lines run from the outer bull to the outer double edge.
+        if (r <= REAL_RING_EDGES[2] || r >= REAL_RING_EDGES.last()) {
+            return false
+        }
+        val fromLine = normalizeRadians((PI.toFloat() / 2f) - normalizedTheta(position) + HALF_SECTOR_RADIANS) %
+            SECTOR_SWEEP_RADIANS
+        return r * sin(min(fromLine, SECTOR_SWEEP_RADIANS - fromLine)) < NEAR_LINE_DISTANCE
     }
 
     fun calculateScore(position: DartPosition): ThrowResult {

@@ -41,6 +41,8 @@ export interface ThrowResult {
     x: number;
     y: number;
   };
+  // Detection is unsure about this dart; its board marker shows ? until the player moves it.
+  needsCheck?: boolean;
 }
 
 export interface PlayerSummary {

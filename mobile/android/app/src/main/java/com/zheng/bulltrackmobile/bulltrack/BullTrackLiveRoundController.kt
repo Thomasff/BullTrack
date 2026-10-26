@@ -461,7 +461,8 @@ class BullTrackLiveRoundController(
         // native session.
         frameUpdate.newThrows.forEach { newThrow ->
             if (session.throws.size < MAX_DARTS) {
-                session.throws += newThrow ?: createMissThrow(session.throws.size)
+                // A confirmed dart without a tip point is a guess; flag it for the player.
+                session.throws += newThrow ?: createMissThrow(session.throws.size).copy(needsCheck = true)
             }
         }
         val statusMessage = if (frameUpdate.newThrows.all { it == null }) {
@@ -713,6 +714,7 @@ class BullTrackLiveRoundController(
                     putString("label", buildThrowLabel(throwResult))
                     putInt("score", throwResult.score)
                     putString("ring", toRingName(throwResult.ring))
+                    putBoolean("needsCheck", throwResult.needsCheck)
                     putMap(
                         "pointNorm",
                         Arguments.createMap().apply {
