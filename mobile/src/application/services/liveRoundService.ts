@@ -52,6 +52,29 @@ const cueForNewThrows = (newThrows: ThrowResult[]): SoundCue => {
   }
 };
 
+// The algorithm expects the phone front-left of the board, shooting at an angle: dart tails
+// then stick out to the right, where the search area has room. Ratios near 1 are a front view.
+const LEFT_SIDE_MIN_RATIO = 1.04;
+const RIGHT_SIDE_MAX_RATIO = 0.96;
+
+// What the first frame says about the setup; the round runs either way. leftRightHalfRatio is
+// the board's left half over its right half in the image (0 when unknown).
+export const describeBoardSetup = (
+  startDartCount: number,
+  leftRightHalfRatio: number,
+): string | null => {
+  const hints: string[] = [];
+  if (startDartCount > 0) {
+    hints.push(`开局时靶上还有 ${startDartCount} 支镖，识别可能不准，下次请先拔镖再开始`);
+  }
+  if (leftRightHalfRatio > 0 && leftRightHalfRatio <= RIGHT_SIDE_MAX_RATIO) {
+    hints.push('手机好像在靶的右侧，飞镖可能识别不全，建议放到靶的左前方斜拍');
+  } else if (leftRightHalfRatio > 0 && leftRightHalfRatio < LEFT_SIDE_MIN_RATIO) {
+    hints.push('手机几乎正对靶盘，建议放到靶的左前方斜拍，识别更稳');
+  }
+  return hints.length > 0 ? hints.join('；') : null;
+};
+
 const applyRoundResult = (throws: ThrowResult[]) => {
   const engine = getGameEngine();
   if (!engine) {
@@ -99,13 +122,20 @@ export const ensureBullTrackSubscriptions = () => {
         statusMessage: string;
         throws?: ThrowResult[];
         canRedetect?: boolean;
+        // Only on 'capturing'.
+        startDartCount?: number;
+        leftRightHalfRatio?: number;
       };
 
       if (event.phase === 'starting') {
         useLiveFrameStore.getState().clear();
+        useGameStore.setState({ setupHint: null });
       }
       if (event.phase === 'capturing') {
         playSoundCue('ready');
+        useGameStore.setState({
+          setupHint: describeBoardSetup(event.startDartCount ?? 0, event.leftRightHalfRatio ?? 0),
+        });
       }
       if (event.phase === 'starting' || event.phase === 'capturing') {
         useGameStore.getState().setRoundState({

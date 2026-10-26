@@ -84,10 +84,16 @@ jobject CreateNativeStartRoundResult(JNIEnv* env, const bulltrack::AndroidStartR
     jmethodID constructor = env->GetMethodID(
         result_class,
         "<init>",
-        "([Lcom/zheng/bulltrack/vision/NativeDebugImageResult;Ljava/lang/String;)V");
+        "([Lcom/zheng/bulltrack/vision/NativeDebugImageResult;Ljava/lang/String;IF)V");
     jobjectArray debug_images = CreateNativeDebugImageArray(env, result.debug_images);
     jstring error_message = result.error_message.empty() ? nullptr : env->NewStringUTF(result.error_message.c_str());
-    jobject obj = env->NewObject(result_class, constructor, debug_images, error_message);
+    jobject obj = env->NewObject(
+        result_class,
+        constructor,
+        debug_images,
+        error_message,
+        static_cast<jint>(result.start_dart_count),
+        static_cast<jfloat>(result.left_right_half_ratio));
     env->DeleteLocalRef(debug_images);
     if (error_message != nullptr) {
         env->DeleteLocalRef(error_message);

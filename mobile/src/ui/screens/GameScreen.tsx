@@ -99,6 +99,7 @@ export const GameScreen = ({ navigation }: Props) => {
     setCameraStatus,
     replaceThrow,
     captureReady,
+    setupHint,
     reopenedRound,
     completedRounds,
   } = useGameStore();
@@ -589,6 +590,7 @@ export const GameScreen = ({ navigation }: Props) => {
           <Text style={styles.totalScore}>{totalScore}</Text>
         </View>
         {turnHint ? <Text style={styles.hint}>{turnHint}</Text> : null}
+        {setupHint ? <Text style={styles.setupHint}>{setupHint}</Text> : null}
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
         <View style={styles.dartRow}>
           {[0, 1, 2].map(index => {
@@ -926,6 +928,11 @@ const styles = StyleSheet.create({
   hint: {
     fontSize: 13,
     color: colors.textSecondary,
+  },
+  setupHint: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.warning,
   },
   errorText: {
     fontSize: 14,

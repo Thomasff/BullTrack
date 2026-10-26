@@ -17,6 +17,7 @@ import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.RingType
 import com.zheng.bulltrack.domain.model.ThrowResult
 import com.zheng.bulltrack.vision.NativeDartDetector
+import com.zheng.bulltrack.vision.StartRoundDetectionUpdate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -273,6 +274,7 @@ class BullTrackLiveRoundController(
         var sessionId = 0L
         var firstFrameCapturedNs = 0L
         var firstFrameStatus: String? = null
+        var boardSetup: StartRoundDetectionUpdate? = null
         for (attempt in 1..START_ROUND_ATTEMPTS) {
             val firstFrame = cameraManager.captureFirstFrameForRound()
             firstFrameCapturedNs = SystemClock.elapsedRealtimeNanos()
@@ -303,6 +305,7 @@ class BullTrackLiveRoundController(
             val errorMessage = startUpdate.errorMessage
             if (errorMessage == null) {
                 sessionId = attemptSessionId
+                boardSetup = startUpdate
                 break
             }
             Log.w(TAG, "Board setup attempt $attempt failed: $errorMessage")
@@ -326,6 +329,7 @@ class BullTrackLiveRoundController(
             statusMessage = firstFrameStatus ?: "已拍摄第 1 张图片，开始连续检测",
             throws = emptyList(),
             canRedetect = false,
+            boardSetup = boardSetup,
         )
 
         var frameIndex = 2
@@ -564,6 +568,8 @@ class BullTrackLiveRoundController(
         statusMessage: String,
         throws: List<ThrowResult>,
         canRedetect: Boolean,
+        // Only on "capturing": what the first frame showed, for RN's setup hints.
+        boardSetup: StartRoundDetectionUpdate? = null,
     ) {
         emit(
             EVENT_ROUND_STATE_CHANGED,
@@ -573,6 +579,10 @@ class BullTrackLiveRoundController(
                 putString("statusMessage", statusMessage)
                 putArray("throws", throws.toWritableThrows(roundId))
                 putBoolean("canRedetect", canRedetect)
+                boardSetup?.let { setup ->
+                    putInt("startDartCount", setup.startDartCount)
+                    putDouble("leftRightHalfRatio", setup.leftRightHalfRatio.toDouble())
+                }
             },
         )
     }

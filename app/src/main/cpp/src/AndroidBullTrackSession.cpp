@@ -822,6 +822,27 @@ cv::Point2f NormalizePointFromRoundAlignedBoard(
         -dst_points.front().y / rectified_radius);
 }
 
+// Maps the bull and the outer double edge at 9 and 3 o'clock back into the image and compares
+// the two half widths. The rectified board is anchored to the board itself (20 at the top), so
+// phone roll does not matter.
+float MeasureLeftRightHalfRatio(const cv::Mat& point_rectification_h, float rectified_radius) {
+    if (point_rectification_h.empty() || rectified_radius <= 1e-6f) {
+        return 0.0f;
+    }
+    const std::vector<cv::Point2f> rectified_points{
+        cv::Point2f(0.0f, 0.0f),
+        cv::Point2f(-rectified_radius, 0.0f),
+        cv::Point2f(rectified_radius, 0.0f)};
+    std::vector<cv::Point2f> image_points;
+    cv::perspectiveTransform(rectified_points, image_points, point_rectification_h.inv());
+    if (image_points.size() != rectified_points.size()) {
+        return 0.0f;
+    }
+    const float left = static_cast<float>(cv::norm(image_points[1] - image_points[0]));
+    const float right = static_cast<float>(cv::norm(image_points[2] - image_points[0]));
+    return right > 1e-3f ? left / right : 0.0f;
+}
+
 #if BT_ENABLE_DEBUG_IMAGES
 cv::Mat DrawLocalRectAndTipOnBoardImage(
     const cv::Mat& board_image_bgr,
@@ -1504,6 +1525,16 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     clean_refresh_frames_left_ = 0;
     last_confirmed_dart_count_ = static_cast<int>(SelectTopDartBoxes(baseline.yolo_detection, 3, baseline.dart_search_rect).size());
     round_start_dart_count_ = last_confirmed_dart_count_;
+    result.start_dart_count = round_start_dart_count_;
+    result.left_right_half_ratio = MeasureLeftRightHalfRatio(
+        first_frame_point_rectification_h_,
+        first_frame_rectified_radius_);
+    __android_log_print(
+        ANDROID_LOG_INFO,
+        "BullTrackNativeV2",
+        "round start: darts on board=%d, left/right half ratio=%.3f",
+        result.start_dart_count,
+        result.left_right_half_ratio);
     PushRecentFrame(
         recent_frames_,
         BuildTrackedYoloFrameState(

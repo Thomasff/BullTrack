@@ -75,6 +75,40 @@ test('sound cues: ring cues, and darts confirmed together play the highest-scori
   expect(mockPlayedCues).toEqual(['ready', 'triple']);
 });
 
+test('setup hint: darts left on the board and phone position, kept until the next round starts', () => {
+  emit('onRoundStateChanged', { roundId: 'r1', phase: 'starting', statusMessage: '' });
+  emit('onRoundStateChanged', {
+    roundId: 'r1',
+    phase: 'capturing',
+    statusMessage: '',
+    startDartCount: 2,
+    leftRightHalfRatio: 0.9,
+  });
+  expect(useGameStore.getState().setupHint).toBe(
+    '开局时靶上还有 2 支镖，识别可能不准，下次请先拔镖再开始；手机好像在靶的右侧，飞镖可能识别不全，建议放到靶的左前方斜拍',
+  );
+  emit('onRoundStateChanged', { roundId: 'r1', phase: 'showingResult', statusMessage: '', throws: darts, canRedetect: true });
+  expect(useGameStore.getState().setupHint).not.toBeNull();
+
+  emit('onRoundStateChanged', { roundId: 'r2', phase: 'starting', statusMessage: '' });
+  expect(useGameStore.getState().setupHint).toBeNull();
+  emit('onRoundStateChanged', {
+    roundId: 'r2',
+    phase: 'capturing',
+    statusMessage: '',
+    startDartCount: 0,
+    leftRightHalfRatio: 1.2,
+  });
+  expect(useGameStore.getState().setupHint).toBeNull();
+});
+
+test('setup hint: a front view, and an unknown ratio says nothing about position', () => {
+  const { describeBoardSetup } = require('../src/application/services/liveRoundService');
+  expect(describeBoardSetup(0, 1.0)).toBe('手机几乎正对靶盘，建议放到靶的左前方斜拍，识别更稳');
+  expect(describeBoardSetup(0, 0)).toBeNull();
+  expect(describeBoardSetup(1, 0)).toBe('开局时靶上还有 1 支镖，识别可能不准，下次请先拔镖再开始');
+});
+
 test('capture readiness follows starting -> capturing', () => {
   emit('onRoundStateChanged', { roundId: 'r1', phase: 'starting', statusMessage: '' });
   expect(useGameStore.getState().captureReady).toBe(false);

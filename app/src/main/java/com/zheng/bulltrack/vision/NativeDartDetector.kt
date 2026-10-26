@@ -71,7 +71,9 @@ class NativeDartDetector(
         val result = nativeStartRound(sessionId, frameData, firstFrame.width, firstFrame.height)
         return StartRoundDetectionUpdate(
             debugImages = result.debugImages.orEmpty().map(::toDebugImageArtifact),
-            errorMessage = result.errorMessage
+            errorMessage = result.errorMessage,
+            startDartCount = result.startDartCount,
+            leftRightHalfRatio = result.leftRightHalfRatio
         )
     }
 

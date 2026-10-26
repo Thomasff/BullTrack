@@ -50,6 +50,9 @@ interface GameStoreState {
   throwsEdited: boolean;
   // True once native has taken the empty-board first frame and darts may be thrown.
   captureReady: boolean;
+  // Advice from the round's first frame (darts left on the board, phone position); kept until
+  // the next round starts so the player sees it when back at the phone.
+  setupHint: string | null;
   // The shown result is an undone round brought back for correction (no native session).
   reopenedRound: boolean;
   // History id of the saved finished game, so undoing its last round can remove it.
@@ -113,6 +116,7 @@ const initialState = {
   canRedetect: false,
   throwsEdited: false,
   captureReady: false,
+  setupHint: null as string | null,
   reopenedRound: false,
   savedMatchId: null as number | null,
   gameSeed: 0,

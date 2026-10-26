@@ -22,6 +22,11 @@ struct DebugImageArtifact {
 struct AndroidStartRoundResult {
     std::vector<DebugImageArtifact> debug_images;
     std::string error_message;
+    // Darts already on the board in the first frame (the round still counts new darts).
+    int start_dart_count = 0;
+    // Image length of the board's left half over its right half; the half nearer the camera
+    // looks longer, so above 1 means the phone is left of the board. 0 when unknown.
+    float left_right_half_ratio = 0.0f;
 };
 
 struct AndroidFrameProcessResult {
