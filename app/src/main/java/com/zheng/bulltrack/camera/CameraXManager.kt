@@ -10,12 +10,16 @@ import android.graphics.YuvImage
 import android.os.Handler
 import android.os.Looper
 import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.util.Log
 import android.util.Size
+import androidx.camera.camera2.interop.Camera2CameraControl
+import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
@@ -86,6 +90,18 @@ class CameraXManager : CameraManager {
     private var latestAfState: Int? = null
 
     @Volatile
+    private var latestExposureTimeNs: Long? = null
+
+    @Volatile
+    private var latestSensitivity: Int? = null
+
+    @Volatile
+    private var latestFocusDistance: Float? = null
+
+    @Volatile
+    private var latestAwbState: Int? = null
+
+    @Volatile
     private var aeStableCount: Int = 0
 
     @Volatile
@@ -99,6 +115,10 @@ class CameraXManager : CameraManager {
         ) {
             latestAeState = result.get(CaptureResult.CONTROL_AE_STATE)
             latestAfState = result.get(CaptureResult.CONTROL_AF_STATE)
+            latestAwbState = result.get(CaptureResult.CONTROL_AWB_STATE)
+            latestExposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
+            latestSensitivity = result.get(CaptureResult.SENSOR_SENSITIVITY)
+            latestFocusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
 
             if (isAeStable(latestAeState)) {
                 aeStableCount += 1
@@ -229,6 +249,7 @@ class CameraXManager : CameraManager {
 
     fun releaseRoundOwnership() {
         val provider = cameraProvider ?: return
+        unlockAutoControls()
         provider.unbindAll()
         previewUseCase = null
         imageCapture = null
@@ -245,6 +266,7 @@ class CameraXManager : CameraManager {
     }
 
     override fun release() {
+        unlockAutoControls()
         cameraProvider?.unbindAll()
         cameraExecutor?.shutdown()
         cameraProvider = null
@@ -359,10 +381,16 @@ class CameraXManager : CameraManager {
     }
 
     private suspend fun prepareAutoCapture() {
+        // A retried first frame meters again from scratch.
+        unlockAutoControls()
         reset3AState()
         applyRoundZoomBeforeCapture()
         triggerCenterFocusAndMetering()
         val stabilized = waitForAutoStateStable()
+        // Lock only a settled exposure; an unsettled one would stay wrong for the whole round.
+        if (aeStableCount >= AF_AE_STABLE_REQUIRED_COUNT) {
+            lockExposureAndWhiteBalance()
+        }
         lockPhase = if (stabilized) {
             CameraLockPhase.LOCKED
         } else {
@@ -398,7 +426,7 @@ class CameraXManager : CameraManager {
             FocusMeteringAction.FLAG_AF or
                 FocusMeteringAction.FLAG_AE or
                 FocusMeteringAction.FLAG_AWB
-        ).setAutoCancelDuration(2, java.util.concurrent.TimeUnit.SECONDS)
+        ).disableAutoCancel()
             .build()
         runCatching {
             camera.cameraControl.startFocusAndMetering(action).await()
@@ -419,6 +447,61 @@ class CameraXManager : CameraManager {
             }
             false
         } ?: false
+    }
+
+    // Exposure and white balance stay as metered for the first frame until the round ends (focus
+    // stays locked by the metering action), so a player walking into view or a landing dart does
+    // not change the brightness, colour or sharpness of frames compared with the empty board.
+    private suspend fun lockExposureAndWhiteBalance() {
+        val camera = boundCamera ?: return
+        val cameraInfo = Camera2CameraInfo.from(camera.cameraInfo)
+        val options = CaptureRequestOptions.Builder()
+        if (cameraInfo.getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true) {
+            options.setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, true)
+        }
+        if (cameraInfo.getCameraCharacteristic(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true) {
+            options.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, true)
+        }
+        runCatching {
+            Camera2CameraControl.from(camera.cameraControl).setCaptureRequestOptions(options.build()).await()
+        }.onFailure { error ->
+            Log.w(TAG, "Exposure/white balance lock failed", error)
+        }
+    }
+
+    private fun unlockAutoControls() {
+        val camera = boundCamera ?: return
+        runCatching {
+            Camera2CameraControl.from(camera.cameraControl).clearCaptureRequestOptions()
+            camera.cameraControl.cancelFocusAndMetering()
+        }.onFailure { error ->
+            Log.w(TAG, "Exposure/white balance unlock failed", error)
+        }
+    }
+
+    // Latest exposure, sensitivity, focus and 3A states, for the round log.
+    fun describeExposure(): String {
+        val exposureMs = latestExposureTimeNs?.let { "%.2f".format(it / 1_000_000.0) } ?: "?"
+        val focus = latestFocusDistance?.let { "%.2f".format(it) } ?: "?"
+        return "exposure=${exposureMs}ms iso=${latestSensitivity ?: "?"} focus=${focus}D " +
+            "ae=${describeAeState(latestAeState)} awb=${describeAwbState(latestAwbState)} " +
+            "af=${latestAfState ?: "?"}"
+    }
+
+    private fun describeAeState(state: Int?): String = when (state) {
+        CaptureResult.CONTROL_AE_STATE_LOCKED -> "locked"
+        CaptureResult.CONTROL_AE_STATE_CONVERGED -> "converged"
+        CaptureResult.CONTROL_AE_STATE_SEARCHING -> "searching"
+        null -> "?"
+        else -> state.toString()
+    }
+
+    private fun describeAwbState(state: Int?): String = when (state) {
+        CaptureResult.CONTROL_AWB_STATE_LOCKED -> "locked"
+        CaptureResult.CONTROL_AWB_STATE_CONVERGED -> "converged"
+        CaptureResult.CONTROL_AWB_STATE_SEARCHING -> "searching"
+        null -> "?"
+        else -> state.toString()
     }
 
     private fun reset3AState() {

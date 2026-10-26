@@ -333,6 +333,8 @@ class BullTrackLiveRoundController(
         )
 
         var frameIndex = 2
+        var loggedExposure = cameraManager.describeExposure()
+        Log.i(TAG, "Round camera: $loggedExposure")
         // Pace with our own clock taken right before each capture: the sensor timestamp is not
         // guaranteed to share the elapsedRealtime time base, and a mismatch removed all waiting.
         var lastCaptureStartNs = firstFrameCapturedNs
@@ -347,6 +349,12 @@ class BullTrackLiveRoundController(
             lastCaptureStartNs = SystemClock.elapsedRealtimeNanos()
             val frame = cameraManager.captureNextFrameForRound()
             publishLiveFrame(roundId, frame.bitmap)
+            // Exposure is locked for the round; a change here means the lock did not hold.
+            val exposure = cameraManager.describeExposure()
+            if (exposure != loggedExposure) {
+                Log.i(TAG, "Frame $frameIndex camera: $exposure")
+                loggedExposure = exposure
+            }
             val decision = processNextFrame(frameIndex = frameIndex, frameBitmap = frame.bitmap)
             captureNextImmediately = decision.captureNextImmediately
             if (decision.shouldStop) {
