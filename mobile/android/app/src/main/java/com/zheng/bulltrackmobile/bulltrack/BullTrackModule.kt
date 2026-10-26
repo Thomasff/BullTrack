@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 
 @ReactModule(name = BullTrackModule.NAME)
 class BullTrackModule(
@@ -28,7 +29,8 @@ class BullTrackModule(
     override fun startLiveRound(request: ReadableMap, promise: Promise) {
         resolvePromise(promise) {
             val debugImages = request.hasKey("debugImages") && request.getBoolean("debugImages")
-            controller.startLiveRound(debugImages)
+            val recordFrames = request.hasKey("recordFrames") && request.getBoolean("recordFrames")
+            controller.startLiveRound(debugImages, recordFrames)
         }
     }
 
@@ -53,7 +55,13 @@ class BullTrackModule(
         resolveSuspendPromise(promise) {
             val roundId = request.getString("roundId")
                 ?: error("Missing required string field: roundId")
-            controller.finishRound(roundId)
+            val confirmed = request.hasKey("confirmed") && request.getBoolean("confirmed")
+            val editedThrows = if (request.hasKey("editedThrows") && !request.isNull("editedThrows")) {
+                request.getArray("editedThrows")?.let { JSONArray(it.toArrayList()) }
+            } else {
+                null
+            }
+            controller.finishRound(roundId, confirmed, editedThrows)
         }
     }
 

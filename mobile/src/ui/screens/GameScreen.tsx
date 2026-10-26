@@ -104,6 +104,7 @@ export const GameScreen = ({ navigation }: Props) => {
     completedRounds,
   } = useGameStore();
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
+  const recordFrames = useSettingsStore(state => state.recordFrames);
   const previousStatusRef = useRef(status);
   const artifactCount = useVisionDebugStore(state => state.artifacts.length);
   const lastNativeError = useVisionDebugStore(state => state.lastNativeError);
@@ -459,6 +460,13 @@ export const GameScreen = ({ navigation }: Props) => {
       contentContainerStyle={styles.screenContent}
       style={styles.screen}
       scrollEnabled={scrollEnabled}>
+      {recordFrames ? (
+        <View style={styles.recordingBanner}>
+          <Text style={styles.recordingBannerText}>
+            录制模式：每轮保存原始画面，耗电和占用存储会增加
+          </Text>
+        </View>
+      ) : null}
       <Scoreboard
         gameType={selectedMode}
         players={scoreBoard?.players ?? players}
@@ -928,6 +936,17 @@ const styles = StyleSheet.create({
   hint: {
     fontSize: 13,
     color: colors.textSecondary,
+  },
+  recordingBanner: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: '#F2A83D',
+  },
+  recordingBannerText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#1E1A16',
   },
   setupHint: {
     fontSize: 14,

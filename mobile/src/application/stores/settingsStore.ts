@@ -12,8 +12,12 @@ interface SettingsStoreState {
   zoomRatio: number;
   // Knock sounds for a player at the board; on unless turned off.
   soundCues: boolean;
+  // Developer recording of raw round frames. Not stored, so it is off after a restart and
+  // cannot be left on by mistake; it also goes off with the debug info it sits under.
+  recordFrames: boolean;
   loadSettings: () => Promise<void>;
   setShowDebugInfo: (value: boolean) => Promise<void>;
+  setRecordFrames: (value: boolean) => void;
   setZoomRatio: (value: number) => Promise<void>;
   setSoundCues: (value: boolean) => Promise<void>;
 }
@@ -23,6 +27,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   showDebugInfo: false,
   zoomRatio: 1,
   soundCues: true,
+  recordFrames: false,
   loadSettings: async () => {
     if (get().loaded) {
       return;
@@ -42,9 +47,10 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     }
   },
   setShowDebugInfo: async value => {
-    set({ showDebugInfo: value });
+    set(value ? { showDebugInfo: value } : { showDebugInfo: value, recordFrames: false });
     await setSetting(SHOW_DEBUG_KEY, value ? '1' : '0');
   },
+  setRecordFrames: value => set({ recordFrames: value }),
   setZoomRatio: async value => {
     set({ zoomRatio: value });
     await setSetting(ZOOM_RATIO_KEY, value.toFixed(2));

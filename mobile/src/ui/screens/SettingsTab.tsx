@@ -9,6 +9,8 @@ import { playSoundCue } from '../../application/services/liveRoundService';
 export const SettingsTab = () => {
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
   const setShowDebugInfo = useSettingsStore(state => state.setShowDebugInfo);
+  const recordFrames = useSettingsStore(state => state.recordFrames);
+  const setRecordFrames = useSettingsStore(state => state.setRecordFrames);
   const soundCues = useSettingsStore(state => state.soundCues);
   const setSoundCues = useSettingsStore(state => state.setSoundCues);
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -38,6 +40,22 @@ export const SettingsTab = () => {
             thumbColor={colors.panel}
           />
         </View>
+        {showDebugInfo ? (
+          <View style={[styles.row, styles.rowDivider]}>
+            <View style={styles.rowText}>
+              <Text style={styles.label}>录制原始画面</Text>
+              <Text style={styles.description}>
+                开发用：每轮保存拍到的画面，供以后离线测试识别。耗电和占用存储会增加，重启 App 后自动关闭
+              </Text>
+            </View>
+            <Switch
+              value={recordFrames}
+              onValueChange={setRecordFrames}
+              trackColor={{ true: colors.accent, false: colors.border }}
+              thumbColor={colors.panel}
+            />
+          </View>
+        ) : null}
         <View style={[styles.row, styles.rowDivider]}>
           <View style={styles.rowText}>
             <Text style={styles.label}>提示音</Text>

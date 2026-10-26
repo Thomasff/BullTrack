@@ -282,6 +282,7 @@ export const startLiveRound = async () => {
     gameMode: state.selectedMode,
     playerId: state.currentPlayerId,
     debugImages: useSettingsStore.getState().showDebugInfo,
+    recordFrames: useSettingsStore.getState().recordFrames,
   });
 };
 
@@ -312,6 +313,8 @@ export const confirmCurrentRound = async () => {
   if (state.roundId) {
     const finishResult = await bullTrackNativeBridge.finishRound({
       roundId: state.roundId,
+      confirmed: true,
+      editedThrows,
     });
     useVisionDebugStore.getState().setArtifacts(finishResult.debugArtifacts);
     throws = editedThrows ?? finishResult.throws;

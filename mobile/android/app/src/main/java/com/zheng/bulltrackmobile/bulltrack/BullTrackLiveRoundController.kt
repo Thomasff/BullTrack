@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.json.JSONArray
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -42,6 +43,7 @@ class BullTrackLiveRoundController(
     private val appContext = reactContext.applicationContext
     private val detector = NativeDartDetector(appContext.assets)
     private val artifactStore = BullTrackArtifactStore(reactContext)
+    private val frameRecorder = BullTrackFrameRecorder(reactContext)
     private val cameraManager = CameraXManager()
     private val bridgeDispatcher: CoroutineDispatcher =
         Executors.newSingleThreadExecutor().asCoroutineDispatcher()
@@ -116,7 +118,7 @@ class BullTrackLiveRoundController(
         return currentCameraReadyState("已更新原生 round zoom")
     }
 
-    fun startLiveRound(debugImages: Boolean): WritableMap {
+    fun startLiveRound(debugImages: Boolean, recordFrames: Boolean): WritableMap {
         ensureSupportedRuntime()
         ensureDetectorInitialized()
         if (roundJob?.isActive == true || currentSession != null) {
@@ -126,6 +128,11 @@ class BullTrackLiveRoundController(
         artifactStore.pruneOldRounds()
         stopRequested = false
         val roundId = createRoundId()
+        if (recordFrames) {
+            frameRecorder.startRound(roundId)
+        } else {
+            frameRecorder.stop()
+        }
         roundJob = scope.launch(bridgeDispatcher) {
             runCatching {
                 runContinuousRound(roundId)
@@ -133,6 +140,7 @@ class BullTrackLiveRoundController(
                 cleanupCurrentSession(destroySession = true)
                 releaseRoundOwnershipOnMain()
                 Log.e(TAG, "Live round failed", error)
+                frameRecorder.recordFailure(error.message ?: "unknown")
                 emitNativeError("BT_LIVE_ROUND_FAILED", error.message ?: "Unknown native round error")
                 emitRoundState(
                     phase = "finished",
@@ -172,6 +180,7 @@ class BullTrackLiveRoundController(
         return runCatching {
             bindNativeCaptureOnly()
             val redetectFrame = cameraManager.captureNextFrameForRound()
+            frameRecorder.recordRedetectFrame(session.consumedFrameCount + 1, redetectFrame.bitmap)
             val update = withTimeout(NATIVE_CALL_TIMEOUT_MS) {
                 withContext(Dispatchers.Default) {
                     detector.redetect(session.nativeSessionId, redetectFrame.bitmap)
@@ -217,10 +226,18 @@ class BullTrackLiveRoundController(
         }
     }
 
-    suspend fun finishRound(roundId: String): WritableMap {
+    // confirmed is false when RN only releases the round; editedThrows is set when the player
+    // corrected the darts.
+    suspend fun finishRound(roundId: String, confirmed: Boolean, editedThrows: JSONArray?): WritableMap {
         val session = currentSession ?: error("Round session not found: $roundId")
         if (session.roundId != roundId) {
             error("Round session mismatch: $roundId")
+        }
+        if (confirmed && frameRecorder.isRecording(roundId)) {
+            frameRecorder.recordResult(
+                detected = JSONArray(session.throws.toWritableThrows(roundId).toArrayList()),
+                edited = editedThrows,
+            )
         }
         currentSession = null
         detector.destroySession(session.nativeSessionId)
@@ -293,6 +310,7 @@ class BullTrackLiveRoundController(
                     }
                 }
             }.getOrElse { error ->
+                frameRecorder.recordStartFrame(attempt, firstFrame.bitmap, "board setup failed: ${error.message}")
                 detector.destroySession(attemptSessionId)
                 Log.w(TAG, "Board setup attempt $attempt failed", error)
                 // "No board found" arrives as an exception; timeouts and cancellation do not retry.
@@ -303,6 +321,7 @@ class BullTrackLiveRoundController(
             } ?: continue
             artifactStore.saveArtifacts(roundId, startUpdate.debugImages)
             val errorMessage = startUpdate.errorMessage
+            frameRecorder.recordStartFrame(attempt, firstFrame.bitmap, errorMessage ?: "board setup ok")
             if (errorMessage == null) {
                 sessionId = attemptSessionId
                 boardSetup = startUpdate
@@ -366,6 +385,7 @@ class BullTrackLiveRoundController(
                 loggedExposure = exposure
             }
             val decision = processNextFrame(frameIndex = frameIndex, frameBitmap = frame.bitmap)
+            frameRecorder.recordFrame(frameIndex, frame.bitmap, lastCaptureStartNs, decision.gateReason)
             captureNextImmediately = decision.captureNextImmediately
             if (decision.shouldStop) {
                 break
@@ -373,6 +393,7 @@ class BullTrackLiveRoundController(
             frameIndex += 1
         }
 
+        frameRecorder.finishCapture()
         finalizeRound(manualStop = stopRequested)
         stopRequested = false
         // The result is already emitted; a camera release failure must not fail the round.
@@ -440,7 +461,7 @@ class BullTrackLiveRoundController(
                 statusMessage = "第 $frameIndex 张图片处理失败: ${error.message}",
                 canRedetect = false,
             )
-            return FrameLoopDecision(shouldStop = false)
+            return FrameLoopDecision(shouldStop = false, gateReason = "process_failed: ${error.message}")
         }
 
         artifactStore.saveArtifacts(session.roundId, frameUpdate.gateDebugImages)
@@ -462,6 +483,7 @@ class BullTrackLiveRoundController(
                 captureNextImmediately = frameUpdate.gateReason == "yolo_count_increased_wait_next_frame" ||
                     frameUpdate.gateReason == "new_box_moved" ||
                     frameUpdate.gateReason.startsWith("alignment_low"),
+                gateReason = frameUpdate.gateReason,
             )
         }
 
@@ -489,7 +511,10 @@ class BullTrackLiveRoundController(
             statusMessage = statusMessage,
             canRedetect = false,
         )
-        return FrameLoopDecision(shouldStop = session.throws.size >= MAX_DARTS)
+        return FrameLoopDecision(
+            shouldStop = session.throws.size >= MAX_DARTS,
+            gateReason = frameUpdate.gateReason,
+        )
     }
 
     private fun finalizeRound(manualStop: Boolean) {
@@ -809,6 +834,8 @@ class BullTrackLiveRoundController(
     private data class FrameLoopDecision(
         val shouldStop: Boolean,
         val captureNextImmediately: Boolean = false,
+        // For the frame recorder, which keeps frames where the gate saw something.
+        val gateReason: String = "",
     )
 
     private data class RoundSession(

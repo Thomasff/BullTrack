@@ -11,17 +11,21 @@ jest.mock('../src/application/services/historyRepository', () => ({
 }));
 
 let mockNextThrows: ThrowResult[] = [];
+const mockFinishInputs: unknown[] = [];
 jest.mock('../src/native-bridge/bulltrack/bullTrackNative', () => ({
   bullTrackNativeModule: null,
   isRealBullTrackNativeBridgeAvailable: false,
   bullTrackNativeBridge: {
-    finishRound: async ({ roundId }: { roundId: string }) => ({
-      roundId,
-      status: 'finished',
-      statusMessage: 'done',
-      throws: mockNextThrows,
-      debugArtifacts: [],
-    }),
+    finishRound: async (input: { roundId: string }) => {
+      mockFinishInputs.push(input);
+      return {
+        roundId: input.roundId,
+        status: 'finished',
+        statusMessage: 'done',
+        throws: mockNextThrows,
+        debugArtifacts: [],
+      };
+    },
   },
 }));
 
@@ -74,6 +78,13 @@ test('manually edited throws override native detection on confirm', async () => 
 
   const board = useGameStore.getState().scoreBoard;
   expect(board?.players[0].score).toBe(301 - 62);
+  // A recorded round stores what the player confirmed.
+  const finishInput = mockFinishInputs[mockFinishInputs.length - 1] as {
+    confirmed: boolean;
+    editedThrows: ThrowResult[];
+  };
+  expect(finishInput.confirmed).toBe(true);
+  expect(finishInput.editedThrows.map(dart => dart.label)).toEqual(['T20', 'S1', 'S1']);
   expect(useGameStore.getState().throwsEdited).toBe(false);
 });
 

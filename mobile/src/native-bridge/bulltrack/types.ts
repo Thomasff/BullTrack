@@ -15,6 +15,8 @@ export interface StartLiveRoundInput {
   playerId: string;
   // Native debug images cost CPU and storage, so they follow the "show debug info" setting.
   debugImages: boolean;
+  // Developer recording mode: keep the round's raw frames for offline replay.
+  recordFrames: boolean;
 }
 
 export interface StartLiveRoundResult {
@@ -33,6 +35,10 @@ export interface ActionAcceptedResult {
 
 export interface FinishRoundInput {
   roundId: string;
+  // False when the round is only released; a recorded round then gets no confirmed result.
+  confirmed?: boolean;
+  // The player's corrected darts, stored with a recorded round.
+  editedThrows?: ThrowResult[] | null;
 }
 
 export interface FinishRoundResult {
