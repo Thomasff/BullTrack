@@ -17,8 +17,6 @@ export interface StartLiveRoundInput {
   debugImages: boolean;
   // Developer recording mode: keep the round's raw frames for offline replay.
   recordFrames: boolean;
-  // How long RN waited for its preview to stop first; only logged, in the round start timing.
-  handoffWaitMs?: number;
 }
 
 export interface StartLiveRoundResult {

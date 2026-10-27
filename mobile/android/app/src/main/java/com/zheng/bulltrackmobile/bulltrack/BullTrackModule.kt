@@ -64,8 +64,7 @@ class BullTrackModule(
         resolvePromise(promise) {
             val debugImages = request.hasKey("debugImages") && request.getBoolean("debugImages")
             val recordFrames = request.hasKey("recordFrames") && request.getBoolean("recordFrames")
-            val handoffWaitMs = if (request.hasKey("handoffWaitMs")) request.getDouble("handoffWaitMs").toLong() else 0L
-            controller.startLiveRound(debugImages, recordFrames, handoffWaitMs)
+            controller.startLiveRound(debugImages, recordFrames)
         }
     }
 

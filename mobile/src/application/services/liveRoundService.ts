@@ -273,7 +273,7 @@ export const updateLiveZoomRatio = async (zoomRatio: number) => {
   useGameStore.getState().setCameraStatus(readyState);
 };
 
-export const startLiveRound = async (handoffWaitMs = 0) => {
+export const startLiveRound = async () => {
   const state = useGameStore.getState();
   if (!state.selectedMode || !state.currentPlayerId) {
     throw new Error('Game session has not been configured.');
@@ -283,7 +283,6 @@ export const startLiveRound = async (handoffWaitMs = 0) => {
     playerId: state.currentPlayerId,
     debugImages: useSettingsStore.getState().showDebugInfo,
     recordFrames: useSettingsStore.getState().recordFrames,
-    handoffWaitMs,
   });
 };
 

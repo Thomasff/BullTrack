@@ -144,8 +144,7 @@ class BullTrackLiveRoundController(
         return currentCameraReadyState("已更新原生 round zoom")
     }
 
-    // handoffWaitMs: how long RN waited for its preview to stop before calling, for the timing log.
-    fun startLiveRound(debugImages: Boolean, recordFrames: Boolean, handoffWaitMs: Long): WritableMap {
+    fun startLiveRound(debugImages: Boolean, recordFrames: Boolean): WritableMap {
         val requestedNs = SystemClock.elapsedRealtimeNanos()
         ensureSupportedRuntime()
         ensureDetectorInitialized()
@@ -165,7 +164,7 @@ class BullTrackLiveRoundController(
         }
         roundJob = scope.launch(bridgeDispatcher) {
             runCatching {
-                runContinuousRound(roundId, requestedNs, handoffWaitMs)
+                runContinuousRound(roundId, requestedNs)
             }.onFailure { error ->
                 cleanupCurrentSession(destroySession = true)
                 releaseRoundOwnershipOnMain()
@@ -330,7 +329,7 @@ class BullTrackLiveRoundController(
         }
     }
 
-    private suspend fun runContinuousRound(roundId: String, requestedNs: Long, handoffWaitMs: Long) {
+    private suspend fun runContinuousRound(roundId: String, requestedNs: Long) {
         emitRoundState(
             phase = "starting",
             roundId = roundId,
@@ -385,7 +384,7 @@ class BullTrackLiveRoundController(
                 Log.w(TAG, "Board setup attempt $attempt failed", error)
                 // "No board found" arrives as an exception; timeouts and cancellation do not retry.
                 if (attempt == START_ROUND_ATTEMPTS || stopRequested || error is CancellationException) {
-                    logStartTiming(requestedNs, handoffWaitMs, bindMs, attemptTimings, "failed")
+                    logStartTiming(requestedNs, bindMs, attemptTimings, "failed")
                     throw error
                 }
                 null
@@ -406,11 +405,11 @@ class BullTrackLiveRoundController(
             Log.w(TAG, "Board setup attempt $attempt failed: $errorMessage")
             detector.destroySession(attemptSessionId)
             if (attempt == START_ROUND_ATTEMPTS || stopRequested) {
-                logStartTiming(requestedNs, handoffWaitMs, bindMs, attemptTimings, "failed")
+                logStartTiming(requestedNs, bindMs, attemptTimings, "failed")
                 error(errorMessage)
             }
         }
-        logStartTiming(requestedNs, handoffWaitMs, bindMs, attemptTimings, "ok")
+        logStartTiming(requestedNs, bindMs, attemptTimings, "ok")
 
         // From the right, dart tails stick out to the left of the board where the search area has
         // no room and darts get lost, so such a round is not started at all. The board setup still
@@ -686,15 +685,14 @@ class BullTrackLiveRoundController(
     // One line per round start: tap to ready, and where the time went.
     private fun logStartTiming(
         requestedNs: Long,
-        handoffWaitMs: Long,
         bindMs: Long,
         attemptTimings: List<String>,
         outcome: String,
     ) {
         Log.i(
             TAG,
-            "Round start timing ($outcome): total ${handoffWaitMs + elapsedMs(requestedNs)} ms = " +
-                "preview stop wait $handoffWaitMs ms + camera bind $bindMs ms + " +
+            "Round start timing ($outcome): total ${elapsedMs(requestedNs)} ms = " +
+                "camera bind $bindMs ms + " +
                 attemptTimings.joinToString(" + ") { "[$it]" },
         )
     }
