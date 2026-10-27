@@ -112,6 +112,14 @@ class CameraXManager : CameraManager {
     @Volatile
     private var afStableCount: Int = 0
 
+    // Consecutive results with AF locked (focused or not), counted only after an unlocked result
+    // since the last reset, so a lock left over from before a retry's cancel is not counted.
+    @Volatile
+    private var afLockedCount: Int = 0
+
+    @Volatile
+    private var afUnlockedSeen: Boolean = false
+
     private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
             session: CameraCaptureSession,
@@ -135,6 +143,17 @@ class CameraXManager : CameraManager {
                 afStableCount += 1
             } else {
                 afStableCount = 0
+            }
+
+            if (latestAfState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
+                latestAfState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED
+            ) {
+                if (afUnlockedSeen) {
+                    afLockedCount += 1
+                }
+            } else {
+                afUnlockedSeen = true
+                afLockedCount = 0
             }
         }
     }
@@ -400,7 +419,7 @@ class CameraXManager : CameraManager {
         applyRoundZoomBeforeCapture()
         val zoomMs = elapsedMs(stepStartNs)
         stepStartNs = SystemClock.elapsedRealtimeNanos()
-        val focusFinished = triggerCenterFocusAndMetering()
+        val focusOutcome = triggerCenterFocusAndMetering()
         val focusMs = elapsedMs(stepStartNs)
         stepStartNs = SystemClock.elapsedRealtimeNanos()
         val stabilized = waitForAutoStateStable()
@@ -421,7 +440,7 @@ class CameraXManager : CameraManager {
         } else {
             "自动对焦/测光等待超时，按当前状态拍摄"
         }
-        return "zoom $zoomMs ms, focus $focusMs ms${if (focusFinished) "" else " (timed out)"}, " +
+        return "zoom $zoomMs ms, focus $focusMs ms$focusOutcome, " +
             "settle $settleMs ms${if (stabilized) "" else " (timed out)"}, lock $lockMs ms"
     }
 
@@ -439,11 +458,13 @@ class CameraXManager : CameraManager {
         delay(ROUND_ZOOM_SETTLE_MS)
     }
 
-    // False when the focus action did not finish within FOCUS_METERING_TIMEOUT_MS. The action is
-    // left running (not cancelled), so focus can still settle during the wait that follows.
-    private suspend fun triggerCenterFocusAndMetering(): Boolean {
-        val camera = boundCamera ?: return true
-        val context = appContext ?: return true
+    // Returns a log note: "" when the action finished, " (af locked)" when the capture results
+    // already showed AF locked (on some phones the action reports back long after that), or
+    // " (timed out)" past FOCUS_METERING_TIMEOUT_MS. The action is left running (not cancelled),
+    // so focus can still settle during the wait that follows.
+    private suspend fun triggerCenterFocusAndMetering(): String {
+        val camera = boundCamera ?: return ""
+        val context = appContext ?: return ""
         val point = SurfaceOrientedMeteringPointFactory(1f, 1f)
             .createPoint(0.5f, 0.5f, AUTO_FOCUS_SIZE)
         val action = FocusMeteringAction.Builder(
@@ -453,16 +474,24 @@ class CameraXManager : CameraManager {
                 FocusMeteringAction.FLAG_AWB
         ).disableAutoCancel()
             .build()
+        afUnlockedSeen = false
+        afLockedCount = 0
         val future = camera.cameraControl.startFocusAndMetering(action)
         val done = CompletableDeferred<Unit>()
         future.addListener({ done.complete(Unit) }, ContextCompat.getMainExecutor(context))
-        val finished = withTimeoutOrNull(FOCUS_METERING_TIMEOUT_MS) { done.await() } != null
-        if (finished) {
+        val outcome = withTimeoutOrNull(FOCUS_METERING_TIMEOUT_MS) {
+            while (!done.isCompleted) {
+                if (afLockedCount >= AF_AE_STABLE_REQUIRED_COUNT) {
+                    return@withTimeoutOrNull " (af locked)"
+                }
+                delay(AF_AE_POLL_INTERVAL_MS)
+            }
             runCatching { future.get() }.onFailure { error ->
                 Log.w(TAG, "Focus and metering trigger failed", error)
             }
-        }
-        return finished
+            ""
+        } ?: " (timed out)"
+        return outcome
     }
 
     private suspend fun waitForAutoStateStable(): Boolean {
