@@ -91,6 +91,7 @@ export const GameScreen = ({ navigation }: Props) => {
     reopenedRound,
     completedRounds,
   } = useGameStore();
+  const previousStatusRef = useRef(status);
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
   const recordFrames = useSettingsStore(state => state.recordFrames);
   const artifactCount = useVisionDebugStore(state => state.artifacts.length);
@@ -189,13 +190,15 @@ export const GameScreen = ({ navigation }: Props) => {
     [currentThrows],
   );
   const isBusy = runningAction !== null;
-  // The native preview holds the camera while mounted, so it is only mounted while shown.
+  // The native preview holds the camera while mounted, so it is only mounted while shown. It stays
+  // mounted (under the board) through a round's start, so the round keeps the camera it opened and
+  // takes the preview stream off itself; a redetect, which also reports a starting round, does not
+  // bring it back.
   const shouldShowPreview =
     isFocused &&
     cameraPermissionGranted &&
     !!device &&
-    status === 'waitingForThrow' &&
-    !handoffInProgress;
+    (status === 'waitingForThrow' || (status === 'roundInProgress' && handoffInProgress));
   const zoomRange = useMemo(() => {
     const maxZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, device?.maxZoom ?? ZOOM_MAX));
     return {
@@ -219,11 +222,17 @@ export const GameScreen = ({ navigation }: Props) => {
     setPreviewZoomRatio(clamped);
   }, [zoomRange.max, zoomRange.min]);
 
+  // The handoff lasts until the empty-board first frame is in, or the round ends (failed) first.
   useEffect(() => {
-    if (status !== 'waitingForThrow') {
+    const previousStatus = previousStatusRef.current;
+    previousStatusRef.current = status;
+    if (
+      (status === 'roundInProgress' && captureReady) ||
+      (previousStatus === 'roundInProgress' && status !== 'roundInProgress')
+    ) {
       setHandoffInProgress(false);
     }
-  }, [status]);
+  }, [status, captureReady]);
 
   // An unmounted preview cannot report that it stopped.
   useEffect(() => {
@@ -303,8 +312,8 @@ export const GameScreen = ({ navigation }: Props) => {
     });
   };
 
-  // No wait for the preview to stop: hiding it unmounts the native preview, and both it and the
-  // round bind the camera on the main thread through the same native manager, so they run in order.
+  // The round takes over the camera the preview opened (no reopen): the preview stays mounted under
+  // the board until the first frame is in, and native code takes the preview stream off after it.
   const startRound = () => {
     setRunningAction('start');
     setHandoffInProgress(true);

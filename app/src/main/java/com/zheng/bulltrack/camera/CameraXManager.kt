@@ -206,19 +206,34 @@ class CameraXManager : CameraManager {
         bindCameraUseCases(bindPreview = false)
     }
 
+    // A round keeps the camera the idle preview already opened: reopening costs about 1.7 s (the
+    // open itself, then an initial focus scan during which no focus lock is taken). Binds capture
+    // only when nothing is bound.
+    fun bindCaptureForRound(lifecycleOwner: LifecycleOwner) {
+        if (boundCamera != null && imageCapture != null) {
+            Log.d(TAG, "bindCaptureForRound: keeping the open camera.")
+            return
+        }
+        bindCaptureOnly(lifecycleOwner)
+    }
+
     // Closes the camera when this preview view goes away, unless another binding (a round's
-    // capture-only one) has already replaced it.
+    // capture-only one) has already replaced it, or a round took the preview off and keeps the
+    // camera for its stills.
     fun detachPreview(previewView: PreviewView) {
         if (this.previewView !== previewView) {
             return
         }
         clearPreviewStreamObserver()
         this.previewView = null
+        previewRetryCount = 0
+        if (previewUseCase == null) {
+            return
+        }
         cameraProvider?.unbindAll()
         previewUseCase = null
         imageCapture = null
         boundCamera = null
-        previewRetryCount = 0
         _cameraState.value = readyState(
             isPreviewBound = false,
             statusMessage = "预览已关闭"
@@ -226,6 +241,11 @@ class CameraXManager : CameraManager {
     }
 
     override fun unbindPreview() {
+        // Binding changes must run on the main thread; a round takes its first frame elsewhere.
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { unbindPreview() }
+            return
+        }
         val provider = cameraProvider ?: return
         Log.d(TAG, "unbindPreview requested.")
         clearPreviewStreamObserver()
@@ -312,6 +332,13 @@ class CameraXManager : CameraManager {
         lockPhase = CameraLockPhase.IDLE
         lockReason = null
         reset3AState()
+        // A preview still on screen (the round failed before it was hidden) takes the camera back.
+        val view = previewView
+        val owner = previewLifecycleOwner
+        if (view != null && owner != null && view.isAttachedToWindow) {
+            bindPreview(owner, view)
+            return
+        }
         _cameraState.value = readyState(
             isPreviewBound = false,
             statusMessage = "原生 round capture 已释放，等待预览恢复"

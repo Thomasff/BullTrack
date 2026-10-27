@@ -529,7 +529,7 @@ class BullTrackLiveRoundController(
         val lifecycleOwner = reactContext.currentActivity as? LifecycleOwner
             ?: error("Current activity is not available for native camera capture.")
         withContext(Dispatchers.Main.immediate) {
-            cameraManager.bindCaptureOnly(lifecycleOwner)
+            cameraManager.bindCaptureForRound(lifecycleOwner)
         }
         val readyState = withTimeout(CAMERA_READY_TIMEOUT_MS) {
             cameraManager.cameraState.first { state ->
