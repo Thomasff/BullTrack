@@ -6,11 +6,21 @@ import { PlayerSetupScreen } from '../../ui/screens/PlayerSetupScreen';
 import { GameScreen } from '../../ui/screens/GameScreen';
 import { DebugScreen } from '../../ui/screens/DebugScreen';
 import { MatchDetailScreen } from '../../ui/screens/MatchDetailScreen';
+import { CurrentModeRulesButton, ModeRulesButton } from '../../ui/components/ModeRulesButton';
 import { colors } from '../../ui/theme/colors';
 import type { RootStackParamList } from './types';
 import { getModeCategory, getModeOption } from '../../domain/game/modeCatalog';
+import type { ModeOptionId } from '../../domain/game/modeCatalog';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+
+// Header ⓘ buttons that open the rules of the mode being set up or played.
+const renderOptionRules = (modeOptionId: ModeOptionId) => () => {
+  const option = getModeOption(modeOptionId);
+  return option ? <ModeRulesButton gameType={option.runtimeGameType} title={option.title} /> : null;
+};
+
+const renderCurrentModeRules = () => <CurrentModeRulesButton />;
 
 export const RootNavigator = () => (
   <Stack.Navigator
@@ -41,9 +51,14 @@ export const RootNavigator = () => (
       component={PlayerSetupScreen}
       options={({ route }) => ({
         title: getModeOption(route.params.modeOptionId)?.title ?? '信息设置',
+        headerRight: renderOptionRules(route.params.modeOptionId),
       })}
     />
-    <Stack.Screen name="Game" component={GameScreen} options={{ title: '对局' }} />
+    <Stack.Screen
+      name="Game"
+      component={GameScreen}
+      options={{ title: '对局', headerRight: renderCurrentModeRules }}
+    />
     <Stack.Screen name="Debug" component={DebugScreen} options={{ title: '调试图' }} />
     <Stack.Screen
       name="MatchDetail"
