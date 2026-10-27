@@ -62,10 +62,11 @@ test('saves the match to history when the game ends', async () => {
   const saved = mockSaveCompletedMatch.mock.calls[0][0] as {
     winnerIds: string[];
     rounds: Array<{ roundIndex: number }>;
-    players: Array<{ name: string }>;
+    players: Array<{ name: string; finalScore: number | null }>;
   };
   expect(saved.winnerIds).toEqual(['player-1']);
   expect(saved.players[0].name).toBe('Alice');
+  expect(saved.players[0].finalScore).toBe(0);
   expect(saved.rounds.map(round => round.roundIndex)).toEqual([1, 2]);
 });
 
@@ -203,11 +204,17 @@ test('team game: shared score, alternating teams, darts recorded per thrower', a
   expect(state().winnerId).toBe('team-1');
   const saved = mockSaveCompletedMatch.mock.calls[0][0] as {
     winnerIds: string[];
-    players: Array<{ id: string; teamIndex: number | null }>;
+    players: Array<{ id: string; teamIndex: number | null; finalScore: number | null }>;
     rounds: Array<{ playerId: string }>;
   };
   expect(saved.winnerIds).toEqual(['player-1', 'player-2']);
   expect(saved.players.map(player => player.teamIndex)).toEqual([0, 0, 1]);
+  // Each member carries the team's score.
+  expect(saved.players.map(player => player.finalScore)).toEqual([
+    0,
+    0,
+    state().scoreBoard?.players[1].score,
+  ]);
   expect(saved.rounds[4].playerId).toBe('player-1');
 
   // Undo brings the round back for the same team and thrower.

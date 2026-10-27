@@ -7,4 +7,5 @@ export type RootStackParamList = {
   Game: undefined;
   Debug: undefined;
   MatchDetail: { matchId: number };
+  PlayerDetail: { playerId: number };
 };

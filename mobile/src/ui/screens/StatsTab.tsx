@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme/colors';
-import { PlayerEditDialog } from '../components/PlayerEditDialog';
 import {
   listPlayerStats,
   listRecentMatches,
@@ -10,6 +9,7 @@ import type { PlayerStats, RecentMatchSummary } from '../../domain/history/types
 
 interface StatsTabProps {
   onOpenMatch: (matchId: number) => void;
+  onOpenPlayer: (playerId: number) => void;
 }
 
 export const formatMatchTime = (createdAt: number) => {
@@ -20,13 +20,11 @@ export const formatMatchTime = (createdAt: number) => {
   )}:${pad(date.getMinutes())}`;
 };
 
-export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
+export const StatsTab = ({ onOpenMatch, onOpenPlayer }: StatsTabProps) => {
   const [players, setPlayers] = useState<PlayerStats[]>([]);
   const [matches, setMatches] = useState<RecentMatchSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [editing, setEditing] = useState<PlayerStats | null>(null);
-  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -50,7 +48,7 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
     return () => {
       isMounted = false;
     };
-  }, [reloadKey]);
+  }, []);
 
   if (loading) {
     return <Text style={styles.empty}>正在读取…</Text>;
@@ -65,7 +63,7 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={styles.sectionTitle}>玩家</Text>
-      <Text style={styles.hint}>点玩家可改名、合并或删除；没填名字的「玩家 N」不计入统计。</Text>
+      <Text style={styles.hint}>点玩家查看详细统计或编辑；没填名字的「玩家 N」不计入统计。</Text>
       <View style={styles.card}>
         <View style={[styles.tableRow, styles.tableHeader]}>
           <Text style={[styles.cellName, styles.headerText]}>玩家</Text>
@@ -78,7 +76,7 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
         {players.map(player => (
           <Pressable
             key={player.playerId}
-            onPress={() => setEditing(player)}
+            onPress={() => onOpenPlayer(player.playerId)}
             style={({ pressed }) => [styles.tableRow, pressed && styles.pressed]}>
             <Text numberOfLines={1} style={styles.cellName}>
               {player.name}
@@ -112,15 +110,6 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
           </Pressable>
         ))}
       </View>
-
-      <PlayerEditDialog
-        player={editing}
-        onClose={() => setEditing(null)}
-        onChanged={() => {
-          setEditing(null);
-          setReloadKey(key => key + 1);
-        }}
-      />
     </ScrollView>
   );
 };

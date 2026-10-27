@@ -16,6 +16,8 @@ export interface CompletedMatchInput {
     name: string;
     // Team game only (0 = A 队).
     teamIndex?: number | null;
+    // The side's score on the final score board (a team member gets the team's).
+    finalScore?: number | null;
   }>;
   // Every winning person: one player, or all members of the winning team.
   winnerIds: string[];
@@ -67,4 +69,41 @@ export interface RecentMatchSummary {
   createdAt: number;
   playerCount: number;
   winnerName: string | null;
+}
+
+export interface PlayerModeStats {
+  mode: GameType | string;
+  modeLabel: string | null;
+  matchesPlayed: number;
+  wins: number;
+  // Highest final score in solo matches of a scoring mode (高分赛, Catch 40...); null otherwise.
+  bestScore: number | null;
+}
+
+export interface PlayerX01Stats {
+  average: number;
+  // Average of the first three rounds of each match.
+  first9Average: number;
+  count180: number;
+  // Highest winning round this player threw; null when they never checked out.
+  bestCheckout: number | null;
+}
+
+export interface PlayerTrendPoint {
+  matchId: number;
+  createdAt: number;
+  average: number;
+}
+
+export interface PlayerDetail {
+  playerId: number;
+  name: string;
+  matchesPlayed: number;
+  wins: number;
+  x01: PlayerX01Stats | null;
+  // Cricket marks per round over the cricket modes with fixed targets; null without such rounds.
+  cricketMpr: number | null;
+  modes: PlayerModeStats[];
+  // Three-dart average of the latest X01 matches, oldest first.
+  x01Trend: PlayerTrendPoint[];
 }

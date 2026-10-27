@@ -6,6 +6,7 @@ import { PlayerSetupScreen } from '../../ui/screens/PlayerSetupScreen';
 import { GameScreen } from '../../ui/screens/GameScreen';
 import { DebugScreen } from '../../ui/screens/DebugScreen';
 import { MatchDetailScreen } from '../../ui/screens/MatchDetailScreen';
+import { PlayerDetailScreen } from '../../ui/screens/PlayerDetailScreen';
 import { CurrentModeRulesButton, ModeRulesButton } from '../../ui/components/ModeRulesButton';
 import { colors } from '../../ui/theme/colors';
 import type { RootStackParamList } from './types';
@@ -64,6 +65,11 @@ export const RootNavigator = () => (
       name="MatchDetail"
       component={MatchDetailScreen}
       options={{ title: '比赛详情' }}
+    />
+    <Stack.Screen
+      name="PlayerDetail"
+      component={PlayerDetailScreen}
+      options={{ title: '玩家统计' }}
     />
   </Stack.Navigator>
 );

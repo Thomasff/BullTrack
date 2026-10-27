@@ -7,6 +7,7 @@ import {
   deleteMatch,
   deletePlayer,
   getMatchDetail,
+  getPlayerDetail,
   getSetting,
   listKnownPlayerNames,
   listPlayerStats,
@@ -204,4 +205,52 @@ test('unnamed guests are saved but left out of stats and the name list', async (
   expect(await listRecentMatches()).toHaveLength(1);
   expect(await statsOf('玩家 1')).toBeUndefined();
   expect(await listKnownPlayerNames()).not.toContain('玩家 1');
+});
+
+test('player detail: X01 averages and checkout, cricket MPR, best scores and trend', async () => {
+  await saveSampleMatch(1000);
+  await saveSampleMatch(2000);
+  await saveCompletedMatch({
+    mode: 'cricket',
+    modeLabel: 'Standard',
+    createdAt: 3000,
+    players: [{ id: 'player-1', name: 'Alice' }],
+    winnerIds: ['player-1'],
+    rounds: [
+      // 3 + 0 + 2 marks, then 1 mark.
+      { playerId: 'player-1', roundIndex: 1, throws: [T20, S1, createThrow('innerBull')] },
+      { playerId: 'player-1', roundIndex: 2, throws: [createThrow('single', 15)] },
+    ],
+  });
+  const saveHighScore = (createdAt: number, finalScore: number, teamIndex: number | null) =>
+    saveCompletedMatch({
+      mode: 'highScore',
+      modeLabel: '高分赛',
+      createdAt,
+      players: [{ id: 'player-1', name: 'Alice', teamIndex, finalScore }],
+      winnerIds: ['player-1'],
+      rounds: [{ playerId: 'player-1', roundIndex: 1, throws: [T20] }],
+    });
+  await saveHighScore(4000, 200, null);
+  await saveHighScore(5000, 150, null);
+  await saveHighScore(6000, 300, 0);
+
+  const alice = await statsOf('Alice');
+  const detail = await getPlayerDetail(alice!.playerId);
+  expect(detail).toMatchObject({ name: 'Alice', matchesPlayed: 6, wins: 6 });
+  expect(detail?.x01).toMatchObject({ count180: 2, bestCheckout: 121 });
+  expect(detail?.x01?.average).toBeCloseTo(150.5);
+  expect(detail?.x01?.first9Average).toBeCloseTo(150.5);
+  expect(detail?.cricketMpr).toBeCloseTo(3);
+  expect(detail?.modes.find(mode => mode.mode === 'highScore')).toMatchObject({
+    matchesPlayed: 3,
+    bestScore: 200,
+  });
+  expect(detail?.modes.find(mode => mode.mode === 'game301')?.bestScore).toBeNull();
+  expect(detail?.x01Trend.map(point => point.createdAt)).toEqual([1000, 2000]);
+
+  // Bob lost every X01 match, so he has no checkout.
+  const bob = await getPlayerDetail((await statsOf('Bob'))!.playerId);
+  expect(bob?.x01).toMatchObject({ average: 3, bestCheckout: null });
+  expect(await getPlayerDetail(9999)).toBeNull();
 });

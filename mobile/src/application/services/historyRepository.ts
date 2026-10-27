@@ -7,6 +7,8 @@ import type {
   CompletedMatchInput,
   MatchDetail,
   MatchDetailRound,
+  PlayerDetail,
+  PlayerModeStats,
   PlayerStats,
   RecentMatchSummary,
 } from '../../domain/history/types';
@@ -18,7 +20,7 @@ SQLite.enablePromise(true);
 
 const DATABASE_NAME = 'bulltrack_history.db';
 // All schema statements are idempotent, so older versions simply re-run them.
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 let databasePromise: Promise<SQLiteDatabase> | null = null;
 
@@ -82,6 +84,7 @@ const initializeDatabase = async (database: SQLiteDatabase) => {
       seat_index INTEGER NOT NULL,
       is_winner INTEGER NOT NULL DEFAULT 0,
       team_index INTEGER,
+      final_score INTEGER,
       FOREIGN KEY(match_id) REFERENCES matches(id),
       FOREIGN KEY(player_id) REFERENCES players(id),
       UNIQUE(match_id, player_id)
@@ -113,24 +116,23 @@ const initializeDatabase = async (database: SQLiteDatabase) => {
       value TEXT NOT NULL
     )`,
   );
-  // Schema v3: team games. Fresh installs get the column from CREATE TABLE above.
-  const matchPlayerColumns = await execute(database, 'PRAGMA table_info(match_players)');
-  const hasTeamIndex = Array.from(
-    { length: matchPlayerColumns.rows.length },
-    (_, index) => matchPlayerColumns.rows.item(index).name,
-  ).includes('team_index');
-  if (!hasTeamIndex) {
-    await execute(database, 'ALTER TABLE match_players ADD COLUMN team_index INTEGER');
-  }
+  // Columns added after v2. Fresh installs get them from CREATE TABLE above.
+  const addColumnIfMissing = async (table: string, column: string, definition: string) => {
+    const columns = await execute(database, `PRAGMA table_info(${table})`);
+    const exists = Array.from(
+      { length: columns.rows.length },
+      (_, index) => columns.rows.item(index).name,
+    ).includes(column);
+    if (!exists) {
+      await execute(database, `ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
+  };
+  // Schema v3: team games.
+  await addColumnIfMissing('match_players', 'team_index', 'INTEGER');
   // Schema v4: a deleted player is only hidden, so the matches they played stay intact.
-  const playerColumns = await execute(database, 'PRAGMA table_info(players)');
-  const hasHidden = Array.from(
-    { length: playerColumns.rows.length },
-    (_, index) => playerColumns.rows.item(index).name,
-  ).includes('hidden');
-  if (!hasHidden) {
-    await execute(database, 'ALTER TABLE players ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0');
-  }
+  await addColumnIfMissing('players', 'hidden', 'INTEGER NOT NULL DEFAULT 0');
+  // Schema v5: final score for best results; matches saved before stay null.
+  await addColumnIfMissing('match_players', 'final_score', 'INTEGER');
   await execute(
     database,
     'CREATE INDEX IF NOT EXISTS idx_matches_created_at ON matches(created_at)',
@@ -238,12 +240,13 @@ export const saveCompletedMatch = async (
               return;
             }
 
-            executeTransactionSql(transaction, 'INSERT INTO match_players (match_id, player_id, seat_index, is_winner, team_index) VALUES (?, ?, ?, ?, ?)', [
+            executeTransactionSql(transaction, 'INSERT INTO match_players (match_id, player_id, seat_index, is_winner, team_index, final_score) VALUES (?, ?, ?, ?, ?, ?)', [
               matchId,
               databasePlayerId,
               index,
               input.winnerIds.includes(player.id) ? 1 : 0,
               player.teamIndex ?? null,
+              player.finalScore ?? null,
             ]);
           });
           insertThrows();
@@ -550,6 +553,185 @@ export const listPlayerStats = async (): Promise<PlayerStats[]> => {
       bestRound: toNullableNumber(row.best_round),
     };
   }).filter(player => !isDefaultPlayerName(player.name));
+};
+
+// Modes whose final score is a result worth a personal best.
+const BEST_SCORE_MODES = [
+  'highScore',
+  'darts99',
+  'shanghai',
+  'halfIt',
+  'bermuda',
+  'hammerCricket',
+  'catch40',
+  'checkout4160',
+];
+
+// Cricket modes with fixed targets, so marks can be counted from the saved throws.
+// Value = lowest number; 20 and the bull always count.
+const MPR_TARGETS: Record<string, number> = {
+  cricket: 15,
+  cricketNoScore: 15,
+  cutThroat: 15,
+  tactics: 10,
+};
+
+const X01_TREND_LENGTH = 10;
+
+const average = (values: number[]) =>
+  values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+
+export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | null> => {
+  const database = await getDatabase();
+  const playerResult = await execute(database, 'SELECT name FROM players WHERE id = ?', [playerId]);
+  if (playerResult.rows.length === 0) {
+    return null;
+  }
+
+  const matchResult = await execute(
+    database,
+    `SELECT matches.id, matches.mode, matches.mode_label, matches.created_at,
+      match_players.is_winner, match_players.team_index, match_players.final_score
+    FROM match_players
+    JOIN matches ON matches.id = match_players.match_id
+    WHERE match_players.player_id = ?
+    ORDER BY matches.created_at`,
+    [playerId],
+  );
+  const matches = Array.from({ length: matchResult.rows.length }, (_, index) => {
+    const row = matchResult.rows.item(index);
+    return {
+      id: Number(row.id),
+      mode: String(row.mode),
+      modeLabel: row.mode_label === null ? null : String(row.mode_label),
+      createdAt: Number(row.created_at),
+      isWinner: Number(row.is_winner) === 1,
+      isTeam: row.team_index !== null && row.team_index !== undefined,
+      finalScore: toNullableNumber(row.final_score),
+    };
+  });
+
+  // This player's rounds per match, in throwing order.
+  const throwResult = await execute(
+    database,
+    `SELECT match_id, round_index, score, multiplier, target FROM throws
+    WHERE player_id = ?
+    ORDER BY match_id, round_index, dart_index`,
+    [playerId],
+  );
+  type SavedDart = { score: number; multiplier: number; target: string };
+  const roundsByMatch = new Map<number, Map<number, SavedDart[]>>();
+  for (let index = 0; index < throwResult.rows.length; index += 1) {
+    const row = throwResult.rows.item(index);
+    const matchId = Number(row.match_id);
+    const rounds = roundsByMatch.get(matchId) ?? new Map();
+    roundsByMatch.set(matchId, rounds);
+    const roundIndex = Number(row.round_index);
+    const darts = rounds.get(roundIndex) ?? [];
+    rounds.set(roundIndex, darts);
+    darts.push({
+      score: Number(row.score ?? 0),
+      multiplier: Number(row.multiplier ?? 0),
+      target: String(row.target ?? 'miss'),
+    });
+  }
+  const roundTotals = (matchId: number) =>
+    [...(roundsByMatch.get(matchId)?.values() ?? [])].map(darts =>
+      darts.reduce((sum, dart) => sum + dart.score, 0),
+    );
+
+  // The last saved round of each match (rounds are saved in throwing order), for checkouts.
+  const lastRoundResult = await execute(
+    database,
+    `SELECT match_id, player_id, round_index FROM throws
+    WHERE id IN (
+      SELECT MAX(id) FROM throws
+      WHERE match_id IN (SELECT match_id FROM match_players WHERE player_id = ?)
+      GROUP BY match_id
+    )`,
+    [playerId],
+  );
+  const finishingRound = new Map<number, number>();
+  for (let index = 0; index < lastRoundResult.rows.length; index += 1) {
+    const row = lastRoundResult.rows.item(index);
+    if (Number(row.player_id) === playerId) {
+      finishingRound.set(Number(row.match_id), Number(row.round_index));
+    }
+  }
+
+  const x01Matches = matches.filter(match => X01_MODES.includes(match.mode));
+  const x01Rounds = x01Matches.flatMap(match => roundTotals(match.id));
+  const checkouts = x01Matches
+    .filter(match => match.isWinner && finishingRound.has(match.id))
+    .map(match =>
+      (roundsByMatch.get(match.id)?.get(finishingRound.get(match.id)!) ?? []).reduce(
+        (sum, dart) => sum + dart.score,
+        0,
+      ),
+    );
+  const x01 =
+    x01Rounds.length > 0
+      ? {
+          average: average(x01Rounds),
+          first9Average: average(x01Matches.flatMap(match => roundTotals(match.id).slice(0, 3))),
+          count180: x01Rounds.filter(total => total === 180).length,
+          bestCheckout: checkouts.length > 0 ? Math.max(...checkouts) : null,
+        }
+      : null;
+
+  const cricketMarks = matches
+    .filter(match => MPR_TARGETS[match.mode] !== undefined)
+    .flatMap(match =>
+      [...(roundsByMatch.get(match.id)?.values() ?? [])].map(darts =>
+        darts.reduce((sum, dart) => {
+          if (dart.target === 'IB' || dart.target === 'OB') {
+            return sum + dart.multiplier;
+          }
+          const sector = Number(dart.target);
+          return sector >= MPR_TARGETS[match.mode] && sector <= 20 ? sum + dart.multiplier : sum;
+        }, 0),
+      ),
+    );
+
+  const modes: PlayerModeStats[] = [];
+  matches.forEach(match => {
+    let stats = modes.find(item => item.mode === match.mode);
+    if (!stats) {
+      stats = {
+        mode: match.mode,
+        modeLabel: match.modeLabel,
+        matchesPlayed: 0,
+        wins: 0,
+        bestScore: null,
+      };
+      modes.push(stats);
+    }
+    stats.matchesPlayed += 1;
+    stats.wins += match.isWinner ? 1 : 0;
+    // Team scores are shared, so only solo matches count as a personal best.
+    if (BEST_SCORE_MODES.includes(match.mode) && !match.isTeam && match.finalScore !== null) {
+      stats.bestScore = Math.max(stats.bestScore ?? match.finalScore, match.finalScore);
+    }
+  });
+  modes.sort((left, right) => right.matchesPlayed - left.matchesPlayed);
+
+  return {
+    playerId,
+    name: String(playerResult.rows.item(0).name),
+    matchesPlayed: matches.length,
+    wins: matches.filter(match => match.isWinner).length,
+    x01,
+    cricketMpr: cricketMarks.length > 0 ? average(cricketMarks) : null,
+    modes,
+    x01Trend: x01Matches
+      .filter(match => roundTotals(match.id).length > 0)
+      .slice(-X01_TREND_LENGTH)
+      .map(match => ({
+        matchId: match.id,
+        createdAt: match.createdAt,
+        average: average(roundTotals(match.id)),
+      })),
+  };
 };
 
 export const getSetting = async (key: string): Promise<string | null> => {

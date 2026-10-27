@@ -14,8 +14,8 @@ interface PlayerEditDialogProps {
   // null keeps the dialog closed.
   player: { playerId: number; name: string } | null;
   onClose: () => void;
-  // Called after a rename, merge or delete so the caller can reload.
-  onChanged: () => void;
+  // Called after a rename, merge or delete; after the last two the player is gone.
+  onChanged: (change: 'renamed' | 'merged' | 'deleted') => void;
 }
 
 type Step = 'edit' | 'confirmMerge' | 'confirmDelete';
@@ -68,7 +68,7 @@ export const PlayerEditDialog = ({ player, onClose, onChanged }: PlayerEditDialo
         setError(null);
         setStep('confirmMerge');
       } else {
-        onChanged();
+        onChanged('renamed');
       }
     });
   };
@@ -83,7 +83,7 @@ export const PlayerEditDialog = ({ player, onClose, onChanged }: PlayerEditDialo
         setStep('edit');
         setError(`「${player.name}」和「${trimmed}」在同一场比赛里出现过，不能合并`);
       } else {
-        onChanged();
+        onChanged('merged');
       }
     });
   };
@@ -94,7 +94,7 @@ export const PlayerEditDialog = ({ player, onClose, onChanged }: PlayerEditDialo
     }
     run(async () => {
       await deletePlayer(player.playerId);
-      onChanged();
+      onChanged('deleted');
     });
   };
 

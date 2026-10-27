@@ -342,11 +342,17 @@ export const confirmCurrentRound = async () => {
         mode,
         modeLabel: latestState.selectedModeLabel,
         createdAt: latestState.gameStartedAt ?? Date.now(),
-        players: latestState.players.map(player => ({
-          id: player.id,
-          name: player.name,
-          teamIndex: player.teamIndex ?? null,
-        })),
+        players: latestState.players.map(player => {
+          const sideId =
+            latestState.teams?.find(team => team.memberIds.includes(player.id))?.id ?? player.id;
+          return {
+            id: player.id,
+            name: player.name,
+            teamIndex: player.teamIndex ?? null,
+            finalScore:
+              latestState.scoreBoard?.players.find(side => side.id === sideId)?.score ?? null,
+          };
+        }),
         // A winning team wins for every member.
         winnerIds: appliedRound.winnerId
           ? latestState.teams?.find(team => team.id === appliedRound.winnerId)?.memberIds ?? [
