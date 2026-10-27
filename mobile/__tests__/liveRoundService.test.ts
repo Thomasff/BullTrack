@@ -1,8 +1,6 @@
 import { createThrow } from '../src/domain/game/throws';
 import type { ThrowResult } from '../src/domain/game/types';
 
-jest.mock('react-native-vision-camera', () => ({ Camera: {} }));
-
 const mockSaveCompletedMatch = jest.fn(async (_input: unknown) => 42);
 const mockDeleteMatch = jest.fn(async (_matchId: number) => undefined);
 jest.mock('../src/application/services/historyRepository', () => ({

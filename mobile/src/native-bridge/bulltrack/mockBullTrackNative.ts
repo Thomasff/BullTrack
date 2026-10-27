@@ -54,7 +54,7 @@ const accepted = (statusMessage: string): ActionAcceptedResult => ({
 });
 
 export const mockBullTrackNativeBridge: BullTrackNativeBridge = {
-  prepareRoundCamera: async () => readyState,
+  prepareRoundCamera: async () => ({ ...readyState, hasBackCamera: true, maxZoomRatio: 4 }),
   startLiveRound: async (_input: StartLiveRoundInput): Promise<StartLiveRoundResult> => ({
     accepted: true,
     statusMessage: 'Mock live round started.',

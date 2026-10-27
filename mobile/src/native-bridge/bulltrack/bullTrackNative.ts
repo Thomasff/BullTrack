@@ -3,6 +3,7 @@ import { mockBullTrackNativeBridge } from './mockBullTrackNative';
 import type {
   ActionAcceptedResult,
   BullTrackNativeBridge,
+  BackCameraInfo,
   CameraReadyState,
   DebugRoundSummary,
   FinishRoundInput,
@@ -18,7 +19,9 @@ export const bullTrackNativeModule = NativeBullTrackModule;
 const nativeBridge: BullTrackNativeBridge | null = bullTrackNativeModule
   ? {
       prepareRoundCamera: async () =>
-        bullTrackNativeModule.prepareRoundCamera() as Promise<CameraReadyState>,
+        bullTrackNativeModule.prepareRoundCamera() as Promise<
+          CameraReadyState & BackCameraInfo
+        >,
       startLiveRound: async (input: StartLiveRoundInput) =>
         bullTrackNativeModule.startLiveRound(input) as Promise<StartLiveRoundResult>,
       stopLiveRound: async () =>

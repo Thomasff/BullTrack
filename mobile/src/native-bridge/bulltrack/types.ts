@@ -10,6 +10,12 @@ export interface CameraReadyState {
   lockReason?: string | null;
 }
 
+// Known once the Game screen has prepared the camera.
+export interface BackCameraInfo {
+  hasBackCamera: boolean;
+  maxZoomRatio: number;
+}
+
 export interface StartLiveRoundInput {
   gameMode: GameType;
   playerId: string;
@@ -68,7 +74,7 @@ export type SoundCue =
   | 'innerBull';
 
 export interface BullTrackNativeBridge {
-  prepareRoundCamera(): Promise<CameraReadyState>;
+  prepareRoundCamera(): Promise<CameraReadyState & BackCameraInfo>;
   startLiveRound(input: StartLiveRoundInput): Promise<StartLiveRoundResult>;
   stopLiveRound(): Promise<ActionAcceptedResult>;
   redetectCurrentRound(input: RedetectCurrentRoundInput): Promise<ActionAcceptedResult>;

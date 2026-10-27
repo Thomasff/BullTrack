@@ -1,8 +1,8 @@
 import {
   NativeEventEmitter,
+  PermissionsAndroid,
   type EmitterSubscription,
 } from 'react-native';
-import { Camera } from 'react-native-vision-camera';
 import {
   bullTrackNativeBridge,
   bullTrackNativeModule,
@@ -223,17 +223,17 @@ export const teardownBullTrackSubscriptions = () => {
 };
 
 export const requestCameraPermission = async (): Promise<boolean> => {
-  const currentStatus = await Camera.getCameraPermissionStatus();
-  const nextStatus =
-    currentStatus === 'granted' ? currentStatus : await Camera.requestCameraPermission();
-  const isGranted = nextStatus === 'granted';
+  const permission = PermissionsAndroid.PERMISSIONS.CAMERA;
+  const isGranted =
+    (await PermissionsAndroid.check(permission)) ||
+    (await PermissionsAndroid.request(permission)) === PermissionsAndroid.RESULTS.GRANTED;
   useGameStore.getState().setCameraPermissionGranted(isGranted);
   return isGranted;
 };
 
 // Re-reads the permission without prompting, e.g. after returning from system settings.
 export const refreshCameraPermission = async (): Promise<boolean> => {
-  const isGranted = (await Camera.getCameraPermissionStatus()) === 'granted';
+  const isGranted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.CAMERA);
   useGameStore.getState().setCameraPermissionGranted(isGranted);
   return isGranted;
 };
@@ -265,7 +265,8 @@ export const prepareLiveCamera = async () => {
     lockPhase: 'IDLE',
     lockReason: null,
   });
-  await bullTrackNativeBridge.prepareRoundCamera();
+  const { hasBackCamera, maxZoomRatio } = await bullTrackNativeBridge.prepareRoundCamera();
+  useGameStore.setState({ backCamera: { hasBackCamera, maxZoomRatio } });
 };
 
 export const updateLiveZoomRatio = async (zoomRatio: number) => {

@@ -9,6 +9,7 @@ import type {
   ThrowResult,
 } from '../../domain/game/types';
 import type { CompletedRoundRecord } from '../../domain/history/types';
+import type { BackCameraInfo } from '../../native-bridge/bulltrack/types';
 import { getDefaultPlayerName } from '../../domain/game/players';
 import {
   buildTeams,
@@ -44,6 +45,8 @@ interface GameStoreState {
   statusMessage: string;
   errorMessage: string | null;
   cameraPermissionGranted: boolean;
+  // null until the camera has been prepared once.
+  backCamera: BackCameraInfo | null;
   cameraStatus: CameraStatus;
   roundId: string | null;
   canRedetect: boolean;
@@ -111,6 +114,7 @@ const initialState = {
   statusMessage: '选择模式并开始新游戏',
   errorMessage: null as string | null,
   cameraPermissionGranted: false,
+  backCamera: null as BackCameraInfo | null,
   cameraStatus: initialCameraStatus,
   roundId: null as string | null,
   canRedetect: false,

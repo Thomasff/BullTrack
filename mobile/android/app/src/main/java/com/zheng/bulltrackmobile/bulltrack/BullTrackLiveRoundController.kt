@@ -2,6 +2,8 @@ package com.zheng.bulltrackmobile.bulltrack
 
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
@@ -122,7 +124,32 @@ class BullTrackLiveRoundController(
     suspend fun prepareRoundCamera(): WritableMap {
         cameraManager.initialize(appContext)
         warmUpDetector()
-        return currentCameraReadyState("原生相机负责预览与连续检测")
+        return currentCameraReadyState("原生相机负责预览与连续检测").apply {
+            putBackCameraInfo(this)
+        }
+    }
+
+    // What the Game screen needs before the preview opens: whether there is a back camera, and its
+    // zoom limit. CameraX's default back camera is the first one listed facing back.
+    private fun putBackCameraInfo(map: WritableMap) {
+        val systemCameras = appContext.getSystemService(CameraManager::class.java)
+        val characteristics = runCatching {
+            systemCameras.cameraIdList.asSequence()
+                .map(systemCameras::getCameraCharacteristics)
+                .firstOrNull {
+                    it.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+                }
+        }.onFailure { Log.w(TAG, "Back camera lookup failed", it) }.getOrNull()
+        val zoomRange = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            characteristics?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.upper
+        } else {
+            null
+        }
+        val maxZoomRatio = zoomRange
+            ?: characteristics?.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM)
+            ?: 1f
+        map.putBoolean("hasBackCamera", characteristics != null)
+        map.putDouble("maxZoomRatio", maxZoomRatio.toDouble())
     }
 
     // Loads the model and builds its GPU programs once per process while the player is still

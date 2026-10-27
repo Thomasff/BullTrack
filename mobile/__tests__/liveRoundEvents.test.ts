@@ -11,7 +11,6 @@ jest.mock('react-native', () => ({
     }
   },
 }));
-jest.mock('react-native-vision-camera', () => ({ Camera: {} }));
 jest.mock('../src/application/services/historyRepository', () => ({
   saveCompletedMatch: async () => undefined,
 }));

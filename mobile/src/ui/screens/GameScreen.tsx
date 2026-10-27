@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { useCameraDevice } from 'react-native-vision-camera';
 import {
   abandonCurrentRound,
   confirmCurrentRound,
@@ -65,7 +64,6 @@ export const GameScreen = ({ navigation }: Props) => {
   const latestZoomRef = useRef(previewZoomRatio);
   const zoomDragStartRef = useRef({ pageY: 0, zoomRatio: previewZoomRatio });
   const isFocused = useIsFocused();
-  const device = useCameraDevice('back');
 
   const {
     status,
@@ -82,6 +80,7 @@ export const GameScreen = ({ navigation }: Props) => {
     statusMessage,
     errorMessage,
     cameraPermissionGranted,
+    backCamera,
     cameraStatus,
     canRedetect,
     setCameraStatus,
@@ -91,6 +90,10 @@ export const GameScreen = ({ navigation }: Props) => {
     reopenedRound,
     completedRounds,
   } = useGameStore();
+  // backCamera stays null until the camera has been prepared; only a known miss shows the message.
+  const hasBackCamera = backCamera?.hasBackCamera === true;
+  const backCameraMissing = backCamera?.hasBackCamera === false;
+  const maxZoomRatio = backCamera?.maxZoomRatio;
   const previousStatusRef = useRef(status);
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
   const recordFrames = useSettingsStore(state => state.recordFrames);
@@ -141,7 +144,7 @@ export const GameScreen = ({ navigation }: Props) => {
       return;
     }
 
-    if (!device) {
+    if (backCameraMissing) {
       setPreviewReady(false);
       setCameraStatus({
         isReady: false,
@@ -171,7 +174,7 @@ export const GameScreen = ({ navigation }: Props) => {
       lockPhase: 'IDLE',
       lockReason: null,
     });
-  }, [cameraPermissionGranted, device, previewReady, setCameraStatus]);
+  }, [backCameraMissing, cameraPermissionGranted, previewReady, setCameraStatus]);
 
   // The person about to throw; in a team game currentPlayerId is the team.
   const currentThrowerId = getCurrentThrowerId({ teams, scoreBoard, currentPlayerId });
@@ -197,18 +200,18 @@ export const GameScreen = ({ navigation }: Props) => {
   const shouldShowPreview =
     isFocused &&
     cameraPermissionGranted &&
-    !!device &&
+    hasBackCamera &&
     (status === 'waitingForThrow' || (status === 'roundInProgress' && handoffInProgress));
   const zoomRange = useMemo(() => {
-    const maxZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, device?.maxZoom ?? ZOOM_MAX));
+    const maxZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, maxZoomRatio ?? ZOOM_MAX));
     return {
       min: ZOOM_MIN,
       max: maxZoom,
     };
-  }, [device]);
+  }, [maxZoomRatio]);
   const canAdjustZoom =
     cameraPermissionGranted &&
-    !!device &&
+    hasBackCamera &&
     previewReady &&
     status === 'waitingForThrow' &&
     !isBusy &&
@@ -471,7 +474,7 @@ export const GameScreen = ({ navigation }: Props) => {
         style={styles.previewFrame}
         collapsable={false}
         onLayout={event => setFrameWidth(Math.round(event.nativeEvent.layout.width))}>
-        {cameraPermissionGranted && device ? (
+        {cameraPermissionGranted && !backCameraMissing ? (
           shouldShowPreview ? (
             <BullTrackPreview
               style={styles.preview}
@@ -633,7 +636,7 @@ export const GameScreen = ({ navigation }: Props) => {
               <SecondaryButton
                 label={runningAction === 'redetect' ? '正在重新识别…' : '重新识别'}
                 onPress={() => runAction('redetect', redetectCurrentRound)}
-                disabled={isBusy || !canRedetect || !device}
+                disabled={isBusy || !canRedetect || !hasBackCamera}
               />
             )}
           </>
@@ -642,7 +645,7 @@ export const GameScreen = ({ navigation }: Props) => {
             <PrimaryButton
               label={runningAction === 'start' ? '正在启动…' : '开始本轮'}
               onPress={startRound}
-              disabled={isBusy || !cameraPermissionGranted || !device || !previewReady}
+              disabled={isBusy || !cameraPermissionGranted || !hasBackCamera || !previewReady}
             />
             {undoButton}
           </>

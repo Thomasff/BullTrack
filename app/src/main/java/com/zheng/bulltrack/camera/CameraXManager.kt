@@ -89,6 +89,9 @@ class CameraXManager : CameraManager {
     private var lockedZoomRatioForRound: Float? = null
 
     private var currentRoundConfig: RoundCameraConfig? = null
+    // Focus, exposure and white balance are all held as metered for this round's first frame.
+    @Volatile
+    private var meteringHeld = false
     private var lockPhase: CameraLockPhase = CameraLockPhase.IDLE
     private var lockReason: String? = null
 
@@ -278,10 +281,17 @@ class CameraXManager : CameraManager {
     override fun getZoomRatio(): Float = currentZoomRatio
 
     override suspend fun captureFirstFrameForRound(): CapturedFrame {
-        lockedZoomRatioForRound = currentZoomRatio
-        lockPhase = CameraLockPhase.METERING
-        lockReason = "本轮使用自动对焦/测光稳定后拍摄"
-        val meteringTiming = prepareAutoCapture()
+        // A retry (the previous frame set up no board) keeps a fully held focus and exposure and only
+        // takes a new still: metering again would have the capture session, rebuilt when the preview
+        // stream came off, scan for over a second first.
+        val meteringTiming = if (meteringHeld) {
+            "metering kept"
+        } else {
+            lockedZoomRatioForRound = currentZoomRatio
+            lockPhase = CameraLockPhase.METERING
+            lockReason = "本轮使用自动对焦/测光稳定后拍摄"
+            prepareAutoCapture()
+        }
         val captureStartNs = SystemClock.elapsedRealtimeNanos()
         val capturedFrame = takePicture()
         Log.i(
@@ -310,6 +320,7 @@ class CameraXManager : CameraManager {
     }
 
     override fun endRoundCapture() {
+        meteringHeld = false
         currentRoundConfig = null
         lockedZoomRatioForRound = null
         lockPhase = CameraLockPhase.IDLE
@@ -423,10 +434,9 @@ class CameraXManager : CameraManager {
             CaptureRequest.CONTROL_AE_MODE,
             CaptureRequest.CONTROL_AE_MODE_ON
         )
-        extender.setCaptureRequestOption(
-            CaptureRequest.CONTROL_AF_MODE,
-            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-        )
+        // The AF mode is left to CameraX (continuous picture unless a focus action runs): the
+        // round turns AF off through Camera2CameraControl, and CameraX 1.3 rejects an option that
+        // is also set here.
         return builder.build()
     }
 
@@ -440,10 +450,7 @@ class CameraXManager : CameraManager {
             CaptureRequest.CONTROL_AE_MODE,
             CaptureRequest.CONTROL_AE_MODE_ON
         )
-        extender.setCaptureRequestOption(
-            CaptureRequest.CONTROL_AF_MODE,
-            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-        )
+        // AF mode left to CameraX, as in buildPreview.
 
         return builder.build()
     }
@@ -464,7 +471,8 @@ class CameraXManager : CameraManager {
 
     // Returns how long each step took, for the round timing log.
     private suspend fun prepareAutoCapture(): String {
-        // A retried first frame meters again from scratch.
+        // A retried first frame meters again from scratch. The zoom step below waits for its
+        // request to apply, so the continuous AF set here is in place before the focus trigger.
         unlockAutoControls()
         reset3AState()
         var stepStartNs = SystemClock.elapsedRealtimeNanos()
@@ -596,13 +604,15 @@ class CameraXManager : CameraManager {
         ) ?: 0f) > 0f && cameraInfo.getCameraCharacteristic(
             CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES
         )?.contains(CaptureRequest.CONTROL_AF_MODE_OFF) == true
-        if (afLocked && focusDistance != null && manualFocus) {
+        val holdFocus = afLocked && focusDistance != null && manualFocus
+        if (holdFocus) {
             options.setCaptureRequestOption(
                 CaptureRequest.CONTROL_AF_MODE,
                 CaptureRequest.CONTROL_AF_MODE_OFF
             )
-            options.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance)
+            options.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance!!)
         }
+        meteringHeld = holdFocus && lockExposure
         runCatching {
             Camera2CameraControl.from(camera.cameraControl).setCaptureRequestOptions(options.build()).await()
         }.onFailure { error ->
@@ -610,10 +620,20 @@ class CameraXManager : CameraManager {
         }
     }
 
+    // Back to auto exposure and white balance, and continuous AF: in that mode the next focus
+    // trigger locks where the lens already is (about 0.3 s), while the auto mode CameraX would use
+    // for a focus action scans again (over 1 s).
     private fun unlockAutoControls() {
+        meteringHeld = false
         val camera = boundCamera ?: return
+        val options = CaptureRequestOptions.Builder()
+            .setCaptureRequestOption(
+                CaptureRequest.CONTROL_AF_MODE,
+                CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+            )
+            .build()
         runCatching {
-            Camera2CameraControl.from(camera.cameraControl).clearCaptureRequestOptions()
+            Camera2CameraControl.from(camera.cameraControl).setCaptureRequestOptions(options)
             camera.cameraControl.cancelFocusAndMetering()
         }.onFailure { error ->
             Log.w(TAG, "Exposure/white balance unlock failed", error)
