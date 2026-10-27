@@ -36,6 +36,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.Observer
 import com.google.common.util.concurrent.ListenableFuture
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -60,8 +61,6 @@ class CameraXManager : CameraManager {
         // The focus action itself has no limit of ours; past this the frame is taken as it is (the
         // settle wait below still runs), instead of keeping the player waiting in poor light.
         private const val FOCUS_METERING_TIMEOUT_MS = 1_000L
-        // Past this with no sign of the focus action (no active scan, no lock), it is sent again.
-        private const val FOCUS_RETRIGGER_AFTER_MS = 500L
         private const val AF_AE_POLL_INTERVAL_MS = 50L
         private const val AF_AE_STABLE_REQUIRED_COUNT = 2
         private const val AUTO_FOCUS_SIZE = 0.2f
@@ -123,10 +122,6 @@ class CameraXManager : CameraManager {
     @Volatile
     private var afUnlockedSeen: Boolean = false
 
-    // Set once a result shows AF actively scanning, i.e. the focus action reached the camera.
-    @Volatile
-    private var afScanSeen: Boolean = false
-
     private val captureCallback = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
             session: CameraCaptureSession,
@@ -161,10 +156,6 @@ class CameraXManager : CameraManager {
             } else {
                 afUnlockedSeen = true
                 afLockedCount = 0
-            }
-
-            if (latestAfState == CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN) {
-                afScanSeen = true
             }
         }
     }
@@ -481,11 +472,11 @@ class CameraXManager : CameraManager {
 
     // Returns a log note: "" when the action finished, " (af locked)" when the capture results
     // already showed AF locked (on some phones the action reports back long after that), or
-    // " (timed out)" past FOCUS_METERING_TIMEOUT_MS, plus " (retriggered)" when it was sent twice.
-    // The action is left running (not cancelled), so focus can still settle during the wait that
-    // follows.
+    // " (timed out)" past FOCUS_METERING_TIMEOUT_MS. The action is left running (not cancelled),
+    // so focus can still settle during the wait that follows.
     private suspend fun triggerCenterFocusAndMetering(): String {
         val camera = boundCamera ?: return ""
+        val context = appContext ?: return ""
         val point = SurfaceOrientedMeteringPointFactory(1f, 1f)
             .createPoint(0.5f, 0.5f, AUTO_FOCUS_SIZE)
         val action = FocusMeteringAction.Builder(
@@ -497,23 +488,13 @@ class CameraXManager : CameraManager {
             .build()
         afUnlockedSeen = false
         afLockedCount = 0
-        afScanSeen = false
-        val startNs = SystemClock.elapsedRealtimeNanos()
-        var retriggered = false
-        var future = camera.cameraControl.startFocusAndMetering(action)
+        val future = camera.cameraControl.startFocusAndMetering(action)
+        val done = CompletableDeferred<Unit>()
+        future.addListener({ done.complete(Unit) }, ContextCompat.getMainExecutor(context))
         val outcome = withTimeoutOrNull(FOCUS_METERING_TIMEOUT_MS) {
-            while (!future.isDone) {
+            while (!done.isCompleted) {
                 if (afLockedCount >= AF_AE_STABLE_REQUIRED_COUNT) {
                     return@withTimeoutOrNull " (af locked)"
-                }
-                // Right after the camera opens, the first action often never reaches the camera
-                // (AF stays in its continuous mode, state 1 or 2), while a repeat locks in about
-                // 0.35 s. Sending it again cancels the first one.
-                if (!retriggered && !afScanSeen && afLockedCount == 0 &&
-                    elapsedMs(startNs) >= FOCUS_RETRIGGER_AFTER_MS
-                ) {
-                    retriggered = true
-                    future = camera.cameraControl.startFocusAndMetering(action)
                 }
                 delay(AF_AE_POLL_INTERVAL_MS)
             }
@@ -522,7 +503,7 @@ class CameraXManager : CameraManager {
             }
             ""
         } ?: " (timed out, af=${latestAfState ?: "?"})"
-        return if (retriggered) "$outcome (retriggered)" else outcome
+        return outcome
     }
 
     private suspend fun waitForAutoStateStable(): Boolean {
