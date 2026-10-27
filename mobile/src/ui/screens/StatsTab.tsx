@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme/colors';
+import { PlayerEditDialog } from '../components/PlayerEditDialog';
 import {
   listPlayerStats,
   listRecentMatches,
@@ -24,6 +25,8 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
   const [matches, setMatches] = useState<RecentMatchSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<PlayerStats | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -47,7 +50,7 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [reloadKey]);
 
   if (loading) {
     return <Text style={styles.empty}>正在读取…</Text>;
@@ -62,6 +65,7 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <Text style={styles.sectionTitle}>玩家</Text>
+      <Text style={styles.hint}>点玩家可改名、合并或删除；没填名字的「玩家 N」不计入统计。</Text>
       <View style={styles.card}>
         <View style={[styles.tableRow, styles.tableHeader]}>
           <Text style={[styles.cellName, styles.headerText]}>玩家</Text>
@@ -70,8 +74,12 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
           <Text style={[styles.cell, styles.headerText]}>X01 均分</Text>
           <Text style={[styles.cell, styles.headerText]}>最高轮</Text>
         </View>
+        {players.length === 0 ? <Text style={styles.noPlayers}>暂无</Text> : null}
         {players.map(player => (
-          <View key={player.playerId} style={styles.tableRow}>
+          <Pressable
+            key={player.playerId}
+            onPress={() => setEditing(player)}
+            style={({ pressed }) => [styles.tableRow, pressed && styles.pressed]}>
             <Text numberOfLines={1} style={styles.cellName}>
               {player.name}
             </Text>
@@ -83,7 +91,7 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
               {player.x01Average === null ? '—' : player.x01Average.toFixed(1)}
             </Text>
             <Text style={styles.cell}>{player.bestRound ?? '—'}</Text>
-          </View>
+          </Pressable>
         ))}
       </View>
 
@@ -104,6 +112,15 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
           </Pressable>
         ))}
       </View>
+
+      <PlayerEditDialog
+        player={editing}
+        onClose={() => setEditing(null)}
+        onChanged={() => {
+          setEditing(null);
+          setReloadKey(key => key + 1);
+        }}
+      />
     </ScrollView>
   );
 };
@@ -128,6 +145,17 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.textPrimary,
     marginTop: 4,
+  },
+  hint: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textSecondary,
+  },
+  noPlayers: {
+    padding: 12,
+    fontSize: 14,
+    color: colors.textSecondary,
+    textAlign: 'center',
   },
   card: {
     backgroundColor: colors.panel,

@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors } from '../theme/colors';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import type { RootStackParamList } from '../../app/navigation/types';
-import { getMatchDetail } from '../../application/services/historyRepository';
+import { deleteMatch, getMatchDetail } from '../../application/services/historyRepository';
 import type { MatchDetail } from '../../domain/history/types';
 import { formatMatchTime } from './StatsTab';
 import { getTeamName } from '../../domain/game/teams';
@@ -23,9 +24,18 @@ const formatDart = (dart: { target: string; multiplier: number }) => {
   return dart.multiplier === 3 ? `T${dart.target}` : dart.multiplier === 2 ? `D${dart.target}` : dart.target;
 };
 
-export const MatchDetailScreen = ({ route }: Props) => {
+export const MatchDetailScreen = ({ navigation, route }: Props) => {
   const [detail, setDetail] = useState<MatchDetail | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteFailed, setDeleteFailed] = useState(false);
+
+  const removeMatch = () => {
+    setConfirmingDelete(false);
+    deleteMatch(route.params.matchId)
+      .then(() => navigation.goBack())
+      .catch(() => setDeleteFailed(true));
+  };
 
   useEffect(() => {
     getMatchDetail(route.params.matchId)
@@ -96,6 +106,28 @@ export const MatchDetailScreen = ({ route }: Props) => {
           </View>
         ))}
       </View>
+
+      <Pressable
+        hitSlop={8}
+        onPress={() => {
+          setDeleteFailed(false);
+          setConfirmingDelete(true);
+        }}
+        style={styles.deleteLink}>
+        <Text style={styles.deleteLabel}>删除这场比赛</Text>
+      </Pressable>
+      {deleteFailed ? <Text style={styles.deleteError}>删除失败，请重试</Text> : null}
+
+      <ConfirmDialog
+        visible={confirmingDelete}
+        title="删除这场比赛"
+        message="这场比赛的记录和它带来的统计都会被删除，且无法恢复。"
+        confirmLabel="删除"
+        cancelLabel="取消"
+        danger
+        onConfirm={removeMatch}
+        onCancel={() => setConfirmingDelete(false)}
+      />
     </ScrollView>
   );
 };
@@ -167,5 +199,19 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     color: colors.accent,
+  },
+  deleteLink: {
+    alignSelf: 'center',
+    paddingVertical: 8,
+  },
+  deleteLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.danger,
+  },
+  deleteError: {
+    fontSize: 13,
+    color: colors.danger,
+    textAlign: 'center',
   },
 });

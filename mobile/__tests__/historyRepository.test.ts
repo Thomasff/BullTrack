@@ -5,11 +5,14 @@ jest.mock('react-native-sqlite-storage', () => require('../jest/sqliteNodeAdapte
 import {
   clearHistory,
   deleteMatch,
+  deletePlayer,
   getMatchDetail,
   getSetting,
   listKnownPlayerNames,
   listPlayerStats,
   listRecentMatches,
+  mergePlayerInto,
+  renamePlayer,
   saveCompletedMatch,
   setSetting,
 } from '../src/application/services/historyRepository';
@@ -131,4 +134,74 @@ test('saves a team match: team per player, every winning member wins', async () 
   expect(stats.find(item => item.name === 'Bob')).toMatchObject({ wins: 1, bestRound: 121 });
   expect(stats.find(item => item.name === 'Alice')).toMatchObject({ wins: 1, bestRound: 180 });
   expect(stats.find(item => item.name === 'Carol')).toMatchObject({ wins: 0, bestRound: 3 });
+});
+
+const saveSoloMatch = (name: string, createdAt: number) =>
+  saveCompletedMatch({
+    mode: 'game301',
+    modeLabel: '301',
+    createdAt,
+    players: [{ id: 'player-1', name }],
+    winnerIds: ['player-1'],
+    rounds: [{ playerId: 'player-1', roundIndex: 1, throws: [T20, T20, T20] }],
+  });
+
+const statsOf = async (name: string) =>
+  (await listPlayerStats()).find(item => item.name === name);
+
+test('renames a player and keeps their matches', async () => {
+  await saveSampleMatch(1000);
+  const alice = await statsOf('Alice');
+
+  expect(await renamePlayer(alice!.playerId, ' Alicia ')).toBe('renamed');
+  expect(await statsOf('Alice')).toBeUndefined();
+  expect(await statsOf('Alicia')).toMatchObject({ matchesPlayed: 1, wins: 1 });
+  expect((await listRecentMatches())[0].winnerName).toBe('Alicia');
+});
+
+test('renaming onto a taken name asks for a merge, which joins the matches', async () => {
+  await saveSampleMatch(1000);
+  await saveSoloMatch('Alise', 2000);
+  const alise = await statsOf('Alise');
+
+  expect(await renamePlayer(alise!.playerId, 'Alice')).toBe('nameTaken');
+  expect(await mergePlayerInto(alise!.playerId, 'Alice')).toBe('merged');
+  expect(await statsOf('Alise')).toBeUndefined();
+  expect(await statsOf('Alice')).toMatchObject({ matchesPlayed: 2, wins: 2 });
+  expect((await listRecentMatches()).map(match => match.winnerName)).toEqual(['Alice', 'Alice']);
+});
+
+test('players from the same match cannot be merged', async () => {
+  await saveSampleMatch(1000);
+  const bob = await statsOf('Bob');
+
+  expect(await mergePlayerInto(bob!.playerId, 'Alice')).toBe('sharedMatch');
+  expect(await statsOf('Bob')).toMatchObject({ matchesPlayed: 1 });
+});
+
+test('a deleted player is hidden but their matches stay, and playing again brings them back', async () => {
+  await saveSampleMatch(1000);
+  const bob = await statsOf('Bob');
+
+  await deletePlayer(bob!.playerId);
+  expect(await statsOf('Bob')).toBeUndefined();
+  expect(await listKnownPlayerNames()).not.toContain('Bob');
+  const recent = await listRecentMatches();
+  expect(recent[0].playerCount).toBe(2);
+  expect((await getMatchDetail(recent[0].id))?.players.map(player => player.name)).toEqual([
+    'Alice',
+    'Bob',
+  ]);
+
+  await saveSoloMatch('Bob', 2000);
+  expect(await statsOf('Bob')).toMatchObject({ matchesPlayed: 2 });
+  expect(await listKnownPlayerNames()).toContain('Bob');
+});
+
+test('unnamed guests are saved but left out of stats and the name list', async () => {
+  await saveSoloMatch('玩家 1', 1000);
+
+  expect(await listRecentMatches()).toHaveLength(1);
+  expect(await statsOf('玩家 1')).toBeUndefined();
+  expect(await listKnownPlayerNames()).not.toContain('玩家 1');
 });

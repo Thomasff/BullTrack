@@ -3,6 +3,9 @@ export const MAX_PLAYERS = 4;
 
 export const getDefaultPlayerName = (index: number) => `玩家 ${index + 1}`;
 
+// Seats left unnamed are guests: their matches are saved, but they get no stats or history entry.
+export const isDefaultPlayerName = (name: string) => /^玩家 \d+$/.test(name.trim());
+
 // Fills empty names with defaults so every seat has a stable history identity.
 export const resolvePlayerNames = (names: string[]) =>
   names.map((name, index) => name.trim() || getDefaultPlayerName(index));

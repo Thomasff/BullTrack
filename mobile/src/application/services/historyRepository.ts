@@ -11,14 +11,14 @@ import type {
   RecentMatchSummary,
 } from '../../domain/history/types';
 import type { ThrowResult } from '../../domain/game/types';
-import { getDefaultPlayerName } from '../../domain/game/players';
+import { getDefaultPlayerName, isDefaultPlayerName } from '../../domain/game/players';
 
 SQLite.DEBUG(false);
 SQLite.enablePromise(true);
 
 const DATABASE_NAME = 'bulltrack_history.db';
 // All schema statements are idempotent, so older versions simply re-run them.
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 let databasePromise: Promise<SQLiteDatabase> | null = null;
 
@@ -58,7 +58,8 @@ const initializeDatabase = async (database: SQLiteDatabase) => {
     `CREATE TABLE IF NOT EXISTS players (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      hidden INTEGER NOT NULL DEFAULT 0
     )`,
   );
   await execute(
@@ -120,6 +121,15 @@ const initializeDatabase = async (database: SQLiteDatabase) => {
   ).includes('team_index');
   if (!hasTeamIndex) {
     await execute(database, 'ALTER TABLE match_players ADD COLUMN team_index INTEGER');
+  }
+  // Schema v4: a deleted player is only hidden, so the matches they played stay intact.
+  const playerColumns = await execute(database, 'PRAGMA table_info(players)');
+  const hasHidden = Array.from(
+    { length: playerColumns.rows.length },
+    (_, index) => playerColumns.rows.item(index).name,
+  ).includes('hidden');
+  if (!hasHidden) {
+    await execute(database, 'ALTER TABLE players ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0');
   }
   await execute(
     database,
@@ -252,14 +262,22 @@ export const saveCompletedMatch = async (
             'INSERT OR IGNORE INTO players (name, created_at) VALUES (?, ?)',
             [name, now],
             () => {
+              // Playing again under a deleted (hidden) name brings the player back.
               executeTransactionSql(
                 transaction,
-                'SELECT id FROM players WHERE name = ?',
+                'UPDATE players SET hidden = 0 WHERE name = ?',
                 [name],
-                result => {
-                  const databasePlayerId = Number(result.rows.item(0).id);
-                  playerIdByRuntimeId.set(player.id, databasePlayerId);
-                  upsertPlayerAtIndex(index + 1);
+                () => {
+                  executeTransactionSql(
+                    transaction,
+                    'SELECT id FROM players WHERE name = ?',
+                    [name],
+                    result => {
+                      const databasePlayerId = Number(result.rows.item(0).id);
+                      playerIdByRuntimeId.set(player.id, databasePlayerId);
+                      upsertPlayerAtIndex(index + 1);
+                    },
+                  );
                 },
               );
             },
@@ -299,7 +317,68 @@ export const deleteMatch = async (matchId: number) => {
   );
 };
 
-// Returns known player names, most recently played first.
+const findPlayerIdByName = async (database: SQLiteDatabase, name: string) => {
+  const result = await execute(database, 'SELECT id FROM players WHERE name = ?', [name]);
+  return result.rows.length > 0 ? Number(result.rows.item(0).id) : null;
+};
+
+// 'nameTaken' when another player already has the name; the caller may then merge into them.
+export const renamePlayer = async (
+  playerId: number,
+  name: string,
+): Promise<'renamed' | 'nameTaken'> => {
+  const database = await getDatabase();
+  const trimmed = name.trim();
+  const existingId = await findPlayerIdByName(database, trimmed);
+  if (existingId !== null && existingId !== playerId) {
+    return 'nameTaken';
+  }
+  await execute(database, 'UPDATE players SET name = ? WHERE id = ?', [trimmed, playerId]);
+  return 'renamed';
+};
+
+// Moves every match of one player onto the player named `name`, then removes the first.
+// Refused when both played in the same match, since a match lists each player once.
+export const mergePlayerInto = async (
+  playerId: number,
+  name: string,
+): Promise<'merged' | 'sharedMatch'> => {
+  const database = await getDatabase();
+  const targetId = await findPlayerIdByName(database, name.trim());
+  if (targetId === null || targetId === playerId) {
+    throw new Error('Merge target not found.');
+  }
+  const shared = await execute(
+    database,
+    `SELECT COUNT(*) AS count FROM match_players AS source
+    JOIN match_players AS target ON target.match_id = source.match_id
+    WHERE source.player_id = ? AND target.player_id = ?`,
+    [playerId, targetId],
+  );
+  if (Number(shared.rows.item(0).count) > 0) {
+    return 'sharedMatch';
+  }
+  await execute(database, 'UPDATE throws SET player_id = ? WHERE player_id = ?', [targetId, playerId]);
+  await execute(database, 'UPDATE match_players SET player_id = ? WHERE player_id = ?', [
+    targetId,
+    playerId,
+  ]);
+  await execute(database, 'UPDATE matches SET winner_player_id = ? WHERE winner_player_id = ?', [
+    targetId,
+    playerId,
+  ]);
+  await execute(database, 'UPDATE players SET hidden = 0 WHERE id = ?', [targetId]);
+  await execute(database, 'DELETE FROM players WHERE id = ?', [playerId]);
+  return 'merged';
+};
+
+// Hides a player from stats and the name list; the matches they played are kept as they are.
+export const deletePlayer = async (playerId: number) => {
+  const database = await getDatabase();
+  await execute(database, 'UPDATE players SET hidden = 1 WHERE id = ?', [playerId]);
+};
+
+// Returns known player names, most recently played first; guests and deleted players are left out.
 export const listKnownPlayerNames = async (limit = 30): Promise<string[]> => {
   const database = await getDatabase();
   const result = await execute(
@@ -308,15 +387,16 @@ export const listKnownPlayerNames = async (limit = 30): Promise<string[]> => {
     FROM players
     LEFT JOIN match_players ON match_players.player_id = players.id
     LEFT JOIN matches ON matches.id = match_players.match_id
+    WHERE players.hidden = 0
     GROUP BY players.id
-    ORDER BY last_played_at DESC, players.created_at DESC
-    LIMIT ?`,
-    [limit],
+    ORDER BY last_played_at DESC, players.created_at DESC`,
   );
 
   return Array.from({ length: result.rows.length }, (_, index) =>
     String(result.rows.item(index).name),
-  );
+  )
+    .filter(name => !isDefaultPlayerName(name))
+    .slice(0, limit);
 };
 
 export const listRecentMatches = async (limit = 20): Promise<RecentMatchSummary[]> => {
@@ -454,6 +534,7 @@ export const listPlayerStats = async (): Promise<PlayerStats[]> => {
     FROM players
     JOIN match_stats ON match_stats.player_id = players.id
     LEFT JOIN round_stats ON round_stats.player_id = players.id
+    WHERE players.hidden = 0
     ORDER BY match_stats.matches_played DESC, players.name`,
     X01_MODES,
   );
@@ -468,7 +549,7 @@ export const listPlayerStats = async (): Promise<PlayerStats[]> => {
       x01Average: toNullableNumber(row.x01_average),
       bestRound: toNullableNumber(row.best_round),
     };
-  });
+  }).filter(player => !isDefaultPlayerName(player.name));
 };
 
 export const getSetting = async (key: string): Promise<string | null> => {
