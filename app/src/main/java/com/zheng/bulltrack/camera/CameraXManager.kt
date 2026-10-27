@@ -22,6 +22,7 @@ import androidx.camera.camera2.interop.Camera2CameraInfo
 import androidx.camera.camera2.interop.Camera2Interop
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.core.Camera
+import androidx.camera.core.CameraControl
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
@@ -43,6 +44,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.coroutines.resume
@@ -454,7 +456,17 @@ class CameraXManager : CameraManager {
         )
         lockedZoomRatioForRound = clampedZoom
         currentZoomRatio = clampedZoom
-        camera.cameraControl.setZoomRatio(clampedZoom).await()
+        // The preview may still push its own zoom while it lets go of the shared camera, which
+        // cancels ours; setting it once more then sticks.
+        try {
+            camera.cameraControl.setZoomRatio(clampedZoom).await()
+        } catch (error: ExecutionException) {
+            if (error.cause !is CameraControl.OperationCanceledException) {
+                throw error
+            }
+            Log.w(TAG, "Round zoom was replaced by another zoom request, setting it again")
+            camera.cameraControl.setZoomRatio(clampedZoom).await()
+        }
         delay(ROUND_ZOOM_SETTLE_MS)
     }
 
@@ -490,7 +502,7 @@ class CameraXManager : CameraManager {
                 Log.w(TAG, "Focus and metering trigger failed", error)
             }
             ""
-        } ?: " (timed out)"
+        } ?: " (timed out, af=${latestAfState ?: "?"})"
         return outcome
     }
 
