@@ -2,6 +2,7 @@
 #include <opencv2/opencv.hpp>
 #include <android/log.h>
 #include <android/asset_manager_jni.h>
+#include <android/bitmap.h>
 
 #include <memory>
 #include <stdexcept>
@@ -17,30 +18,55 @@
 
 namespace {
 
-cv::Mat ByteArrayToBgrMat(JNIEnv* env, jbyteArray frame_data, jint width, jint height) {
-    if (frame_data == nullptr) {
+// Reads the ARGB_8888 bitmap's pixels in place (no Java copy) and turns the frame upright by
+// rotating it clockwise by rotation_degrees, which saves the camera code a full-size rotated bitmap.
+cv::Mat BitmapToBgrMat(JNIEnv* env, jobject bitmap, jint rotation_degrees) {
+    if (bitmap == nullptr) {
         throw std::runtime_error("图像数据为空");
     }
-    if (width <= 0 || height <= 0) {
-        throw std::runtime_error("图像尺寸无效");
+    AndroidBitmapInfo info;
+    if (AndroidBitmap_getInfo(env, bitmap, &info) != ANDROID_BITMAP_RESULT_SUCCESS) {
+        throw std::runtime_error("无法读取图像信息");
+    }
+    if (info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 || info.width == 0 || info.height == 0) {
+        throw std::runtime_error("图像格式无效");
     }
 
-    const jsize expected_size = width * height * 4;
-    const jsize actual_size = env->GetArrayLength(frame_data);
-    if (actual_size != expected_size) {
-        throw std::runtime_error("图像数据长度不匹配");
-    }
-
-    jbyte* data_ptr = env->GetByteArrayElements(frame_data, nullptr);
-    if (data_ptr == nullptr) {
+    void* pixels = nullptr;
+    if (AndroidBitmap_lockPixels(env, bitmap, &pixels) != ANDROID_BITMAP_RESULT_SUCCESS || pixels == nullptr) {
         throw std::runtime_error("无法读取图像数据");
     }
-
-    cv::Mat rgba(height, width, CV_8UC4, data_ptr);
     cv::Mat bgr;
-    cv::cvtColor(rgba, bgr, cv::COLOR_RGBA2BGR);
-    env->ReleaseByteArrayElements(frame_data, data_ptr, JNI_ABORT);
-    return bgr;
+    try {
+        cv::Mat rgba(static_cast<int>(info.height), static_cast<int>(info.width), CV_8UC4, pixels, info.stride);
+        cv::cvtColor(rgba, bgr, cv::COLOR_RGBA2BGR);
+    } catch (...) {
+        AndroidBitmap_unlockPixels(env, bitmap);
+        throw;
+    }
+    AndroidBitmap_unlockPixels(env, bitmap);
+
+    switch (rotation_degrees) {
+        case 0:
+            return bgr;
+        case 90: {
+            cv::Mat upright;
+            cv::rotate(bgr, upright, cv::ROTATE_90_CLOCKWISE);
+            return upright;
+        }
+        case 180: {
+            cv::Mat upright;
+            cv::rotate(bgr, upright, cv::ROTATE_180);
+            return upright;
+        }
+        case 270: {
+            cv::Mat upright;
+            cv::rotate(bgr, upright, cv::ROTATE_90_COUNTERCLOCKWISE);
+            return upright;
+        }
+        default:
+            throw std::runtime_error("图像旋转角度无效");
+    }
 }
 
 void ThrowJavaRuntimeException(JNIEnv* env, const std::string& message) {
@@ -255,9 +281,8 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeStartRound(
     JNIEnv* env,
     jobject thiz,
     jlong session_id,
-    jbyteArray frame_data,
-    jint width,
-    jint height) {
+    jobject frame,
+    jint rotation_degrees) {
     (void)thiz;
     auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
     if (session == nullptr) {
@@ -265,7 +290,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeStartRound(
         return nullptr;
     }
     try {
-        cv::Mat frame_bgr = ByteArrayToBgrMat(env, frame_data, width, height);
+        cv::Mat frame_bgr = BitmapToBgrMat(env, frame, rotation_degrees);
         bulltrack::AndroidStartRoundResult result = session->StartRound(frame_bgr);
         return CreateNativeStartRoundResult(env, result);
     } catch (const std::exception& error) {
@@ -280,9 +305,8 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeProcessFrame(
     JNIEnv* env,
     jobject thiz,
     jlong session_id,
-    jbyteArray frame_data,
-    jint width,
-    jint height) {
+    jobject frame,
+    jint rotation_degrees) {
     (void)thiz;
     auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
     if (session == nullptr) {
@@ -290,7 +314,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeProcessFrame(
         return nullptr;
     }
     try {
-        cv::Mat frame_bgr = ByteArrayToBgrMat(env, frame_data, width, height);
+        cv::Mat frame_bgr = BitmapToBgrMat(env, frame, rotation_degrees);
         bulltrack::AndroidFrameProcessResult result = session->ProcessFrame(frame_bgr);
         return CreateNativeFrameProcessResult(env, result);
     } catch (const std::exception& error) {
@@ -305,9 +329,8 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRedetectRound(
     JNIEnv* env,
     jobject thiz,
     jlong session_id,
-    jbyteArray frame_data,
-    jint width,
-    jint height) {
+    jobject frame,
+    jint rotation_degrees) {
     (void)thiz;
     auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
     if (session == nullptr) {
@@ -315,7 +338,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRedetectRound(
         return nullptr;
     }
     try {
-        cv::Mat frame_bgr = ByteArrayToBgrMat(env, frame_data, width, height);
+        cv::Mat frame_bgr = BitmapToBgrMat(env, frame, rotation_degrees);
         bulltrack::AndroidRedetectResult result = session->RedetectRound(frame_bgr);
         return CreateNativeRedetectResult(env, result);
     } catch (const std::exception& error) {

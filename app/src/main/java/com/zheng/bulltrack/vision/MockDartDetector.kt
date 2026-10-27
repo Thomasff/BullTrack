@@ -32,25 +32,35 @@ class MockDartDetector(
         delegate.destroySession(sessionId)
     }
 
-    override fun startRound(sessionId: Long, firstFrame: Bitmap): StartRoundDetectionUpdate {
+    override fun startRound(sessionId: Long, firstFrame: Bitmap, rotationDegrees: Int): StartRoundDetectionUpdate {
         loadDebugBitmapsIfNeeded()
-        return delegate.startRound(sessionId, debugBeforeBitmap ?: firstFrame)
+        val debugBefore = debugBeforeBitmap
+        return if (debugBefore != null) {
+            delegate.startRound(sessionId, debugBefore)
+        } else {
+            delegate.startRound(sessionId, firstFrame, rotationDegrees)
+        }
     }
 
-    override fun processFrame(sessionId: Long, frame: Bitmap): FrameDetectionUpdate {
+    override fun processFrame(sessionId: Long, frame: Bitmap, rotationDegrees: Int): FrameDetectionUpdate {
         loadDebugBitmapsIfNeeded()
         debugProcessCount += 1
         val debugAfter = if (debugProcessCount == 1) debugAfterBitmap else null
         return if (debugAfter != null) {
             delegate.processFrame(sessionId, debugAfter)
         } else {
-            delegate.processFrame(sessionId, frame)
+            delegate.processFrame(sessionId, frame, rotationDegrees)
         }
     }
 
-    override fun redetect(sessionId: Long, frame: Bitmap): RedetectDetectionUpdate {
+    override fun redetect(sessionId: Long, frame: Bitmap, rotationDegrees: Int): RedetectDetectionUpdate {
         loadDebugBitmapsIfNeeded()
-        return delegate.redetect(sessionId, debugAfterBitmap ?: frame)
+        val debugAfter = debugAfterBitmap
+        return if (debugAfter != null) {
+            delegate.redetect(sessionId, debugAfter)
+        } else {
+            delegate.redetect(sessionId, frame, rotationDegrees)
+        }
     }
 
     override fun findMissedDarts(sessionId: Long): RedetectDetectionUpdate =

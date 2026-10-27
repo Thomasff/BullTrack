@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.ThrowResult
 import com.zheng.bulltrack.domain.scoring.VirtualBoardScorer
-import java.nio.ByteBuffer
 
 class NativeDartDetector(
     private val assetManager: AssetManager? = null
@@ -23,21 +22,18 @@ class NativeDartDetector(
     private external fun nativeDestroySession(sessionId: Long)
     private external fun nativeStartRound(
         sessionId: Long,
-        frameData: ByteArray,
-        width: Int,
-        height: Int
+        frame: Bitmap,
+        rotationDegrees: Int
     ): NativeStartRoundResult
     private external fun nativeProcessFrame(
         sessionId: Long,
-        frameData: ByteArray,
-        width: Int,
-        height: Int
+        frame: Bitmap,
+        rotationDegrees: Int
     ): NativeFrameProcessResult
     private external fun nativeRedetectRound(
         sessionId: Long,
-        frameData: ByteArray,
-        width: Int,
-        height: Int
+        frame: Bitmap,
+        rotationDegrees: Int
     ): NativeRedetectResult
     private external fun nativeFindMissedDarts(sessionId: Long): NativeRedetectResult
 
@@ -66,9 +62,8 @@ class NativeDartDetector(
         }
     }
 
-    override fun startRound(sessionId: Long, firstFrame: Bitmap): StartRoundDetectionUpdate {
-        val frameData = bitmapToByteArray(firstFrame)
-        val result = nativeStartRound(sessionId, frameData, firstFrame.width, firstFrame.height)
+    override fun startRound(sessionId: Long, firstFrame: Bitmap, rotationDegrees: Int): StartRoundDetectionUpdate {
+        val result = nativeStartRound(sessionId, argb8888(firstFrame), rotationDegrees)
         return StartRoundDetectionUpdate(
             debugImages = result.debugImages.orEmpty().map(::toDebugImageArtifact),
             errorMessage = result.errorMessage,
@@ -77,13 +72,8 @@ class NativeDartDetector(
         )
     }
 
-    override fun processFrame(sessionId: Long, frame: Bitmap): FrameDetectionUpdate {
-        val result = nativeProcessFrame(
-            sessionId = sessionId,
-            frameData = bitmapToByteArray(frame),
-            width = frame.width,
-            height = frame.height
-        )
+    override fun processFrame(sessionId: Long, frame: Bitmap, rotationDegrees: Int): FrameDetectionUpdate {
+        val result = nativeProcessFrame(sessionId, argb8888(frame), rotationDegrees)
         val newThrows = result.detectedPoints.orEmpty().mapIndexed { index, point ->
             point?.let {
                 toThrowResult(
@@ -102,13 +92,8 @@ class NativeDartDetector(
         )
     }
 
-    override fun redetect(sessionId: Long, frame: Bitmap): RedetectDetectionUpdate {
-        val result = nativeRedetectRound(
-            sessionId = sessionId,
-            frameData = bitmapToByteArray(frame),
-            width = frame.width,
-            height = frame.height
-        )
+    override fun redetect(sessionId: Long, frame: Bitmap, rotationDegrees: Int): RedetectDetectionUpdate {
+        val result = nativeRedetectRound(sessionId, argb8888(frame), rotationDegrees)
         return RedetectDetectionUpdate(
             throws = result.points.orEmpty().map { point ->
                 toThrowResult(point.normalizedX, point.normalizedY)
@@ -129,21 +114,14 @@ class NativeDartDetector(
         )
     }
 
-    // ARGB_8888 pixels sit in memory as R, G, B, A bytes, which is the RGBA layout the native side
-    // expects, so one bulk copy replaces a per-pixel loop and an extra int array per frame.
+    // The native side reads ARGB_8888 pixels in place as RGBA bytes (no per-frame Java copy).
     // Camera frames are opaque, so premultiplied alpha does not change the colors.
-    private fun bitmapToByteArray(bitmap: Bitmap): ByteArray {
-        val source = if (bitmap.config == Bitmap.Config.ARGB_8888) {
+    private fun argb8888(bitmap: Bitmap): Bitmap {
+        return if (bitmap.config == Bitmap.Config.ARGB_8888) {
             bitmap
         } else {
             bitmap.copy(Bitmap.Config.ARGB_8888, false)
         }
-        val byteArray = ByteArray(source.width * source.height * 4)
-        source.copyPixelsToBuffer(ByteBuffer.wrap(byteArray))
-        if (source !== bitmap) {
-            source.recycle()
-        }
-        return byteArray
     }
 
     private fun toDebugImageArtifact(result: NativeDebugImageResult): DebugImageArtifact {

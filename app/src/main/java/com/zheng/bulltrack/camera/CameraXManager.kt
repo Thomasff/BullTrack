@@ -9,6 +9,7 @@ import android.graphics.Rect
 import android.graphics.YuvImage
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
@@ -34,6 +35,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.Observer
 import com.google.common.util.concurrent.ListenableFuture
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -54,6 +56,9 @@ class CameraXManager : CameraManager {
         private const val TARGET_HEIGHT = 1920
         private const val ROUND_ZOOM_SETTLE_MS = 120L
         private const val AF_AE_TIMEOUT_MS = 800L
+        // The focus action itself has no limit of ours; past this the frame is taken as it is (the
+        // settle wait below still runs), instead of keeping the player waiting in poor light.
+        private const val FOCUS_METERING_TIMEOUT_MS = 1_000L
         private const val AF_AE_POLL_INTERVAL_MS = 50L
         private const val AF_AE_STABLE_REQUIRED_COUNT = 2
         private const val AUTO_FOCUS_SIZE = 0.2f
@@ -212,9 +217,15 @@ class CameraXManager : CameraManager {
         lockedZoomRatioForRound = currentZoomRatio
         lockPhase = CameraLockPhase.METERING
         lockReason = "本轮使用自动对焦/测光稳定后拍摄"
-        prepareAutoCapture()
+        val meteringTiming = prepareAutoCapture()
+        val captureStartNs = SystemClock.elapsedRealtimeNanos()
         val capturedFrame = takePicture()
-        val roundConfig = buildRoundCameraConfig(capturedFrame.bitmap)
+        Log.i(
+            TAG,
+            "First frame timing: $meteringTiming, capture ${elapsedMs(captureStartNs)} ms " +
+                "(decode ${capturedFrame.decodeMs} ms)"
+        )
+        val roundConfig = buildRoundCameraConfig(capturedFrame)
         currentRoundConfig = roundConfig
         unbindPreview()
         _cameraState.value = readyState(
@@ -228,7 +239,7 @@ class CameraXManager : CameraManager {
         lockPhase = CameraLockPhase.LOCKED
         lockReason = "沿用首帧已稳定的 zoom 与自动对焦/测光状态直接快拍"
         val capturedFrame = takePicture()
-        val config = currentRoundConfig ?: buildRoundCameraConfig(capturedFrame.bitmap).also {
+        val config = currentRoundConfig ?: buildRoundCameraConfig(capturedFrame).also {
             currentRoundConfig = it
         }
         return capturedFrame.copy(cameraConfig = config)
@@ -380,17 +391,26 @@ class CameraXManager : CameraManager {
         currentZoomRatio = targetZoom
     }
 
-    private suspend fun prepareAutoCapture() {
+    // Returns how long each step took, for the round timing log.
+    private suspend fun prepareAutoCapture(): String {
         // A retried first frame meters again from scratch.
         unlockAutoControls()
         reset3AState()
+        var stepStartNs = SystemClock.elapsedRealtimeNanos()
         applyRoundZoomBeforeCapture()
-        triggerCenterFocusAndMetering()
+        val zoomMs = elapsedMs(stepStartNs)
+        stepStartNs = SystemClock.elapsedRealtimeNanos()
+        val focusFinished = triggerCenterFocusAndMetering()
+        val focusMs = elapsedMs(stepStartNs)
+        stepStartNs = SystemClock.elapsedRealtimeNanos()
         val stabilized = waitForAutoStateStable()
+        val settleMs = elapsedMs(stepStartNs)
+        stepStartNs = SystemClock.elapsedRealtimeNanos()
         // Lock only a settled exposure; an unsettled one would stay wrong for the whole round.
         if (aeStableCount >= AF_AE_STABLE_REQUIRED_COUNT) {
             lockExposureAndWhiteBalance()
         }
+        val lockMs = elapsedMs(stepStartNs)
         lockPhase = if (stabilized) {
             CameraLockPhase.LOCKED
         } else {
@@ -401,6 +421,8 @@ class CameraXManager : CameraManager {
         } else {
             "自动对焦/测光等待超时，按当前状态拍摄"
         }
+        return "zoom $zoomMs ms, focus $focusMs ms${if (focusFinished) "" else " (timed out)"}, " +
+            "settle $settleMs ms${if (stabilized) "" else " (timed out)"}, lock $lockMs ms"
     }
 
     private suspend fun applyRoundZoomBeforeCapture() {
@@ -417,8 +439,11 @@ class CameraXManager : CameraManager {
         delay(ROUND_ZOOM_SETTLE_MS)
     }
 
-    private suspend fun triggerCenterFocusAndMetering() {
-        val camera = boundCamera ?: return
+    // False when the focus action did not finish within FOCUS_METERING_TIMEOUT_MS. The action is
+    // left running (not cancelled), so focus can still settle during the wait that follows.
+    private suspend fun triggerCenterFocusAndMetering(): Boolean {
+        val camera = boundCamera ?: return true
+        val context = appContext ?: return true
         val point = SurfaceOrientedMeteringPointFactory(1f, 1f)
             .createPoint(0.5f, 0.5f, AUTO_FOCUS_SIZE)
         val action = FocusMeteringAction.Builder(
@@ -428,11 +453,16 @@ class CameraXManager : CameraManager {
                 FocusMeteringAction.FLAG_AWB
         ).disableAutoCancel()
             .build()
-        runCatching {
-            camera.cameraControl.startFocusAndMetering(action).await()
-        }.onFailure { error ->
-            Log.w(TAG, "Focus and metering trigger failed", error)
+        val future = camera.cameraControl.startFocusAndMetering(action)
+        val done = CompletableDeferred<Unit>()
+        future.addListener({ done.complete(Unit) }, ContextCompat.getMainExecutor(context))
+        val finished = withTimeoutOrNull(FOCUS_METERING_TIMEOUT_MS) { done.await() } != null
+        if (finished) {
+            runCatching { future.get() }.onFailure { error ->
+                Log.w(TAG, "Focus and metering trigger failed", error)
+            }
         }
+        return finished
     }
 
     private suspend fun waitForAutoStateStable(): Boolean {
@@ -547,13 +577,17 @@ class CameraXManager : CameraManager {
             object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     try {
-                        val bitmap = imageProxyToBitmap(image)
+                        val decodeStartNs = SystemClock.elapsedRealtimeNanos()
+                        val (bitmap, rotationDegrees) = imageProxyToBitmap(image)
+                        val decodeMs = elapsedMs(decodeStartNs)
                         val timestampNs = image.imageInfo.timestamp
                         image.close()
                         continuation.resume(
                             CapturedFrame(
                                 bitmap = bitmap,
-                                timestampNs = timestampNs
+                                timestampNs = timestampNs,
+                                rotationDegrees = rotationDegrees,
+                                decodeMs = decodeMs
                             )
                         )
                     } catch (error: Exception) {
@@ -579,12 +613,13 @@ class CameraXManager : CameraManager {
         )
     }
 
-    private fun buildRoundCameraConfig(bitmap: Bitmap): RoundCameraConfig {
+    private fun buildRoundCameraConfig(frame: CapturedFrame): RoundCameraConfig {
         val roundZoomRatio = lockedZoomRatioForRound ?: currentZoomRatio
         val statusMessage = "本轮固定 zoom ${formatZoom(roundZoomRatio)}x，首帧已完成自动对焦/测光稳定，后续连续拍摄直接快拍"
+        val quarterTurn = frame.rotationDegrees == 90 || frame.rotationDegrees == 270
         return RoundCameraConfig(
-            width = bitmap.width,
-            height = bitmap.height,
+            width = if (quarterTurn) frame.bitmap.height else frame.bitmap.width,
+            height = if (quarterTurn) frame.bitmap.width else frame.bitmap.height,
             rotationDegrees = 0,
             zoomRatio = roundZoomRatio,
             lockReason = lockReason,
@@ -700,7 +735,8 @@ class CameraXManager : CameraManager {
         }
     }
 
-    private fun imageProxyToBitmap(image: ImageProxy): Bitmap {
+    // The bitmap and the clockwise turn it still needs (0 when it was turned here).
+    private fun imageProxyToBitmap(image: ImageProxy): Pair<Bitmap, Int> {
         val bitmap = when (image.format) {
             ImageFormat.JPEG -> {
                 val buffer = image.planes[0].buffer
@@ -731,9 +767,21 @@ class CameraXManager : CameraManager {
             else -> throw IllegalArgumentException("不支持的图像格式: ${image.format}")
         } ?: throw IllegalStateException("无法解码相机图像")
 
+        // Detection turns frames upright natively, so a frame that is already the target size once
+        // turned skips the full-size rotated copy here and carries its rotation instead.
+        val rotationDegrees = image.imageInfo.rotationDegrees
+        val quarterTurn = rotationDegrees == 90 || rotationDegrees == 270
+        val uprightWidth = if (quarterTurn) bitmap.height else bitmap.width
+        val uprightHeight = if (quarterTurn) bitmap.width else bitmap.height
+        if (uprightWidth == TARGET_WIDTH && uprightHeight == TARGET_HEIGHT &&
+            bitmap.config == Bitmap.Config.ARGB_8888
+        ) {
+            return bitmap to rotationDegrees
+        }
+
         // Each step may return a new full-size bitmap (about 8 MB at 1080x1920); intermediates are
         // recycled right away instead of waiting for GC, and no extra defensive copies are made.
-        val rotated = rotateBitmap(bitmap, image.imageInfo.rotationDegrees.toFloat())
+        val rotated = rotateBitmap(bitmap, rotationDegrees.toFloat())
         if (rotated !== bitmap) {
             bitmap.recycle()
         }
@@ -741,7 +789,7 @@ class CameraXManager : CameraManager {
         if (cropped !== rotated) {
             rotated.recycle()
         }
-        return ensureArgb8888(cropped)
+        return ensureArgb8888(cropped) to 0
     }
 
     private fun rotateBitmap(bitmap: Bitmap, rotationDegrees: Float): Bitmap {
@@ -829,6 +877,8 @@ class CameraXManager : CameraManager {
 
         return nv21
     }
+
+    private fun elapsedMs(startNs: Long): Long = (SystemClock.elapsedRealtimeNanos() - startNs) / 1_000_000L
 
     private fun formatZoom(zoomRatio: Float): String {
         return String.format("%.2f", zoomRatio)

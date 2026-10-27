@@ -43,6 +43,8 @@ const ZOOM_MAX = 4;
 const ZOOM_SLIDER_HEIGHT = 220;
 const PREVIEW_HEIGHT = 320;
 const ZOOM_THUMB_SIZE = 26;
+// Cap on waiting for the preview to let go of the camera before the native round takes it.
+const PREVIEW_STOP_TIMEOUT_MS = 800;
 
 export const GameScreen = ({ navigation }: Props) => {
   const [runningAction, setRunningAction] = useState<
@@ -63,6 +65,9 @@ export const GameScreen = ({ navigation }: Props) => {
   // Set once an in-app re-request was denied too; the next tap opens system settings.
   const [permissionDenied, setPermissionDenied] = useState(false);
   const allowLeaveRef = useRef(false);
+  // Mirrors previewStreaming for the round start, and wakes it once the preview has stopped.
+  const previewStreamingRef = useRef(false);
+  const previewStoppedRef = useRef<(() => void) | null>(null);
   const pendingLeaveRef = useRef<(() => void) | null>(null);
   const latestZoomRef = useRef(previewZoomRatio);
   const zoomDragStartRef = useRef({ pageY: 0, zoomRatio: previewZoomRatio });
@@ -242,6 +247,7 @@ export const GameScreen = ({ navigation }: Props) => {
     if (status === 'waitingForThrow' && previousStatus !== 'waitingForThrow') {
       setPreviewReady(false);
       setPreviewStreaming(false);
+      previewStreamingRef.current = false;
       setPreviewInstanceKey(current => current + 1);
     }
     previousStatusRef.current = status;
@@ -318,18 +324,36 @@ export const GameScreen = ({ navigation }: Props) => {
     });
   };
 
+  // Resolves once the preview reports it stopped (it stops when the handoff starts), or right
+  // away when it was not streaming; capped so a missed event cannot hold the round back.
+  const waitForPreviewStop = () =>
+    new Promise<void>(resolve => {
+      if (!previewStreamingRef.current) {
+        resolve();
+        return;
+      }
+      const done = () => {
+        clearTimeout(timer);
+        previewStoppedRef.current = null;
+        resolve();
+      };
+      const timer = setTimeout(done, PREVIEW_STOP_TIMEOUT_MS);
+      previewStoppedRef.current = done;
+    });
+
   const startRound = () => {
     setRunningAction('start');
     setHandoffInProgress(true);
+    let handoffWaitMs = 0;
     Promise.resolve()
       .then(() => updateLiveZoomRatio(latestZoomRef.current))
-      .then(
-        () =>
-          new Promise<void>(resolve => {
-            setTimeout(() => resolve(), 180);
-          }),
-      )
-      .then(() => startLiveRound())
+      .then(() => {
+        const waitStartedAt = Date.now();
+        return waitForPreviewStop().then(() => {
+          handoffWaitMs = Date.now() - waitStartedAt;
+        });
+      })
+      .then(() => startLiveRound(handoffWaitMs))
       .finally(() => {
         setRunningAction(null);
       })
@@ -488,8 +512,15 @@ export const GameScreen = ({ navigation }: Props) => {
             device={device}
             isActive={shouldShowVisionPreview}
             zoom={previewStreaming ? previewZoomRatio : ZOOM_MIN}
-            onStarted={() => setPreviewStreaming(true)}
-            onStopped={() => setPreviewStreaming(false)}
+            onStarted={() => {
+              previewStreamingRef.current = true;
+              setPreviewStreaming(true);
+            }}
+            onStopped={() => {
+              previewStreamingRef.current = false;
+              setPreviewStreaming(false);
+              previewStoppedRef.current?.();
+            }}
             format={format}
             resizeMode="cover"
             androidPreviewViewType="texture-view"

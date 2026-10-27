@@ -2,6 +2,7 @@ package com.zheng.bulltrackmobile.bulltrack
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
@@ -60,27 +61,27 @@ class BullTrackFrameRecorder(
     }
 
     /** A board-setup frame; every attempt is kept, also failed ones. */
-    fun recordStartFrame(attempt: Int, bitmap: Bitmap, outcome: String) {
-        save("start_$attempt", bitmap, SystemClock.elapsedRealtimeNanos(), outcome)
+    fun recordStartFrame(attempt: Int, bitmap: Bitmap, rotationDegrees: Int, outcome: String) {
+        save("start_$attempt", bitmap, rotationDegrees, SystemClock.elapsedRealtimeNanos(), outcome)
     }
 
-    fun recordFrame(frameIndex: Int, bitmap: Bitmap, capturedNs: Long, gateReason: String) {
+    fun recordFrame(frameIndex: Int, bitmap: Bitmap, rotationDegrees: Int, capturedNs: Long, gateReason: String) {
         val name = String.format(Locale.US, "frame_%04d", frameIndex)
         val idle = gateReason == IDLE_GATE_REASON
         when {
             !idle -> {
                 // Something happened: keep what led up to it too.
-                unsaved.forEach { save(it.name, it.bitmap, it.capturedNs, it.reason) }
+                unsaved.forEach { save(it.name, it.bitmap, it.rotationDegrees, it.capturedNs, it.reason) }
                 unsaved.clear()
-                save(name, bitmap, capturedNs, gateReason)
+                save(name, bitmap, rotationDegrees, capturedNs, gateReason)
             }
             capturedNs - lastSavedNs >= IDLE_FRAME_INTERVAL_NS -> {
                 unsaved.forEach(::logSkipped)
                 unsaved.clear()
-                save(name, bitmap, capturedNs, gateReason)
+                save(name, bitmap, rotationDegrees, capturedNs, gateReason)
             }
             else -> {
-                unsaved.addLast(PendingFrame(name, bitmap, capturedNs, gateReason))
+                unsaved.addLast(PendingFrame(name, bitmap, rotationDegrees, capturedNs, gateReason))
                 if (unsaved.size > FRAMES_KEPT_BEFORE_EVENT) {
                     unsaved.removeFirst().also { logSkipped(it) }
                 }
@@ -93,11 +94,11 @@ class BullTrackFrameRecorder(
         val last = unsaved.removeLastOrNull()
         unsaved.forEach(::logSkipped)
         unsaved.clear()
-        last?.let { save(it.name, it.bitmap, it.capturedNs, it.reason) }
+        last?.let { save(it.name, it.bitmap, it.rotationDegrees, it.capturedNs, it.reason) }
     }
 
-    fun recordRedetectFrame(index: Int, bitmap: Bitmap) {
-        save("redetect_$index", bitmap, SystemClock.elapsedRealtimeNanos(), "redetect")
+    fun recordRedetectFrame(index: Int, bitmap: Bitmap, rotationDegrees: Int) {
+        save("redetect_$index", bitmap, rotationDegrees, SystemClock.elapsedRealtimeNanos(), "redetect")
     }
 
     fun recordFailure(message: String) {
@@ -120,14 +121,25 @@ class BullTrackFrameRecorder(
         }
     }
 
-    private fun save(name: String, bitmap: Bitmap, capturedNs: Long, reason: String) {
+    // Camera frames may still need their clockwise turn; it is done here, off the round loop and
+    // only while recording, so saved frames stay upright.
+    private fun save(name: String, bitmap: Bitmap, rotationDegrees: Int, capturedNs: Long, reason: String) {
         val dir = roundDir ?: return
         lastSavedNs = capturedNs
         val line = "$name,${elapsedMs(capturedNs)},1,${csvText(reason)}"
         writer.execute {
             runCatching {
+                val upright = if (rotationDegrees == 0) {
+                    bitmap
+                } else {
+                    val matrix = Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+                    Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                }
                 FileOutputStream(File(dir, "$name.jpg")).use { stream ->
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, stream)
+                    upright.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, stream)
+                }
+                if (upright !== bitmap) {
+                    upright.recycle()
                 }
                 File(dir, CSV_NAME).appendText(line + "\n")
             }.onFailure { Log.w(TAG, "Recording frame $name failed", it) }
@@ -162,6 +174,7 @@ class BullTrackFrameRecorder(
     private data class PendingFrame(
         val name: String,
         val bitmap: Bitmap,
+        val rotationDegrees: Int,
         val capturedNs: Long,
         val reason: String,
     )

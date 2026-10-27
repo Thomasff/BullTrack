@@ -1,6 +1,7 @@
 package com.zheng.bulltrackmobile.bulltrack
 
 import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
@@ -65,6 +66,9 @@ class BullTrackLiveRoundController(
     @Volatile
     private var stopRequested = false
 
+    @Volatile
+    private var warmUpStarted = false
+
     init {
         cameraManager.initialize(appContext)
         scope.launch {
@@ -112,7 +116,26 @@ class BullTrackLiveRoundController(
 
     suspend fun prepareRoundCamera(): WritableMap {
         cameraManager.initialize(appContext)
+        warmUpDetector()
         return currentCameraReadyState("预览由 VisionCamera 管理，原生连续检测待命")
+    }
+
+    // Loads the model and builds its GPU programs once per process while the player is still
+    // aiming, so the first round does not wait for them. The model then stays loaded until the
+    // process ends; a round started before this finishes simply waits for it inside the detector.
+    private fun warmUpDetector() {
+        if (warmUpStarted || isProbablyEmulator()) {
+            return
+        }
+        warmUpStarted = true
+        scope.launch(Dispatchers.Default) {
+            val startNs = SystemClock.elapsedRealtimeNanos()
+            runCatching {
+                ensureDetectorInitialized()
+                detector.warmUp()
+            }.onFailure { Log.w(TAG, "Detector warm-up failed", it) }
+            Log.i(TAG, "Detector warm-up took ${elapsedMs(startNs)} ms")
+        }
     }
 
     suspend fun setZoomRatio(zoomRatio: Double): WritableMap {
@@ -121,7 +144,9 @@ class BullTrackLiveRoundController(
         return currentCameraReadyState("已更新原生 round zoom")
     }
 
-    fun startLiveRound(debugImages: Boolean, recordFrames: Boolean): WritableMap {
+    // handoffWaitMs: how long RN waited for its preview to stop before calling, for the timing log.
+    fun startLiveRound(debugImages: Boolean, recordFrames: Boolean, handoffWaitMs: Long): WritableMap {
+        val requestedNs = SystemClock.elapsedRealtimeNanos()
         ensureSupportedRuntime()
         ensureDetectorInitialized()
         if (roundJob?.isActive == true || currentSession != null) {
@@ -140,7 +165,7 @@ class BullTrackLiveRoundController(
         }
         roundJob = scope.launch(bridgeDispatcher) {
             runCatching {
-                runContinuousRound(roundId)
+                runContinuousRound(roundId, requestedNs, handoffWaitMs)
             }.onFailure { error ->
                 cleanupCurrentSession(destroySession = true)
                 releaseRoundOwnershipOnMain()
@@ -186,10 +211,14 @@ class BullTrackLiveRoundController(
         return runCatching {
             bindNativeCaptureOnly()
             val redetectFrame = cameraManager.captureNextFrameForRound()
-            frameRecorder.recordRedetectFrame(session.consumedFrameCount + 1, redetectFrame.bitmap)
+            frameRecorder.recordRedetectFrame(
+                session.consumedFrameCount + 1,
+                redetectFrame.bitmap,
+                redetectFrame.rotationDegrees,
+            )
             val update = withTimeout(NATIVE_CALL_TIMEOUT_MS) {
                 withContext(Dispatchers.Default) {
-                    detector.redetect(session.nativeSessionId, redetectFrame.bitmap)
+                    detector.redetect(session.nativeSessionId, redetectFrame.bitmap, redetectFrame.rotationDegrees)
                 }
             }
             artifactStore.saveArtifacts(roundId, update.debugImages)
@@ -301,7 +330,7 @@ class BullTrackLiveRoundController(
         }
     }
 
-    private suspend fun runContinuousRound(roundId: String) {
+    private suspend fun runContinuousRound(roundId: String, requestedNs: Long, handoffWaitMs: Long) {
         emitRoundState(
             phase = "starting",
             roundId = roundId,
@@ -310,7 +339,11 @@ class BullTrackLiveRoundController(
             canRedetect = false,
         )
 
+        var stepStartNs = SystemClock.elapsedRealtimeNanos()
         bindNativeCaptureOnly()
+        val bindMs = elapsedMs(stepStartNs)
+        // Per board-setup attempt: first frame (metering and capture) and board setup times.
+        val attemptTimings = mutableListOf<String>()
         clearLiveFrames()
         // Building the board from the empty-board frame sometimes fails on one frame and works on
         // the next, so retry with fresh frames before giving up instead of making the player
@@ -320,35 +353,51 @@ class BullTrackLiveRoundController(
         var firstFrameStatus: String? = null
         var boardSetup: StartRoundDetectionUpdate? = null
         for (attempt in 1..START_ROUND_ATTEMPTS) {
+            stepStartNs = SystemClock.elapsedRealtimeNanos()
             val firstFrame = cameraManager.captureFirstFrameForRound()
             firstFrameCapturedNs = SystemClock.elapsedRealtimeNanos()
+            val firstFrameMs = elapsedMs(stepStartNs)
             firstFrameStatus = firstFrame.cameraConfig?.statusMessage
-            publishLiveFrame(roundId, firstFrame.bitmap)
+            publishLiveFrame(roundId, firstFrame.bitmap, firstFrame.rotationDegrees)
             val attemptSessionId = withTimeout(NATIVE_CALL_TIMEOUT_MS) {
                 withContext(Dispatchers.Default) {
                     detector.createSession()
                 }
             }
 
+            stepStartNs = SystemClock.elapsedRealtimeNanos()
             val startUpdate = runCatching {
                 withTimeout(NATIVE_CALL_TIMEOUT_MS) {
                     withContext(Dispatchers.Default) {
-                        detector.startRound(attemptSessionId, firstFrame.bitmap)
+                        detector.startRound(attemptSessionId, firstFrame.bitmap, firstFrame.rotationDegrees)
                     }
                 }
+            }.also {
+                attemptTimings += "first frame $firstFrameMs ms + board setup ${elapsedMs(stepStartNs)} ms"
             }.getOrElse { error ->
-                frameRecorder.recordStartFrame(attempt, firstFrame.bitmap, "board setup failed: ${error.message}")
+                frameRecorder.recordStartFrame(
+                    attempt,
+                    firstFrame.bitmap,
+                    firstFrame.rotationDegrees,
+                    "board setup failed: ${error.message}",
+                )
                 detector.destroySession(attemptSessionId)
                 Log.w(TAG, "Board setup attempt $attempt failed", error)
                 // "No board found" arrives as an exception; timeouts and cancellation do not retry.
                 if (attempt == START_ROUND_ATTEMPTS || stopRequested || error is CancellationException) {
+                    logStartTiming(requestedNs, handoffWaitMs, bindMs, attemptTimings, "failed")
                     throw error
                 }
                 null
             } ?: continue
             artifactStore.saveArtifacts(roundId, startUpdate.debugImages)
             val errorMessage = startUpdate.errorMessage
-            frameRecorder.recordStartFrame(attempt, firstFrame.bitmap, errorMessage ?: "board setup ok")
+            frameRecorder.recordStartFrame(
+                attempt,
+                firstFrame.bitmap,
+                firstFrame.rotationDegrees,
+                errorMessage ?: "board setup ok",
+            )
             if (errorMessage == null) {
                 sessionId = attemptSessionId
                 boardSetup = startUpdate
@@ -357,9 +406,11 @@ class BullTrackLiveRoundController(
             Log.w(TAG, "Board setup attempt $attempt failed: $errorMessage")
             detector.destroySession(attemptSessionId)
             if (attempt == START_ROUND_ATTEMPTS || stopRequested) {
+                logStartTiming(requestedNs, handoffWaitMs, bindMs, attemptTimings, "failed")
                 error(errorMessage)
             }
         }
+        logStartTiming(requestedNs, handoffWaitMs, bindMs, attemptTimings, "ok")
 
         // From the right, dart tails stick out to the left of the board where the search area has
         // no room and darts get lost, so such a round is not started at all. The board setup still
@@ -395,6 +446,7 @@ class BullTrackLiveRoundController(
         // guaranteed to share the elapsedRealtime time base, and a mismatch removed all waiting.
         var lastCaptureStartNs = firstFrameCapturedNs
         var captureNextImmediately = false
+        val frameTimings = FrameTimings()
         while (!stopRequested) {
             if (!captureNextImmediately) {
                 waitUntilNextFrameWindow(lastCaptureStartNs)
@@ -404,21 +456,35 @@ class BullTrackLiveRoundController(
             }
             lastCaptureStartNs = SystemClock.elapsedRealtimeNanos()
             val frame = cameraManager.captureNextFrameForRound()
-            publishLiveFrame(roundId, frame.bitmap)
+            val captureMs = elapsedMs(lastCaptureStartNs)
+            publishLiveFrame(roundId, frame.bitmap, frame.rotationDegrees)
             // Exposure is locked for the round; a change here means the lock did not hold.
             val exposure = cameraManager.describeExposure()
             if (exposure != loggedExposure) {
                 Log.i(TAG, "Frame $frameIndex camera: $exposure")
                 loggedExposure = exposure
             }
-            val decision = processNextFrame(frameIndex = frameIndex, frameBitmap = frame.bitmap)
-            frameRecorder.recordFrame(frameIndex, frame.bitmap, lastCaptureStartNs, decision.gateReason)
+            stepStartNs = SystemClock.elapsedRealtimeNanos()
+            val decision = processNextFrame(
+                frameIndex = frameIndex,
+                frameBitmap = frame.bitmap,
+                rotationDegrees = frame.rotationDegrees,
+            )
+            frameTimings.add(captureMs, frame.decodeMs, elapsedMs(stepStartNs))
+            frameRecorder.recordFrame(
+                frameIndex,
+                frame.bitmap,
+                frame.rotationDegrees,
+                lastCaptureStartNs,
+                decision.gateReason,
+            )
             captureNextImmediately = decision.captureNextImmediately
             if (decision.shouldStop) {
                 break
             }
             frameIndex += 1
         }
+        Log.i(TAG, "Round frame timing: $frameTimings")
 
         frameRecorder.finishCapture()
         finalizeRound(manualStop = stopRequested)
@@ -471,6 +537,7 @@ class BullTrackLiveRoundController(
     private suspend fun processNextFrame(
         frameIndex: Int,
         frameBitmap: android.graphics.Bitmap,
+        rotationDegrees: Int,
     ): FrameLoopDecision {
         val session = currentSession ?: return FrameLoopDecision(shouldStop = true)
         session.consumedFrameCount = frameIndex
@@ -478,7 +545,7 @@ class BullTrackLiveRoundController(
         val frameUpdate = runCatching {
             withTimeout(NATIVE_CALL_TIMEOUT_MS) {
                 withContext(Dispatchers.Default) {
-                    detector.processFrame(session.nativeSessionId, frameBitmap)
+                    detector.processFrame(session.nativeSessionId, frameBitmap, rotationDegrees)
                 }
             }
         }.getOrElse { error ->
@@ -584,10 +651,17 @@ class BullTrackLiveRoundController(
 
     // Small JPEG of a frame the round already captured, so RN can show a near-live view
     // without a second camera stream. Files rotate; only the latest few are kept.
-    private fun publishLiveFrame(roundId: String, frame: Bitmap) {
+    // The frame may still need its clockwise turn; scaling and turning happen in one small copy.
+    private fun publishLiveFrame(roundId: String, frame: Bitmap, rotationDegrees: Int) {
         val scaled = runCatching {
-            val height = frame.height * LIVE_FRAME_WIDTH / frame.width
-            Bitmap.createScaledBitmap(frame, LIVE_FRAME_WIDTH, height, true)
+            val quarterTurn = rotationDegrees == 90 || rotationDegrees == 270
+            val uprightWidth = if (quarterTurn) frame.height else frame.width
+            val scale = LIVE_FRAME_WIDTH.toFloat() / uprightWidth
+            val matrix = Matrix().apply {
+                postScale(scale, scale)
+                postRotate(rotationDegrees.toFloat())
+            }
+            Bitmap.createBitmap(frame, 0, 0, frame.width, frame.height, matrix, true)
         }.getOrNull() ?: return
         val index = liveFrameCounter++
         scope.launch(Dispatchers.IO) {
@@ -608,6 +682,24 @@ class BullTrackLiveRoundController(
             scaled.recycle()
         }
     }
+
+    // One line per round start: tap to ready, and where the time went.
+    private fun logStartTiming(
+        requestedNs: Long,
+        handoffWaitMs: Long,
+        bindMs: Long,
+        attemptTimings: List<String>,
+        outcome: String,
+    ) {
+        Log.i(
+            TAG,
+            "Round start timing ($outcome): total ${handoffWaitMs + elapsedMs(requestedNs)} ms = " +
+                "preview stop wait $handoffWaitMs ms + camera bind $bindMs ms + " +
+                attemptTimings.joinToString(" + ") { "[$it]" },
+        )
+    }
+
+    private fun elapsedMs(startNs: Long): Long = (SystemClock.elapsedRealtimeNanos() - startNs) / NANOS_PER_MILLISECOND
 
     private fun clearLiveFrames() {
         runCatching {
@@ -864,6 +956,33 @@ class BullTrackLiveRoundController(
         // For the frame recorder, which keeps frames where the gate saw something.
         val gateReason: String = "",
     )
+
+    // Average and worst capture (with decode) and detection time of a round's frames.
+    private class FrameTimings {
+        private var count = 0
+        private var captureTotalMs = 0L
+        private var captureMaxMs = 0L
+        private var decodeTotalMs = 0L
+        private var detectTotalMs = 0L
+        private var detectMaxMs = 0L
+
+        fun add(captureMs: Long, decodeMs: Long, detectMs: Long) {
+            count += 1
+            captureTotalMs += captureMs
+            captureMaxMs = maxOf(captureMaxMs, captureMs)
+            decodeTotalMs += decodeMs
+            detectTotalMs += detectMs
+            detectMaxMs = maxOf(detectMaxMs, detectMs)
+        }
+
+        override fun toString(): String {
+            if (count == 0) {
+                return "no frames"
+            }
+            return "$count frames, capture avg ${captureTotalMs / count} ms (decode ${decodeTotalMs / count} ms) " +
+                "max $captureMaxMs ms, detect avg ${detectTotalMs / count} ms max $detectMaxMs ms"
+        }
+    }
 
     private data class RoundSession(
         val roundId: String,

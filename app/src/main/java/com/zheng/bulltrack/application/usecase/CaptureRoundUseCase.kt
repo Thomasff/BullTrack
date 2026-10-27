@@ -48,7 +48,7 @@ class CaptureRoundUseCase(
         val roundId = createRoundId()
         val startUpdate = runCatching {
             withContext(Dispatchers.Default) {
-                dartDetector.startRound(nativeSessionId, firstFrame.bitmap)
+                dartDetector.startRound(nativeSessionId, firstFrame.bitmap, firstFrame.rotationDegrees)
             }
         }.getOrElse { error ->
             dartDetector.destroySession(nativeSessionId)
@@ -86,7 +86,7 @@ class CaptureRoundUseCase(
                 break
             }
             lastCaptureTimestampNs = frame.timestampNs
-            val decision = processNextFrame(frameIndex = frameIndex, frame = frame.bitmap)
+            val decision = processNextFrame(frameIndex = frameIndex, frame = frame.bitmap, rotationDegrees = frame.rotationDegrees)
             captureNextImmediately = decision.captureNextImmediately
             if (decision.shouldStop) {
                 break
@@ -122,7 +122,7 @@ class CaptureRoundUseCase(
         session.consumedFrameCount += 1
         val redetectUpdate = runCatching {
             withContext(Dispatchers.Default) {
-                dartDetector.redetect(session.nativeSessionId, redetectFrame.bitmap)
+                dartDetector.redetect(session.nativeSessionId, redetectFrame.bitmap, redetectFrame.rotationDegrees)
             }
         }.getOrElse {
             stateMachine.showDetectedResult(
@@ -176,13 +176,13 @@ class CaptureRoundUseCase(
         }
     }
 
-    private suspend fun processNextFrame(frameIndex: Int, frame: Bitmap): FrameLoopDecision {
+    private suspend fun processNextFrame(frameIndex: Int, frame: Bitmap, rotationDegrees: Int): FrameLoopDecision {
         val session = currentSession ?: return FrameLoopDecision(shouldStop = true)
         session.consumedFrameCount = frameIndex
 
         val frameUpdate = runCatching {
             withContext(Dispatchers.Default) {
-                dartDetector.processFrame(session.nativeSessionId, frame)
+                dartDetector.processFrame(session.nativeSessionId, frame, rotationDegrees)
             }
         }.getOrElse {
             stateMachine.updateRoundProgress(

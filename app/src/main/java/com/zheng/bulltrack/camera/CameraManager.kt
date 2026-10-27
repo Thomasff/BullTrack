@@ -43,7 +43,11 @@ data class RoundCameraConfig(
 data class CapturedFrame(
     val bitmap: android.graphics.Bitmap,
     val timestampNs: Long,
-    val cameraConfig: RoundCameraConfig? = null
+    val cameraConfig: RoundCameraConfig? = null,
+    // Clockwise turn still needed to make the bitmap upright; detection applies it natively.
+    val rotationDegrees: Int = 0,
+    // Time spent turning the camera image into the bitmap, for the round timing log.
+    val decodeMs: Long = 0
 )
 
 interface CameraManager {
