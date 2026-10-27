@@ -2,12 +2,13 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { colors, teamColors } from '../theme/colors';
 import {
+  CHECKOUT_DRILLS,
   DARTS_99_ROUNDS,
   GOTCHA_TARGET,
+  HAMMER_ROUNDS,
   HIGH_SCORE_ROUNDS,
   KILLER_LIVES,
   getAroundTheClockTarget,
-  getCricketTargets,
   getRoundTarget,
   isCricketType,
 } from '../../application/services/gameRules';
@@ -26,10 +27,14 @@ interface ScoreboardProps {
   currentThrowerId?: string | null;
 }
 
+// A cricket side's targets, read from its marks (Random Cricket draws them per game).
+const getCricketTargets = (player: PlayerSummary | undefined) =>
+  Object.keys(player?.marks ?? {}).sort((left, right) => Number(left) - Number(right));
+
 // Cricket table columns: high numbers first, bull last; empty for other games.
-const getCricketRows = (gameType: GameType | null) =>
+const getCricketRows = (gameType: GameType | null, players: PlayerSummary[]) =>
   isCricketType(gameType)
-    ? [...getCricketTargets(gameType).filter(target => target !== '25').reverse(), '25']
+    ? [...getCricketTargets(players[0]).filter(target => target !== '25').reverse(), '25']
     : [];
 
 const targetText = (target: number | string | null) =>
@@ -70,7 +75,7 @@ const describePlayer = (gameType: GameType | null, player: PlayerSummary) => {
     case 'aroundTheClock':
       return { value: targetText(getAroundTheClockTarget(player.score)), detail: `${rounds} 轮` };
     case 'cricketNoScore': {
-      const targets = getCricketTargets(gameType);
+      const targets = getCricketTargets(player);
       const closed = targets.filter(target => (player.marks?.[target] ?? 0) >= 3).length;
       return { value: `${closed}/${targets.length}`, detail: '已关闭' };
     }
@@ -78,6 +83,23 @@ const describePlayer = (gameType: GameType | null, player: PlayerSummary) => {
       return { value: `${player.score}`, detail: '分 · 低者胜' };
     case 'gotcha301':
       return { value: `${player.score}`, detail: `还差 ${GOTCHA_TARGET - player.score}` };
+    case 'hammerCricket': {
+      const target = player.target ?? null;
+      const lastRound = target !== null && rounds === HAMMER_ROUNDS - 1;
+      return {
+        value: `${player.score}`,
+        detail: target === null ? '完成' : `目标 ${targetText(target)}${lastRound ? ' · 末轮' : ''}`,
+      };
+    }
+    case 'catch40':
+    case 'checkout4160': {
+      const state = player.checkout;
+      if (!state || state.target === null) {
+        return { value: '完成', detail: `${player.score} 分` };
+      }
+      const darts = CHECKOUT_DRILLS[gameType].maxDarts - state.dartsUsed;
+      return { value: `${state.remaining}`, detail: `${player.score} 分 · 剩 ${darts} 镖` };
+    }
     case 'shanghai':
     case 'halfIt':
     case 'bermuda': {
@@ -170,7 +192,7 @@ const CricketTable = ({
   gameType: GameType | null;
   players: PlayerSummary[];
 }) => {
-  const rows = getCricketRows(gameType);
+  const rows = getCricketRows(gameType, players);
   if (rows.length === 0) {
     return null;
   }

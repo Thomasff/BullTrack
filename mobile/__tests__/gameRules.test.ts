@@ -147,6 +147,10 @@ describe('Round number', () => {
       'bermuda',
       'killer',
       'gotcha301',
+      'randomCricket',
+      'hammerCricket',
+      'catch40',
+      'checkout4160',
     ] as const,
   )(
     '%s counts rounds per player, not ahead of later seats',
@@ -353,5 +357,102 @@ describe('Killer', () => {
     expect(engine.isGameOver()).toBe(false);
     engine.applyRound([MISS(), MISS(), MISS()]); // P2
     expect(engine.getCurrentPlayerId()).toBe('player-1');
+  });
+});
+
+describe('Random Cricket', () => {
+  const targetsOf = (engine: ReturnType<typeof createGameEngine>) =>
+    Object.keys(engine.getScoreBoard().players[0].marks ?? {});
+
+  test('the same seed draws the same six different numbers plus the bull', () => {
+    const targets = targetsOf(createGameEngine('randomCricket', players(2), 2024));
+    expect(targetsOf(createGameEngine('randomCricket', players(2), 2024))).toEqual(targets);
+    expect(targets).toHaveLength(7);
+    expect(targets).toContain('25');
+    const numbers = targets.filter(target => target !== '25').map(Number);
+    expect(new Set(numbers).size).toBe(6);
+    numbers.forEach(number => expect(number >= 1 && number <= 20).toBe(true));
+  });
+
+  test('only the drawn numbers take marks and score', () => {
+    const engine = createGameEngine('randomCricket', players(2), 31);
+    const drawn = targetsOf(engine).filter(target => target !== '25').map(Number);
+    const notDrawn = [...Array(20).keys()].map(index => index + 1).find(n => !drawn.includes(n)) ?? 1;
+    const result = engine.applyRound([T(drawn[0]), S(drawn[0]), T(notDrawn)]);
+    expect(result.roundScore).toBe(drawn[0]);
+    const marks = engine.getScoreBoard().players[0].marks ?? {};
+    expect(marks[`${drawn[0]}`]).toBe(3);
+    expect(marks[`${notDrawn}`]).toBeUndefined();
+  });
+});
+
+describe('Hammer cricket', () => {
+  test('darts count by their place in the round and a full miss drops the hammer', () => {
+    const engine = createGameEngine('hammerCricket', players(2), 5);
+    // Arachnid's example: miss, single 20 (x2), triple 20 (x3) = 220.
+    expect(engine.applyRound([MISS(), S(20), T(20)]).roundScore).toBe(220);
+    expect(engine.applyRound([S(19), S(12), S(1)]).roundScore).toBe(-60);
+    const [first, second] = engine.getScoreBoard().players;
+    expect([first.score, second.score]).toEqual([220, -60]);
+    expect(first.target).toBe(19);
+  });
+
+  test('the last round multiplies by 1, 3 and 5 and the highest total wins', () => {
+    const engine = createGameEngine('hammerCricket', players(1), 77);
+    for (let round = 1; round < 8; round += 1) {
+      engine.applyRound([MISS(), MISS(), MISS()]);
+    }
+    const target = engine.getScoreBoard().players[0].target ?? 0;
+    expect([12, 13, 14, 15, 16, 17, 18, 19, 20, 25]).toContain(target);
+    const hit = target === 25 ? createThrow('outerBull') : S(target);
+    expect(engine.applyRound([hit, hit, hit]).roundScore).toBe(9 * hit.score);
+    expect(engine.getWinnerId()).toBe('player-1');
+    expect(engine.getScoreBoard().players[0].target).toBeNull();
+  });
+});
+
+describe('Catch 40', () => {
+  test('a 2-dart finish scores 3 and moves on to the next number', () => {
+    const engine = createGameEngine('catch40', players(1));
+    expect(engine.applyRound([S(11), createThrow('innerBull')]).roundScore).toBe(3);
+    expect(engine.getScoreBoard().players[0].checkout).toEqual({
+      target: 62,
+      remaining: 62,
+      dartsUsed: 0,
+    });
+  });
+
+  test('a bust voids the visit, and a 6-dart finish scores 1', () => {
+    const engine = createGameEngine('catch40', players(1));
+    engine.applyRound([T(20), MISS(), MISS()]); // 61 -> 1: bust
+    expect(engine.getScoreBoard().players[0].checkout?.remaining).toBe(61);
+    expect(engine.applyRound([S(1), S(20), D(20)]).roundScore).toBe(1);
+    expect(engine.getScoreBoard().players[0].checkout?.target).toBe(62);
+  });
+
+  test('no finish in six darts scores 0', () => {
+    const engine = createGameEngine('catch40', players(1));
+    engine.applyRound([S(1), MISS(), MISS()]);
+    expect(engine.applyRound([S(20), S(20), MISS()]).roundScore).toBe(0);
+    expect(engine.getScoreBoard().players[0].checkout?.target).toBe(62);
+  });
+});
+
+describe('41-60', () => {
+  test('one visit per number: 2 darts score 2, 3 darts 1, otherwise 0', () => {
+    const engine = createGameEngine('checkout4160', players(1));
+    expect(engine.applyRound([S(9), D(16)]).roundScore).toBe(2); // 41
+    expect(engine.applyRound([S(2), S(10), D(15)]).roundScore).toBe(1); // 42
+    expect(engine.applyRound([S(3), MISS(), MISS()]).roundScore).toBe(0); // 43
+    expect(engine.getScoreBoard().players[0].checkout?.target).toBe(44);
+  });
+
+  test('the game ends after 60', () => {
+    const engine = createGameEngine('checkout4160', players(2));
+    for (let visit = 0; visit < 40; visit += 1) {
+      engine.applyRound(visit === 39 ? [S(20), D(20)] : [MISS(), MISS(), MISS()]);
+    }
+    expect(engine.getWinnerId()).toBe('player-2');
+    expect(engine.getScoreBoard().players.map(player => player.checkout?.target)).toEqual([null, null]);
   });
 });

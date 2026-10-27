@@ -13,7 +13,11 @@ export type GameType =
   | 'halfIt'
   | 'bermuda'
   | 'killer'
-  | 'gotcha301';
+  | 'gotcha301'
+  | 'randomCricket'
+  | 'hammerCricket'
+  | 'catch40'
+  | 'checkout4160';
 
 export type GameStatus =
   | 'idle'
@@ -57,6 +61,19 @@ export interface PlayerSummary {
   teamIndex?: number;
   // Killer only.
   killer?: KillerState;
+  // Hammer cricket: the number this side aims at next (25 = bull), null once done.
+  target?: number | null;
+  // Catch 40 and 41-60 only.
+  checkout?: CheckoutState;
+}
+
+export interface CheckoutState {
+  // The finish being played, e.g. 61; null once every finish is done.
+  target: number | null;
+  // Score still to check out on this finish.
+  remaining: number;
+  // Darts already thrown at this finish (a visit always counts as three).
+  dartsUsed: number;
 }
 
 export interface KillerState {

@@ -1,4 +1,5 @@
 import type {
+  CheckoutState,
   GameType,
   KillerState,
   PlayerSummary,
@@ -25,7 +26,18 @@ const clonePlayers = (players: PlayerSummary[]): PlayerSummary[] =>
     roundScores: [...player.roundScores],
     marks: player.marks ? { ...player.marks } : undefined,
     killer: player.killer ? { ...player.killer } : undefined,
+    checkout: player.checkout ? { ...player.checkout } : undefined,
   }));
+
+// Small deterministic PRNG (Park-Miller), so replaying a game for undo deals the same numbers.
+const RANDOM_MODULUS = 2147483647;
+const createRandom = (seed: number) => {
+  let state = (Math.abs(Math.floor(seed)) % (RANDOM_MODULUS - 1)) + 1;
+  return () => {
+    state = (state * 48271) % RANDOM_MODULUS;
+    return (state - 1) / (RANDOM_MODULUS - 1);
+  };
+};
 
 export const HIGH_SCORE_ROUNDS = 10;
 export const DARTS_99_ROUNDS = 33;
@@ -194,19 +206,37 @@ class X01Engine implements GameEngine {
   }
 }
 
-type CricketType = 'cricket' | 'cricketNoScore' | 'tactics' | 'cutThroat';
+type CricketType = 'cricket' | 'cricketNoScore' | 'tactics' | 'cutThroat' | 'randomCricket';
 
 const CRICKET_TARGETS = ['15', '16', '17', '18', '19', '20', '25'];
 const TACTICS_TARGETS = ['10', '11', '12', '13', '14', ...CRICKET_TARGETS];
+const RANDOM_CRICKET_NUMBERS = 6;
 
 export const isCricketType = (type: GameType | null): type is CricketType =>
-  type === 'cricket' || type === 'cricketNoScore' || type === 'tactics' || type === 'cutThroat';
+  type === 'cricket' ||
+  type === 'cricketNoScore' ||
+  type === 'tactics' ||
+  type === 'cutThroat' ||
+  type === 'randomCricket';
 
-// '25' is the bull.
-export const getCricketTargets = (type: CricketType) =>
-  type === 'tactics' ? TACTICS_TARGETS : CRICKET_TARGETS;
+// '25' is the bull. Random Cricket draws six different numbers from 1-20 once per game.
+const getCricketTargets = (type: CricketType, seed: number) => {
+  if (type === 'tactics') {
+    return TACTICS_TARGETS;
+  }
+  if (type !== 'randomCricket') {
+    return CRICKET_TARGETS;
+  }
+  const random = createRandom(seed);
+  const pool = [...BOARD_SECTORS];
+  const drawn = Array.from(
+    { length: RANDOM_CRICKET_NUMBERS },
+    () => pool.splice(Math.floor(random() * pool.length), 1)[0],
+  );
+  return [...drawn.sort((left, right) => left - right).map(String), '25'];
+};
 
-// Standard and Tactics score extra marks for yourself, Cut Throat gives them to every
+// Standard, Tactics and Random score extra marks for yourself, Cut Throat gives them to every
 // opponent still open on that target (lowest score wins), No Score only races to close.
 class CricketEngine implements GameEngine {
   readonly type: CricketType;
@@ -215,9 +245,9 @@ class CricketEngine implements GameEngine {
   private winnerId: string | null = null;
   private readonly targets: string[];
 
-  constructor(type: CricketType, players: PlayerSummary[]) {
+  constructor(type: CricketType, players: PlayerSummary[], seed: number) {
     this.type = type;
-    this.targets = getCricketTargets(type);
+    this.targets = getCricketTargets(type, seed);
     this.players = clonePlayers(players).map(player => ({
       ...player,
       marks: Object.fromEntries(this.targets.map(target => [target, 0])),
@@ -533,16 +563,6 @@ class TargetRoundsEngine implements GameEngine {
 
 export const KILLER_LIVES = 3;
 
-// Small deterministic PRNG (Park-Miller), so replaying a game for undo deals the same numbers.
-const RANDOM_MODULUS = 2147483647;
-const createRandom = (seed: number) => {
-  let state = (Math.abs(Math.floor(seed)) % (RANDOM_MODULUS - 1)) + 1;
-  return () => {
-    state = (state * 48271) % RANDOM_MODULUS;
-    return (state - 1) / (RANDOM_MODULUS - 1);
-  };
-};
-
 const newKillerState = (number: number): KillerState => ({
   number,
   lives: KILLER_LIVES,
@@ -760,10 +780,245 @@ class GotchaEngine implements GameEngine {
   }
 }
 
+// Hammer cricket (Arachnid rules, Open setting): 20 down to 15, then two wild rounds whose
+// number is drawn from 12-20 or the bull. Only darts on the round's number count, worth their
+// score times the dart's place in the round (x1, x2, x3; x1, x3, x5 in the last round).
+// Missing it with all three darts drops the score by three times the number (bull: 75).
+export const HAMMER_ROUNDS = 8;
+const HAMMER_FIXED_TARGETS = [20, 19, 18, 17, 16, 15];
+const HAMMER_WILD_POOL = [12, 13, 14, 15, 16, 17, 18, 19, 20, 25];
+const HAMMER_MULTIPLIERS = [1, 2, 3];
+const HAMMER_LAST_ROUND_MULTIPLIERS = [1, 3, 5];
+
+class HammerCricketEngine implements GameEngine {
+  readonly type = 'hammerCricket' as const;
+  private readonly players: PlayerSummary[];
+  private currentPlayerIndex = 0;
+  private winnerId: string | null = null;
+  private readonly targets: number[];
+
+  constructor(players: PlayerSummary[], seed: number) {
+    const random = createRandom(seed);
+    const wild = () => HAMMER_WILD_POOL[Math.floor(random() * HAMMER_WILD_POOL.length)];
+    this.targets = [...HAMMER_FIXED_TARGETS, wild(), wild()];
+    this.players = clonePlayers(players).map(player => ({
+      ...player,
+      score: 0,
+      target: this.targets[0],
+    }));
+  }
+
+  getCurrentPlayerId() {
+    return this.players[this.currentPlayerIndex].id;
+  }
+
+  getScoreBoard() {
+    return { players: clonePlayers(this.players) };
+  }
+
+  applyRound(throws: ThrowResult[]): RoundResult {
+    const player = this.players[this.currentPlayerIndex];
+    const round = player.roundScores.length;
+    const target = this.targets[round] ?? 0;
+    const multipliers =
+      round === HAMMER_ROUNDS - 1 ? HAMMER_LAST_ROUND_MULTIPLIERS : HAMMER_MULTIPLIERS;
+    let hits = 0;
+    let roundScore = 0;
+    throws.forEach((throwResult, index) => {
+      if (getThrowSector(throwResult) === target) {
+        hits += 1;
+        roundScore += throwResult.score * (multipliers[index] ?? 1);
+      }
+    });
+    if (hits === 0) {
+      roundScore = -3 * target;
+    }
+    player.score += roundScore;
+    player.roundScores = [...player.roundScores, roundScore];
+    player.target = this.targets[round + 1] ?? null;
+
+    this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
+    if (this.players.every(candidate => candidate.roundScores.length >= HAMMER_ROUNDS)) {
+      this.winnerId =
+        [...this.players].sort((left, right) => right.score - left.score)[0]?.id ?? null;
+    }
+
+    return {
+      playerId: player.id,
+      playerName: player.name,
+      throws,
+      roundScore,
+    };
+  }
+
+  isGameOver() {
+    return this.winnerId !== null;
+  }
+
+  getWinnerId() {
+    return this.winnerId;
+  }
+
+  getCurrentRoundNumber() {
+    const roundsPlayed = this.players[this.currentPlayerIndex].roundScores.length;
+    return roundsPlayed + (this.winnerId ? 0 : 1);
+  }
+
+  reset() {
+    this.currentPlayerIndex = 0;
+    this.winnerId = null;
+    this.players.forEach(player => {
+      player.score = 0;
+      player.roundScores = [];
+      player.target = this.targets[0];
+    });
+  }
+}
+
+export type CheckoutDrillType = 'catch40' | 'checkout4160';
+
+// Catch 40 (dolfdarts rules): finish 61 to 100 in order, six darts (two visits) each; a
+// 2-dart finish scores 3, 3 darts 2 (3 on 99), 4-6 darts 1. 41-60: finish 41 to 60, one
+// visit each; 1-2 darts score 2, 3 darts 1.
+export const CHECKOUT_DRILLS: Record<CheckoutDrillType, { first: number; last: number; maxDarts: number }> = {
+  catch40: { first: 61, last: 100, maxDarts: 6 },
+  checkout4160: { first: 41, last: 60, maxDarts: 3 },
+};
+
+const checkoutPoints = (type: CheckoutDrillType, target: number, darts: number) => {
+  if (type === 'checkout4160') {
+    return darts <= 2 ? 2 : 1;
+  }
+  if (darts <= 2 || (target === 99 && darts === 3)) {
+    return 3;
+  }
+  return darts === 3 ? 2 : 1;
+};
+
+const newCheckoutState = (target: number | null): CheckoutState => ({
+  target,
+  remaining: target ?? 0,
+  dartsUsed: 0,
+});
+
+// Each visit plays the side's current finish with a double (or inner bull) out. A finish ends
+// the visit; a bust voids the visit and the score goes back to where it started. Out of darts
+// moves on to the next finish with no points. Highest total wins once everyone is done.
+class CheckoutDrillEngine implements GameEngine {
+  readonly type: CheckoutDrillType;
+  private readonly players: PlayerSummary[];
+  private currentPlayerIndex = 0;
+  private winnerId: string | null = null;
+
+  constructor(type: CheckoutDrillType, players: PlayerSummary[]) {
+    this.type = type;
+    this.players = clonePlayers(players).map(player => ({
+      ...player,
+      score: 0,
+      checkout: newCheckoutState(CHECKOUT_DRILLS[type].first),
+    }));
+  }
+
+  private stateOf(player: PlayerSummary) {
+    return player.checkout ?? newCheckoutState(null);
+  }
+
+  getCurrentPlayerId() {
+    return this.players[this.currentPlayerIndex].id;
+  }
+
+  getScoreBoard() {
+    return { players: clonePlayers(this.players) };
+  }
+
+  applyRound(throws: ThrowResult[]): RoundResult {
+    const { last, maxDarts } = CHECKOUT_DRILLS[this.type];
+    const player = this.players[this.currentPlayerIndex];
+    const state = this.stateOf(player);
+    const target = state.target ?? 0;
+    let remaining = state.remaining;
+    let points = 0;
+    let finished = false;
+
+    for (const [index, throwResult] of throws.entries()) {
+      const next = remaining - throwResult.score;
+      if (next === 0 && (throwResult.ring === 'double' || throwResult.ring === 'innerBull')) {
+        points = checkoutPoints(this.type, target, state.dartsUsed + index + 1);
+        finished = true;
+        break;
+      }
+      if (next <= 1) {
+        remaining = state.remaining;
+        break;
+      }
+      remaining = next;
+    }
+
+    const dartsUsed = state.dartsUsed + 3;
+    player.checkout =
+      finished || dartsUsed >= maxDarts
+        ? newCheckoutState(target < last ? target + 1 : null)
+        : { target: state.target, remaining, dartsUsed };
+    player.score += points;
+    player.roundScores = [...player.roundScores, points];
+
+    const playing = this.players.filter(candidate => this.stateOf(candidate).target !== null);
+    if (playing.length === 0) {
+      const winner = [...this.players].sort((left, right) => right.score - left.score)[0];
+      this.winnerId = winner?.id ?? null;
+      // The winner stays current, like the other games.
+      this.currentPlayerIndex = this.players.findIndex(candidate => candidate.id === this.winnerId);
+    } else {
+      this.advanceToNextPlaying();
+    }
+
+    return {
+      playerId: player.id,
+      playerName: player.name,
+      throws,
+      roundScore: points,
+    };
+  }
+
+  // A side that checks out quickly is done before the others; they keep throwing.
+  private advanceToNextPlaying() {
+    for (let step = 1; step <= this.players.length; step += 1) {
+      const index = (this.currentPlayerIndex + step) % this.players.length;
+      if (this.stateOf(this.players[index]).target !== null) {
+        this.currentPlayerIndex = index;
+        return;
+      }
+    }
+  }
+
+  isGameOver() {
+    return this.winnerId !== null;
+  }
+
+  getWinnerId() {
+    return this.winnerId;
+  }
+
+  getCurrentRoundNumber() {
+    const roundsPlayed = this.players[this.currentPlayerIndex].roundScores.length;
+    return roundsPlayed + (this.winnerId ? 0 : 1);
+  }
+
+  reset() {
+    this.currentPlayerIndex = 0;
+    this.winnerId = null;
+    this.players.forEach(player => {
+      player.score = 0;
+      player.roundScores = [];
+      player.checkout = newCheckoutState(CHECKOUT_DRILLS[this.type].first);
+    });
+  }
+}
+
 let engine: GameEngine | null = null;
 
-// seed only matters for games that deal something at random (Killer numbers); pass the same
-// seed when rebuilding the same game.
+// seed only matters for games that deal something at random (Killer numbers, Random Cricket
+// targets, Hammer cricket wild rounds); pass the same seed when rebuilding the same game.
 export const createGameEngine = (type: GameType, players: PlayerSummary[], seed = 0) => {
   switch (type) {
     case 'highScore':
@@ -774,7 +1029,15 @@ export const createGameEngine = (type: GameType, players: PlayerSummary[], seed 
     case 'cricketNoScore':
     case 'tactics':
     case 'cutThroat':
-      engine = new CricketEngine(type, players);
+    case 'randomCricket':
+      engine = new CricketEngine(type, players, seed);
+      break;
+    case 'hammerCricket':
+      engine = new HammerCricketEngine(players, seed);
+      break;
+    case 'catch40':
+    case 'checkout4160':
+      engine = new CheckoutDrillEngine(type, players);
       break;
     case 'aroundTheClock':
       engine = new AroundTheClockEngine(players);
