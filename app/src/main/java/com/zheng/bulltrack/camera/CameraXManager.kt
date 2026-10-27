@@ -207,8 +207,10 @@ class CameraXManager : CameraManager {
     }
 
     // A round keeps the camera the idle preview already opened: reopening costs about 1.7 s (the
-    // open itself, then an initial focus scan during which no focus lock is taken). Binds capture
-    // only when nothing is bound.
+    // open itself, then an initial focus scan during which no focus lock is taken). The preview
+    // stream stays until the first frame is taken: taking it off rebuilds the capture session, and
+    // a new session takes no focus lock for about 1.4 s either. Binds capture only when nothing is
+    // bound.
     fun bindCaptureForRound(lifecycleOwner: LifecycleOwner) {
         if (boundCamera != null && imageCapture != null) {
             Log.d(TAG, "bindCaptureForRound: keeping the open camera.")
@@ -476,9 +478,7 @@ class CameraXManager : CameraManager {
         val settleMs = elapsedMs(stepStartNs)
         stepStartNs = SystemClock.elapsedRealtimeNanos()
         // Lock only a settled exposure; an unsettled one would stay wrong for the whole round.
-        if (aeStableCount >= AF_AE_STABLE_REQUIRED_COUNT) {
-            lockExposureAndWhiteBalance()
-        }
+        lockAutoControls(lockExposure = aeStableCount >= AF_AE_STABLE_REQUIRED_COUNT)
         val lockMs = elapsedMs(stepStartNs)
         lockPhase = if (stabilized) {
             CameraLockPhase.LOCKED
@@ -568,23 +568,45 @@ class CameraXManager : CameraManager {
         } ?: false
     }
 
-    // Exposure and white balance stay as metered for the first frame until the round ends (focus
-    // stays locked by the metering action), so a player walking into view or a landing dart does
-    // not change the brightness, colour or sharpness of frames compared with the empty board.
-    private suspend fun lockExposureAndWhiteBalance() {
+    // Exposure, white balance and focus stay as metered for the first frame until the round ends,
+    // so a player walking into view or a landing dart does not change the brightness, colour or
+    // sharpness of frames compared with the empty board. Focus is held by turning AF off at the
+    // distance the metering action locked: the AF lock alone is lost when the preview stream comes
+    // off after the first frame (the capture session is rebuilt), and request options are kept.
+    private suspend fun lockAutoControls(lockExposure: Boolean) {
         val camera = boundCamera ?: return
         val cameraInfo = Camera2CameraInfo.from(camera.cameraInfo)
         val options = CaptureRequestOptions.Builder()
-        if (cameraInfo.getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true) {
+        if (lockExposure &&
+            cameraInfo.getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
+        ) {
             options.setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, true)
         }
-        if (cameraInfo.getCameraCharacteristic(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true) {
+        if (lockExposure &&
+            cameraInfo.getCameraCharacteristic(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true
+        ) {
             options.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, true)
+        }
+        val focusDistance = latestFocusDistance
+        val afLocked = latestAfState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
+            latestAfState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED
+        // A minimum focus distance of 0 means a fixed-focus lens.
+        val manualFocus = (cameraInfo.getCameraCharacteristic(
+            CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE
+        ) ?: 0f) > 0f && cameraInfo.getCameraCharacteristic(
+            CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES
+        )?.contains(CaptureRequest.CONTROL_AF_MODE_OFF) == true
+        if (afLocked && focusDistance != null && manualFocus) {
+            options.setCaptureRequestOption(
+                CaptureRequest.CONTROL_AF_MODE,
+                CaptureRequest.CONTROL_AF_MODE_OFF
+            )
+            options.setCaptureRequestOption(CaptureRequest.LENS_FOCUS_DISTANCE, focusDistance)
         }
         runCatching {
             Camera2CameraControl.from(camera.cameraControl).setCaptureRequestOptions(options.build()).await()
         }.onFailure { error ->
-            Log.w(TAG, "Exposure/white balance lock failed", error)
+            Log.w(TAG, "Exposure/white balance/focus lock failed", error)
         }
     }
 
