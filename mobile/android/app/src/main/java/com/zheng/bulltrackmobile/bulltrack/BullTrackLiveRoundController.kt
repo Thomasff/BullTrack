@@ -14,6 +14,7 @@ import com.facebook.react.modules.core.DeviceEventManagerModule
 import com.zheng.bulltrack.camera.CameraLockPhase
 import com.zheng.bulltrack.camera.CameraState
 import com.zheng.bulltrack.camera.CameraXManager
+import com.zheng.bulltrack.camera.CapturedFrame
 import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.RingType
 import com.zheng.bulltrack.domain.model.ThrowResult
@@ -22,10 +23,13 @@ import com.zheng.bulltrack.vision.StartRoundDetectionUpdate
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -441,52 +445,48 @@ class BullTrackLiveRoundController(
         var frameIndex = 2
         var loggedExposure = cameraManager.describeExposure()
         Log.i(TAG, "Round camera: $loggedExposure")
-        // Pace with our own clock taken right before each capture: the sensor timestamp is not
-        // guaranteed to share the elapsedRealtime time base, and a mismatch removed all waiting.
-        var lastCaptureStartNs = firstFrameCapturedNs
-        var captureNextImmediately = false
         val frameTimings = FrameTimings()
-        while (!stopRequested) {
-            if (!captureNextImmediately) {
-                waitUntilNextFrameWindow(lastCaptureStartNs)
+        // The next still is taken while the current one is detected, so the camera (about 0.5 s a
+        // still) and the detector work at the same time instead of in turn. A still left in
+        // flight when the loop ends is dropped; coroutineScope waits for it after the result is
+        // out, so the camera is not released under a running capture.
+        coroutineScope {
+            var nextCapture = startFrameCapture(this, firstFrameCapturedNs)
+            while (!stopRequested) {
+                val captured = nextCapture.await()?.getOrThrow() ?: break
+                val frame = captured.frame
+                nextCapture = startFrameCapture(this, captured.startNs)
+                publishLiveFrame(roundId, frame.bitmap, frame.rotationDegrees)
+                // Exposure is locked for the round; a change here means the lock did not hold.
+                val exposure = cameraManager.describeExposure()
+                if (exposure != loggedExposure) {
+                    Log.i(TAG, "Frame $frameIndex camera: $exposure")
+                    loggedExposure = exposure
+                }
+                stepStartNs = SystemClock.elapsedRealtimeNanos()
+                val decision = processNextFrame(
+                    frameIndex = frameIndex,
+                    frameBitmap = frame.bitmap,
+                    rotationDegrees = frame.rotationDegrees,
+                )
+                frameTimings.add(captured.startNs, captured.captureMs, frame.decodeMs, elapsedMs(stepStartNs))
+                frameRecorder.recordFrame(
+                    frameIndex,
+                    frame.bitmap,
+                    frame.rotationDegrees,
+                    captured.startNs,
+                    decision.gateReason,
+                )
+                if (decision.shouldStop) {
+                    break
+                }
+                frameIndex += 1
             }
-            if (stopRequested) {
-                break
-            }
-            lastCaptureStartNs = SystemClock.elapsedRealtimeNanos()
-            val frame = cameraManager.captureNextFrameForRound()
-            val captureMs = elapsedMs(lastCaptureStartNs)
-            publishLiveFrame(roundId, frame.bitmap, frame.rotationDegrees)
-            // Exposure is locked for the round; a change here means the lock did not hold.
-            val exposure = cameraManager.describeExposure()
-            if (exposure != loggedExposure) {
-                Log.i(TAG, "Frame $frameIndex camera: $exposure")
-                loggedExposure = exposure
-            }
-            stepStartNs = SystemClock.elapsedRealtimeNanos()
-            val decision = processNextFrame(
-                frameIndex = frameIndex,
-                frameBitmap = frame.bitmap,
-                rotationDegrees = frame.rotationDegrees,
-            )
-            frameTimings.add(captureMs, frame.decodeMs, elapsedMs(stepStartNs))
-            frameRecorder.recordFrame(
-                frameIndex,
-                frame.bitmap,
-                frame.rotationDegrees,
-                lastCaptureStartNs,
-                decision.gateReason,
-            )
-            captureNextImmediately = decision.captureNextImmediately
-            if (decision.shouldStop) {
-                break
-            }
-            frameIndex += 1
-        }
-        Log.i(TAG, "Round frame timing: $frameTimings")
+            Log.i(TAG, "Round frame timing: $frameTimings")
 
-        frameRecorder.finishCapture()
-        finalizeRound(manualStop = stopRequested)
+            frameRecorder.finishCapture()
+            finalizeRound(manualStop = stopRequested)
+        }
         stopRequested = false
         // The result is already emitted; a camera release failure must not fail the round.
         releaseRoundOwnershipOnMain()
@@ -516,6 +516,25 @@ class BullTrackLiveRoundController(
         }
         if (readyState is CameraState.Error) {
             error(readyState.message)
+        }
+    }
+
+    // Takes the next still once the frame window since the previous one has passed, timed with our
+    // own clock: the sensor timestamp is not guaranteed to share the elapsedRealtime time base, and
+    // a mismatch removed all waiting. A failure comes back as a Result, so a still dropped at the
+    // end of the loop cannot fail the round; null when a stop came during the wait.
+    private fun startFrameCapture(
+        scope: CoroutineScope,
+        previousStartNs: Long,
+    ): Deferred<Result<RoundCapture>?> = scope.async {
+        waitUntilNextFrameWindow(previousStartNs)
+        if (stopRequested) {
+            return@async null
+        }
+        val startNs = SystemClock.elapsedRealtimeNanos()
+        runCatching {
+            val frame = cameraManager.captureNextFrameForRound()
+            RoundCapture(frame, startNs, elapsedMs(startNs))
         }
     }
 
@@ -573,9 +592,6 @@ class BullTrackLiveRoundController(
             )
             return FrameLoopDecision(
                 shouldStop = false,
-                captureNextImmediately = frameUpdate.gateReason == "yolo_count_increased_wait_next_frame" ||
-                    frameUpdate.gateReason == "new_box_moved" ||
-                    frameUpdate.gateReason.startsWith("alignment_low"),
                 gateReason = frameUpdate.gateReason,
             )
         }
@@ -950,21 +966,29 @@ class BullTrackLiveRoundController(
 
     private data class FrameLoopDecision(
         val shouldStop: Boolean,
-        val captureNextImmediately: Boolean = false,
         // For the frame recorder, which keeps frames where the gate saw something.
         val gateReason: String = "",
     )
 
-    // Average and worst capture (with decode) and detection time of a round's frames.
+    private class RoundCapture(val frame: CapturedFrame, val startNs: Long, val captureMs: Long)
+
+    // Average and worst capture (with decode) and detection time of a round's frames, and the
+    // average time between frame starts (what the player waits for a frame).
     private class FrameTimings {
         private var count = 0
+        private var firstStartNs = 0L
+        private var lastStartNs = 0L
         private var captureTotalMs = 0L
         private var captureMaxMs = 0L
         private var decodeTotalMs = 0L
         private var detectTotalMs = 0L
         private var detectMaxMs = 0L
 
-        fun add(captureMs: Long, decodeMs: Long, detectMs: Long) {
+        fun add(startNs: Long, captureMs: Long, decodeMs: Long, detectMs: Long) {
+            if (count == 0) {
+                firstStartNs = startNs
+            }
+            lastStartNs = startNs
             count += 1
             captureTotalMs += captureMs
             captureMaxMs = maxOf(captureMaxMs, captureMs)
@@ -977,7 +1001,13 @@ class BullTrackLiveRoundController(
             if (count == 0) {
                 return "no frames"
             }
-            return "$count frames, capture avg ${captureTotalMs / count} ms (decode ${decodeTotalMs / count} ms) " +
+            val interval = if (count > 1) {
+                "${(lastStartNs - firstStartNs) / NANOS_PER_MILLISECOND / (count - 1)} ms"
+            } else {
+                "?"
+            }
+            return "$count frames, one every $interval, " +
+                "capture avg ${captureTotalMs / count} ms (decode ${decodeTotalMs / count} ms) " +
                 "max $captureMaxMs ms, detect avg ${detectTotalMs / count} ms max $detectMaxMs ms"
         }
     }
