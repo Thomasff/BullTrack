@@ -49,6 +49,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.math.abs
 
 class CameraXManager : CameraManager {
 
@@ -57,6 +58,7 @@ class CameraXManager : CameraManager {
         private const val TARGET_WIDTH = 1080
         private const val TARGET_HEIGHT = 1920
         private const val ROUND_ZOOM_SETTLE_MS = 120L
+        private const val ZOOM_RATIO_TOLERANCE = 0.01f
         private const val AF_AE_TIMEOUT_MS = 800L
         // The focus action itself has no limit of ours; past this the frame is taken as it is (the
         // settle wait below still runs), instead of keeping the player waiting in poor light.
@@ -92,6 +94,9 @@ class CameraXManager : CameraManager {
     // Focus, exposure and white balance are all held as metered for this round's first frame.
     @Volatile
     private var meteringHeld = false
+    // The idle preview's centre metering has taken effect (see startPreviewMetering).
+    @Volatile
+    private var previewMeteringActive = false
     private var lockPhase: CameraLockPhase = CameraLockPhase.IDLE
     private var lockReason: String? = null
 
@@ -253,6 +258,7 @@ class CameraXManager : CameraManager {
         }
         val provider = cameraProvider ?: return
         Log.d(TAG, "unbindPreview requested.")
+        previewMeteringActive = false
         clearPreviewStreamObserver()
         previewUseCase?.let { provider.unbind(it) }
         previewUseCase = null
@@ -387,6 +393,7 @@ class CameraXManager : CameraManager {
             return
         }
         Log.d(TAG, "bindCameraUseCases(bindPreview=$bindPreview) start.")
+        previewMeteringActive = false
 
         val preview = if (bindPreview) {
             buildPreview().also { useCase ->
@@ -469,10 +476,64 @@ class CameraXManager : CameraManager {
         currentZoomRatio = targetZoom
     }
 
+    // The idle preview meters the centre (where the board is aimed) all along, so a round can lock
+    // exposure that has already settled instead of metering after the tap. AF is left continuous:
+    // an AF point would trigger a focus lock, freezing the preview's focus.
+    private fun startPreviewMetering() {
+        if (currentRoundConfig != null) {
+            return
+        }
+        val camera = boundCamera ?: return
+        val context = appContext ?: return
+        previewMeteringActive = false
+        val point = SurfaceOrientedMeteringPointFactory(1f, 1f)
+            .createPoint(0.5f, 0.5f, AUTO_FOCUS_SIZE)
+        val action = FocusMeteringAction.Builder(
+            point,
+            FocusMeteringAction.FLAG_AE or FocusMeteringAction.FLAG_AWB
+        ).disableAutoCancel()
+            .build()
+        val future = camera.cameraControl.startFocusAndMetering(action)
+        future.addListener({
+            runCatching { future.get() }
+                .onSuccess {
+                    if (boundCamera === camera && previewUseCase != null && currentRoundConfig == null) {
+                        // Count exposure as settled only from results metered on the centre.
+                        aeStableCount = 0
+                        previewMeteringActive = true
+                    }
+                }
+                .onFailure { error -> Log.w(TAG, "Preview metering failed", error) }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+    // True when the preview has already settled focus and centre exposure at the round's zoom,
+    // so the round can lock them as they are.
+    private fun previewMeteringSettled(): Boolean {
+        if (!previewMeteringActive || previewUseCase == null || latestFocusDistance == null) {
+            return false
+        }
+        val zoomState = boundCamera?.cameraInfo?.zoomState?.value ?: return false
+        val roundZoom = (lockedZoomRatioForRound ?: return false)
+            .coerceIn(zoomState.minZoomRatio, zoomState.maxZoomRatio)
+        return abs(zoomState.zoomRatio - roundZoom) < ZOOM_RATIO_TOLERANCE &&
+            latestAfState == CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED &&
+            afStableCount >= AF_AE_STABLE_REQUIRED_COUNT &&
+            aeStableCount >= AF_AE_STABLE_REQUIRED_COUNT
+    }
+
     // Returns how long each step took, for the round timing log.
     private suspend fun prepareAutoCapture(): String {
-        // A retried first frame meters again from scratch. The zoom step below waits for its
-        // request to apply, so the continuous AF set here is in place before the focus trigger.
+        if (previewMeteringSettled()) {
+            val stepStartNs = SystemClock.elapsedRealtimeNanos()
+            lockAutoControls(lockExposure = true)
+            lockPhase = CameraLockPhase.LOCKED
+            lockReason = "预览阶段的自动对焦与测光已稳定"
+            return "preview metering kept, lock ${elapsedMs(stepStartNs)} ms"
+        }
+        // Otherwise (the preview had not settled, or a retried first frame) meter again from
+        // scratch. The zoom step below waits for its request to apply, so the continuous AF set
+        // here is in place before the focus trigger.
         unlockAutoControls()
         reset3AState()
         var stepStartNs = SystemClock.elapsedRealtimeNanos()
@@ -510,6 +571,8 @@ class CameraXManager : CameraManager {
             zoomState.minZoomRatio,
             zoomState.maxZoomRatio
         )
+        // Nothing to settle when the preview already runs at this zoom.
+        val zoomChanged = abs(zoomState.zoomRatio - clampedZoom) >= ZOOM_RATIO_TOLERANCE
         lockedZoomRatioForRound = clampedZoom
         currentZoomRatio = clampedZoom
         // The preview may still push its own zoom while it lets go of the shared camera, which
@@ -523,7 +586,9 @@ class CameraXManager : CameraManager {
             Log.w(TAG, "Round zoom was replaced by another zoom request, setting it again")
             camera.cameraControl.setZoomRatio(clampedZoom).await()
         }
-        delay(ROUND_ZOOM_SETTLE_MS)
+        if (zoomChanged) {
+            delay(ROUND_ZOOM_SETTLE_MS)
+        }
     }
 
     // Returns a log note: "" when the action finished, " (af locked)" when the capture results
@@ -581,8 +646,12 @@ class CameraXManager : CameraManager {
     // sharpness of frames compared with the empty board. Focus is held by turning AF off at the
     // distance the metering action locked: the AF lock alone is lost when the preview stream comes
     // off after the first frame (the capture session is rebuilt), and request options are kept.
-    private suspend fun lockAutoControls(lockExposure: Boolean) {
+    // Not awaited (about 0.25 s): the lock keeps what the camera already settled on, so the first
+    // still comes out the same whether it is taken before or after the lock applies, and the
+    // next still comes much later.
+    private fun lockAutoControls(lockExposure: Boolean) {
         val camera = boundCamera ?: return
+        val context = appContext ?: return
         val cameraInfo = Camera2CameraInfo.from(camera.cameraInfo)
         val options = CaptureRequestOptions.Builder()
         if (lockExposure &&
@@ -596,8 +665,10 @@ class CameraXManager : CameraManager {
             options.setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, true)
         }
         val focusDistance = latestFocusDistance
+        // Passive focused: the preview's continuous AF has settled (no trigger was sent).
         val afLocked = latestAfState == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
-            latestAfState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED
+            latestAfState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED ||
+            latestAfState == CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED
         // A minimum focus distance of 0 means a fixed-focus lens.
         val manualFocus = (cameraInfo.getCameraCharacteristic(
             CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE
@@ -614,7 +685,13 @@ class CameraXManager : CameraManager {
         }
         meteringHeld = holdFocus && lockExposure
         runCatching {
-            Camera2CameraControl.from(camera.cameraControl).setCaptureRequestOptions(options.build()).await()
+            val future = Camera2CameraControl.from(camera.cameraControl)
+                .setCaptureRequestOptions(options.build())
+            future.addListener({
+                runCatching { future.get() }.onFailure { error ->
+                    Log.w(TAG, "Exposure/white balance/focus lock failed", error)
+                }
+            }, ContextCompat.getMainExecutor(context))
         }.onFailure { error ->
             Log.w(TAG, "Exposure/white balance/focus lock failed", error)
         }
@@ -625,6 +702,7 @@ class CameraXManager : CameraManager {
     // for a focus action scans again (over 1 s).
     private fun unlockAutoControls() {
         meteringHeld = false
+        previewMeteringActive = false
         val camera = boundCamera ?: return
         val options = CaptureRequestOptions.Builder()
             .setCaptureRequestOption(
@@ -783,6 +861,7 @@ class CameraXManager : CameraManager {
                     // A zoom set while the camera was still opening is dropped, so set it again
                     // once frames arrive.
                     applyZoom()
+                    startPreviewMetering()
                     _cameraState.value = readyState(
                         isPreviewBound = true,
                         statusMessage = currentRoundConfig?.statusMessage ?: "相机预览中"
