@@ -64,7 +64,9 @@ class CameraXManager : CameraManager {
         private const val AF_AE_POLL_INTERVAL_MS = 50L
         private const val AF_AE_STABLE_REQUIRED_COUNT = 2
         private const val AUTO_FOCUS_SIZE = 0.2f
-        private const val PREVIEW_STREAM_RETRY_DELAY_MS = 600L
+        // Opening the camera and getting the first frame can take over a second; a retry before
+        // that would only restart the opening.
+        private const val PREVIEW_STREAM_RETRY_DELAY_MS = 2_000L
         private const val MAX_PREVIEW_RETRY_COUNT = 1
     }
 
@@ -204,6 +206,25 @@ class CameraXManager : CameraManager {
         bindCameraUseCases(bindPreview = false)
     }
 
+    // Closes the camera when this preview view goes away, unless another binding (a round's
+    // capture-only one) has already replaced it.
+    fun detachPreview(previewView: PreviewView) {
+        if (this.previewView !== previewView) {
+            return
+        }
+        clearPreviewStreamObserver()
+        this.previewView = null
+        cameraProvider?.unbindAll()
+        previewUseCase = null
+        imageCapture = null
+        boundCamera = null
+        previewRetryCount = 0
+        _cameraState.value = readyState(
+            isPreviewBound = false,
+            statusMessage = "预览已关闭"
+        )
+    }
+
     override fun unbindPreview() {
         val provider = cameraProvider ?: return
         Log.d(TAG, "unbindPreview requested.")
@@ -293,7 +314,7 @@ class CameraXManager : CameraManager {
         reset3AState()
         _cameraState.value = readyState(
             isPreviewBound = false,
-            statusMessage = "原生 round capture 已释放，等待 VisionCamera 恢复预览"
+            statusMessage = "原生 round capture 已释放，等待预览恢复"
         )
     }
 
@@ -690,6 +711,9 @@ class CameraXManager : CameraManager {
             when (streamState) {
                 PreviewView.StreamState.STREAMING -> {
                     cancelPendingPreviewRetry()
+                    // A zoom set while the camera was still opening is dropped, so set it again
+                    // once frames arrive.
+                    applyZoom()
                     _cameraState.value = readyState(
                         isPreviewBound = true,
                         statusMessage = currentRoundConfig?.statusMessage ?: "相机预览中"

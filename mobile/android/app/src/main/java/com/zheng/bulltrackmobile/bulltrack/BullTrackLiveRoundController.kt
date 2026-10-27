@@ -5,6 +5,7 @@ import android.graphics.Matrix
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import androidx.camera.view.PreviewView
 import androidx.lifecycle.LifecycleOwner
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactApplicationContext
@@ -121,7 +122,7 @@ class BullTrackLiveRoundController(
     suspend fun prepareRoundCamera(): WritableMap {
         cameraManager.initialize(appContext)
         warmUpDetector()
-        return currentCameraReadyState("预览由 VisionCamera 管理，原生连续检测待命")
+        return currentCameraReadyState("原生相机负责预览与连续检测")
     }
 
     // Loads the model and builds its GPU programs once per process while the player is still
@@ -146,6 +147,27 @@ class BullTrackLiveRoundController(
         this.zoomRatio = zoomRatio.toFloat()
         cameraManager.setZoomRatio(this.zoomRatio)
         return currentCameraReadyState("已更新原生 round zoom")
+    }
+
+    // Live zoom from the preview's slider; applied to the preview, and kept for the next round.
+    fun setPreviewZoomRatio(zoomRatio: Float) {
+        this.zoomRatio = zoomRatio
+        cameraManager.setZoomRatio(zoomRatio)
+    }
+
+    // The idle preview goes through the same CameraXManager as the round, so one owner holds the
+    // camera. Called on the main thread by BullTrackPreviewView.
+    fun attachPreview(previewView: PreviewView) {
+        val lifecycleOwner = reactContext.currentActivity as? LifecycleOwner
+        if (lifecycleOwner == null) {
+            Log.w(TAG, "Preview not bound: no current activity")
+            return
+        }
+        cameraManager.bindPreview(lifecycleOwner, previewView)
+    }
+
+    fun detachPreview(previewView: PreviewView) {
+        cameraManager.detachPreview(previewView)
     }
 
     fun startLiveRound(debugImages: Boolean, recordFrames: Boolean): WritableMap {
@@ -494,7 +516,7 @@ class BullTrackLiveRoundController(
 
     // CameraX unbind/bind calls must run on the main thread; the round loop runs on bridgeDispatcher.
     // Always unbind (never endRoundCapture, which rebinds use cases) so the camera closes
-    // and VisionCamera can take it back.
+    // and the preview can take it back.
     private suspend fun releaseRoundOwnershipOnMain() {
         runCatching {
             withContext(Dispatchers.Main.immediate) {

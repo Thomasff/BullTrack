@@ -261,7 +261,7 @@ export const prepareLiveCamera = async () => {
     isReady: false,
     isPreviewBound: false,
     zoomRatio: useSettingsStore.getState().zoomRatio,
-    statusMessage: '预览由 VisionCamera 管理，等待预览初始化',
+    statusMessage: '等待原生预览初始化',
     lockPhase: 'IDLE',
     lockReason: null,
   });

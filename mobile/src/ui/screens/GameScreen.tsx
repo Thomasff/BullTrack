@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import { Camera, useCameraDevice, useCameraFormat } from 'react-native-vision-camera';
+import { useCameraDevice } from 'react-native-vision-camera';
 import {
   abandonCurrentRound,
   confirmCurrentRound,
@@ -34,6 +34,7 @@ import { LiveSnapshot } from '../components/LiveSnapshot';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { isRealBullTrackNativeBridgeAvailable } from '../../native-bridge/bulltrack/bullTrackNative';
+import { BullTrackPreview } from '../../native-bridge/bulltrack/BullTrackPreview';
 import type { ThrowResult } from '../../domain/game/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Game'>;
@@ -48,13 +49,10 @@ export const GameScreen = ({ navigation }: Props) => {
   const [runningAction, setRunningAction] = useState<
     'permission' | 'prepare' | 'start' | 'stop' | 'redetect' | 'confirm' | 'reload' | 'undo' | null
   >(null);
+  // Set while the native preview is showing frames.
   const [previewReady, setPreviewReady] = useState(false);
-  // VisionCamera drops a zoom set while the camera is still opening, so the zoom prop
-  // is only passed once the preview is streaming (the change then gets applied).
-  const [previewStreaming, setPreviewStreaming] = useState(false);
   const [handoffInProgress, setHandoffInProgress] = useState(false);
   const [scrollEnabled, setScrollEnabled] = useState(true);
-  const [previewInstanceKey, setPreviewInstanceKey] = useState(0);
   const [zoomTrackHeight, setZoomTrackHeight] = useState(ZOOM_SLIDER_HEIGHT);
   const [previewZoomRatio, setPreviewZoomRatio] = useState(() => useSettingsStore.getState().zoomRatio);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
@@ -68,16 +66,6 @@ export const GameScreen = ({ navigation }: Props) => {
   const zoomDragStartRef = useRef({ pageY: 0, zoomRatio: previewZoomRatio });
   const isFocused = useIsFocused();
   const device = useCameraDevice('back');
-  // Native round capture is a 16:9 frame center-cropped to 9:16 portrait. Using the
-  // same 16:9 output here keeps everything visible in the preview inside the analyzed
-  // frame (the default would be the max-resolution, usually 4:3, format), and a
-  // 1080p preview is cheaper than the sensor maximum. With video disabled, VisionCamera
-  // sizes the preview from the format's photo size, so filter on the photo fields.
-  const format = useCameraFormat(device, [
-    { photoAspectRatio: 16 / 9 },
-    { photoResolution: { width: 1920, height: 1080 } },
-    { fps: 30 },
-  ]);
 
   const {
     status,
@@ -105,7 +93,6 @@ export const GameScreen = ({ navigation }: Props) => {
   } = useGameStore();
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
   const recordFrames = useSettingsStore(state => state.recordFrames);
-  const previousStatusRef = useRef(status);
   const artifactCount = useVisionDebugStore(state => state.artifacts.length);
   const lastNativeError = useVisionDebugStore(state => state.lastNativeError);
 
@@ -202,7 +189,8 @@ export const GameScreen = ({ navigation }: Props) => {
     [currentThrows],
   );
   const isBusy = runningAction !== null;
-  const shouldShowVisionPreview =
+  // The native preview holds the camera while mounted, so it is only mounted while shown.
+  const shouldShowPreview =
     isFocused &&
     cameraPermissionGranted &&
     !!device &&
@@ -237,15 +225,12 @@ export const GameScreen = ({ navigation }: Props) => {
     }
   }, [status]);
 
+  // An unmounted preview cannot report that it stopped.
   useEffect(() => {
-    const previousStatus = previousStatusRef.current;
-    if (status === 'waitingForThrow' && previousStatus !== 'waitingForThrow') {
+    if (!shouldShowPreview) {
       setPreviewReady(false);
-      setPreviewStreaming(false);
-      setPreviewInstanceKey(current => current + 1);
     }
-    previousStatusRef.current = status;
-  }, [status]);
+  }, [shouldShowPreview]);
 
   const commitZoomRatio = (nextZoomRatio: number) => {
     const clamped = Math.min(zoomRange.max, Math.max(zoomRange.min, nextZoomRatio));
@@ -318,8 +303,8 @@ export const GameScreen = ({ navigation }: Props) => {
     });
   };
 
-  // No wait for the preview to stop: VisionCamera never reports it (its state observer goes
-  // inactive with isActive=false), and the shared CameraX provider orders the switch itself.
+  // No wait for the preview to stop: hiding it unmounts the native preview, and both it and the
+  // round bind the camera on the main thread through the same native manager, so they run in order.
   const startRound = () => {
     setRunningAction('start');
     setHandoffInProgress(true);
@@ -478,31 +463,15 @@ export const GameScreen = ({ navigation }: Props) => {
         collapsable={false}
         onLayout={event => setFrameWidth(Math.round(event.nativeEvent.layout.width))}>
         {cameraPermissionGranted && device ? (
-          <Camera
-            key={`preview-${previewInstanceKey}`}
-            style={styles.preview}
-            device={device}
-            isActive={shouldShowVisionPreview}
-            zoom={previewStreaming ? previewZoomRatio : ZOOM_MIN}
-            onStarted={() => setPreviewStreaming(true)}
-            onStopped={() => setPreviewStreaming(false)}
-            format={format}
-            resizeMode="cover"
-            androidPreviewViewType="texture-view"
-            onInitialized={() => {
-              setPreviewReady(true);
-            }}
-            onError={error => {
-              setPreviewReady(false);
-              setCameraStatus({
-                isReady: false,
-                isPreviewBound: false,
-                statusMessage: `相机预览失败: ${error.message}`,
-                lockPhase: 'FALLBACK',
-                lockReason: error.code,
-              });
-            }}
-          />
+          shouldShowPreview ? (
+            <BullTrackPreview
+              style={styles.preview}
+              zoomRatio={previewZoomRatio}
+              onPreviewStateChange={event => setPreviewReady(event.nativeEvent.streaming)}
+            />
+          ) : (
+            <View style={styles.preview} />
+          )
         ) : (
           <View style={styles.previewFallback}>
             <Text style={styles.fallbackText}>
