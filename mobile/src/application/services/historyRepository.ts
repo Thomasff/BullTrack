@@ -757,3 +757,223 @@ export const clearHistory = async () => {
   await execute(database, 'DELETE FROM matches');
   await execute(database, 'DELETE FROM players');
 };
+
+// Backup file layout. Players are referenced by name, which is their identity across phones.
+const BACKUP_APP = 'BullTrack';
+const BACKUP_KIND = 'history';
+const BACKUP_VERSION = 1;
+
+interface BackupMatch {
+  mode: string;
+  modeLabel: string | null;
+  createdAt: number;
+  winner: string | null;
+  players: Array<{
+    name: string;
+    seat: number;
+    winner: boolean;
+    team: number | null;
+    finalScore: number | null;
+  }>;
+  // In throwing order.
+  throws: Array<{
+    player: string;
+    round: number;
+    dart: number;
+    score: number | null;
+    multiplier: number | null;
+    target: string | null;
+    hit: number | null;
+    at: number;
+  }>;
+}
+
+interface HistoryBackup {
+  app: string;
+  kind: string;
+  version: number;
+  exportedAt: number;
+  players: Array<{ name: string; hidden: boolean }>;
+  matches: BackupMatch[];
+}
+
+const rowsOf = (result: ResultSet) =>
+  Array.from({ length: result.rows.length }, (_, index) => result.rows.item(index));
+
+// All matches and players as backup JSON; settings stay on the phone.
+export const exportHistory = async (exportedAt = Date.now()): Promise<string> => {
+  const database = await getDatabase();
+  const players = rowsOf(await execute(database, 'SELECT name, hidden FROM players ORDER BY id'));
+  const matchRows = rowsOf(
+    await execute(
+      database,
+      `SELECT matches.id, matches.mode, matches.mode_label, matches.created_at, players.name AS winner
+      FROM matches
+      LEFT JOIN players ON players.id = matches.winner_player_id
+      ORDER BY matches.created_at`,
+    ),
+  );
+  const seatRows = rowsOf(
+    await execute(
+      database,
+      `SELECT match_players.match_id, players.name, match_players.seat_index, match_players.is_winner,
+        match_players.team_index, match_players.final_score
+      FROM match_players
+      JOIN players ON players.id = match_players.player_id
+      ORDER BY match_players.match_id, match_players.seat_index`,
+    ),
+  );
+  const throwRows = rowsOf(
+    await execute(
+      database,
+      `SELECT throws.match_id, players.name, throws.round_index, throws.dart_index, throws.score,
+        throws.multiplier, throws.target, throws.is_hit, throws.created_at
+      FROM throws
+      JOIN players ON players.id = throws.player_id
+      ORDER BY throws.id`,
+    ),
+  );
+
+  const matches = new Map<number, BackupMatch>();
+  matchRows.forEach(row => {
+    matches.set(Number(row.id), {
+      mode: String(row.mode),
+      modeLabel: row.mode_label === null ? null : String(row.mode_label),
+      createdAt: Number(row.created_at),
+      winner: row.winner === null || row.winner === undefined ? null : String(row.winner),
+      players: [],
+      throws: [],
+    });
+  });
+  seatRows.forEach(row => {
+    matches.get(Number(row.match_id))?.players.push({
+      name: String(row.name),
+      seat: Number(row.seat_index),
+      winner: Number(row.is_winner) === 1,
+      team: toNullableNumber(row.team_index),
+      finalScore: toNullableNumber(row.final_score),
+    });
+  });
+  throwRows.forEach(row => {
+    matches.get(Number(row.match_id))?.throws.push({
+      player: String(row.name),
+      round: Number(row.round_index),
+      dart: Number(row.dart_index),
+      score: toNullableNumber(row.score),
+      multiplier: toNullableNumber(row.multiplier),
+      target: row.target === null ? null : String(row.target),
+      hit: toNullableNumber(row.is_hit),
+      at: Number(row.created_at),
+    });
+  });
+
+  const backup: HistoryBackup = {
+    app: BACKUP_APP,
+    kind: BACKUP_KIND,
+    version: BACKUP_VERSION,
+    exportedAt,
+    players: players.map(row => ({ name: String(row.name), hidden: Number(row.hidden) === 1 })),
+    matches: [...matches.values()],
+  };
+  return JSON.stringify(backup);
+};
+
+export type ImportHistoryResult =
+  | { status: 'invalid' }
+  | { status: 'imported'; added: number; skipped: number };
+
+const parseBackup = (text: string): HistoryBackup | null => {
+  try {
+    const backup = JSON.parse(text) as HistoryBackup;
+    const valid =
+      backup?.app === BACKUP_APP &&
+      backup.kind === BACKUP_KIND &&
+      typeof backup.version === 'number' &&
+      backup.version <= BACKUP_VERSION &&
+      Array.isArray(backup.players) &&
+      Array.isArray(backup.matches);
+    return valid ? backup : null;
+  } catch {
+    return null;
+  }
+};
+
+const matchKey = (mode: string, createdAt: number) => `${mode}|${createdAt}`;
+
+// Merges a backup into the phone's history: players join by name (a local player keeps
+// their own hidden state) and a match already here (same mode and start time) is skipped.
+export const importHistory = async (text: string): Promise<ImportHistoryResult> => {
+  const backup = parseBackup(text);
+  if (!backup) {
+    return { status: 'invalid' };
+  }
+  const database = await getDatabase();
+  const existing = new Set(
+    rowsOf(await execute(database, 'SELECT mode, created_at FROM matches')).map(row =>
+      matchKey(String(row.mode), Number(row.created_at)),
+    ),
+  );
+  const newMatches = backup.matches.filter(match => {
+    const key = matchKey(match.mode, match.createdAt);
+    if (existing.has(key)) {
+      return false;
+    }
+    existing.add(key);
+    return true;
+  });
+  const hiddenByName = new Map(backup.players.map(player => [player.name, player.hidden]));
+  const names = new Set(
+    newMatches.flatMap(match => [
+      ...match.players.map(player => player.name),
+      ...match.throws.map(dart => dart.player),
+    ]),
+  );
+  const now = Date.now();
+  const playerId = '(SELECT id FROM players WHERE name = ?)';
+
+  await new Promise<void>((resolve, reject) => {
+    database.transaction(
+      transaction => {
+        names.forEach(name => {
+          executeTransactionSql(
+            transaction,
+            'INSERT OR IGNORE INTO players (name, created_at, hidden) VALUES (?, ?, ?)',
+            [name, now, hiddenByName.get(name) ? 1 : 0],
+          );
+        });
+        newMatches.forEach(match => {
+          executeTransactionSql(
+            transaction,
+            `INSERT INTO matches (mode, mode_label, created_at, winner_player_id) VALUES (?, ?, ?, ${playerId})`,
+            [match.mode, match.modeLabel, match.createdAt, match.winner],
+            result => {
+              const matchId = result.insertId ?? null;
+              match.players.forEach(player => {
+                executeTransactionSql(
+                  transaction,
+                  `INSERT INTO match_players (match_id, player_id, seat_index, is_winner, team_index, final_score) VALUES (?, ${playerId}, ?, ?, ?, ?)`,
+                  [matchId, player.name, player.seat, player.winner ? 1 : 0, player.team, player.finalScore],
+                );
+              });
+              match.throws.forEach(dart => {
+                executeTransactionSql(
+                  transaction,
+                  `INSERT INTO throws (match_id, player_id, round_index, dart_index, score, multiplier, target, is_hit, created_at) VALUES (?, ${playerId}, ?, ?, ?, ?, ?, ?, ?)`,
+                  [matchId, dart.player, dart.round, dart.dart, dart.score, dart.multiplier, dart.target, dart.hit, dart.at],
+                );
+              });
+            },
+          );
+        });
+      },
+      error => reject(error),
+      () => resolve(),
+    );
+  });
+
+  return {
+    status: 'imported',
+    added: newMatches.length,
+    skipped: backup.matches.length - newMatches.length,
+  };
+};

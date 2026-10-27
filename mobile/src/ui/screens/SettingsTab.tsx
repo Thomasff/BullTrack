@@ -3,8 +3,22 @@ import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-nat
 import { colors } from '../theme/colors';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { useSettingsStore } from '../../application/stores/settingsStore';
-import { clearHistory } from '../../application/services/historyRepository';
+import {
+  clearHistory,
+  exportHistory,
+  importHistory,
+} from '../../application/services/historyRepository';
 import { playSoundCue } from '../../application/services/liveRoundService';
+import { bullTrackNativeBridge } from '../../native-bridge/bulltrack/bullTrackNative';
+
+type BackupResult = { text: string; failed: boolean };
+
+const backupFileName = (now: Date) => {
+  const pad = (value: number) => `${value}`.padStart(2, '0');
+  return `BullTrack-backup-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(
+    now.getDate(),
+  )}-${pad(now.getHours())}${pad(now.getMinutes())}.json`;
+};
 
 export const SettingsTab = () => {
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
@@ -15,6 +29,43 @@ export const SettingsTab = () => {
   const setSoundCues = useSettingsStore(state => state.setSoundCues);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [clearResult, setClearResult] = useState<'done' | 'failed' | null>(null);
+
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupResult, setBackupResult] = useState<BackupResult | null>(null);
+
+  const runBackupAction = (action: () => Promise<string | null>, failedText: string) => {
+    if (backupBusy) {
+      return;
+    }
+    setBackupBusy(true);
+    setBackupResult(null);
+    action()
+      .then(text => setBackupResult(text ? { text, failed: false } : null))
+      .catch(() => setBackupResult({ text: failedText, failed: true }))
+      .finally(() => setBackupBusy(false));
+  };
+
+  const backUpHistory = () =>
+    runBackupAction(async () => {
+      const content = await exportHistory();
+      await bullTrackNativeBridge.shareTextFile(backupFileName(new Date()), content);
+      return null;
+    }, '备份失败，请重试');
+
+  const restoreHistory = () =>
+    runBackupAction(async () => {
+      const text = await bullTrackNativeBridge.pickTextFile();
+      if (!text) {
+        return null;
+      }
+      const result = await importHistory(text);
+      if (result.status === 'invalid') {
+        return '这不是 BullTrack 的备份文件';
+      }
+      return result.skipped > 0
+        ? `已导入 ${result.added} 场比赛，${result.skipped} 场已存在`
+        : `已导入 ${result.added} 场比赛`;
+    }, '导入失败，请重试');
 
   const clearAllHistory = () => {
     setConfirmingClear(false);
@@ -78,11 +129,39 @@ export const SettingsTab = () => {
 
       <View style={styles.card}>
         <Pressable
+          disabled={backupBusy}
+          onPress={backUpHistory}
+          style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>备份历史记录</Text>
+            <Text style={styles.description}>导出成一个文件，可发到微信、网盘或存到手机</Text>
+          </View>
+        </Pressable>
+        <Pressable
+          disabled={backupBusy}
+          onPress={restoreHistory}
+          style={({ pressed }) => [styles.row, styles.rowDivider, pressed && styles.pressed]}>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>从备份导入</Text>
+            <Text style={styles.description}>合并到现有记录，已有的比赛不会重复</Text>
+            {backupBusy || backupResult ? (
+              <Text
+                style={[
+                  styles.description,
+                  styles.result,
+                  backupResult?.failed && styles.danger,
+                ]}>
+                {backupBusy ? '处理中…' : backupResult?.text}
+              </Text>
+            ) : null}
+          </View>
+        </Pressable>
+        <Pressable
           onPress={() => {
             setClearResult(null);
             setConfirmingClear(true);
           }}
-          style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+          style={({ pressed }) => [styles.row, styles.rowDivider, pressed && styles.pressed]}>
           <View style={styles.rowText}>
             <Text style={[styles.label, styles.danger]}>清空历史记录</Text>
             {clearResult ? (
@@ -151,6 +230,10 @@ const styles = StyleSheet.create({
   },
   danger: {
     color: colors.danger,
+  },
+  result: {
+    color: colors.textPrimary,
+    marginTop: 2,
   },
   footer: {
     marginTop: 8,

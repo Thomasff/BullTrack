@@ -32,6 +32,9 @@ const nativeBridge: BullTrackNativeBridge | null = bullTrackNativeModule
       listDebugRounds: async () =>
         bullTrackNativeModule.listDebugRounds() as Promise<DebugRoundSummary[]>,
       shareDebugRound: async (roundId: string) => bullTrackNativeModule.shareDebugRound(roundId),
+      shareTextFile: async (fileName: string, content: string) =>
+        bullTrackNativeModule.shareTextFile(fileName, content),
+      pickTextFile: async () => bullTrackNativeModule.pickTextFile(),
       setZoomRatio: async (zoomRatio: number) =>
         bullTrackNativeModule.setZoomRatio(zoomRatio) as Promise<CameraReadyState>,
       preloadSoundCues: () => bullTrackNativeModule.preloadSoundCues(),

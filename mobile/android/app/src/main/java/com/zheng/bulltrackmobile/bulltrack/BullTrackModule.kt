@@ -1,8 +1,10 @@
 package com.zheng.bulltrackmobile.bulltrack
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.Intent
 import androidx.core.content.FileProvider
+import com.facebook.react.bridge.BaseActivityEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReadableMap
@@ -14,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import java.io.File
 
 @ReactModule(name = BullTrackModule.NAME)
 class BullTrackModule(
@@ -23,6 +26,33 @@ class BullTrackModule(
     private val controller = BullTrackRuntime.get(reactContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val soundCues = BullTrackSoundCues(reactContext)
+    private var pendingPick: Promise? = null
+
+    private val pickResultListener = object : BaseActivityEventListener() {
+        override fun onActivityResult(activity: Activity, requestCode: Int, resultCode: Int, data: Intent?) {
+            if (requestCode != PICK_TEXT_FILE_REQUEST) {
+                return
+            }
+            val promise = pendingPick ?: return
+            pendingPick = null
+            val uri = data?.data
+            if (resultCode != Activity.RESULT_OK || uri == null) {
+                promise.resolve("")
+                return
+            }
+            resolveSuspendPromise(promise) {
+                withContext(Dispatchers.IO) {
+                    reactApplicationContext.contentResolver.openInputStream(uri)
+                        ?.use { stream -> stream.bufferedReader().readText() }
+                        ?: error("Cannot open the picked file")
+                }
+            }
+        }
+    }
+
+    init {
+        reactContext.addActivityEventListener(pickResultListener)
+    }
 
     override fun prepareRoundCamera(promise: Promise) {
         resolveSuspendPromise(promise) {
@@ -86,20 +116,55 @@ class BullTrackModule(
         resolveSuspendPromise(promise) {
             val activity = reactApplicationContext.currentActivity ?: error("No activity to share from")
             val bundle = withContext(Dispatchers.IO) { controller.exportDebugRound(roundId) }
-            val uri = FileProvider.getUriForFile(
-                reactApplicationContext,
-                "${reactApplicationContext.packageName}.debugexport",
-                bundle,
-            )
-            val send = Intent(Intent.ACTION_SEND).apply {
-                type = "application/zip"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                clipData = ClipData.newRawUri(bundle.name, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            activity.startActivity(Intent.createChooser(send, "分享调试包"))
+            shareFile(activity, bundle, "application/zip", "分享调试包")
             bundle.name
         }
+    }
+
+    // Writes the text (e.g. a history backup) to the export cache and opens the share sheet.
+    override fun shareTextFile(fileName: String, content: String, promise: Promise) {
+        resolveSuspendPromise(promise) {
+            val activity = reactApplicationContext.currentActivity ?: error("No activity to share from")
+            val file = withContext(Dispatchers.IO) {
+                val exportDir = File(reactApplicationContext.cacheDir, BullTrackArtifactStore.EXPORT_DIR_NAME)
+                exportDir.mkdirs()
+                File(exportDir, File(fileName).name).apply { writeText(content) }
+            }
+            shareFile(activity, file, "application/json", "分享备份")
+            file.name
+        }
+    }
+
+    // Opens the system file picker; resolves with the picked file's text, or "" when cancelled.
+    override fun pickTextFile(promise: Promise) {
+        val activity = reactApplicationContext.currentActivity
+        if (activity == null) {
+            promise.reject("BT_NATIVE_FAILED", "No activity to pick from")
+            return
+        }
+        pendingPick?.resolve("")
+        pendingPick = promise
+        val pick = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            // Shared .json files often arrive with a generic type, so any file can be picked.
+            type = "*/*"
+        }
+        activity.startActivityForResult(pick, PICK_TEXT_FILE_REQUEST)
+    }
+
+    private fun shareFile(activity: Activity, file: File, mimeType: String, title: String) {
+        val uri = FileProvider.getUriForFile(
+            reactApplicationContext,
+            "${reactApplicationContext.packageName}.debugexport",
+            file,
+        )
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = mimeType
+            putExtra(Intent.EXTRA_STREAM, uri)
+            clipData = ClipData.newRawUri(file.name, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        activity.startActivity(Intent.createChooser(send, title))
     }
 
     override fun setZoomRatio(zoomRatio: Double, promise: Promise) {
@@ -121,6 +186,9 @@ class BullTrackModule(
     override fun removeListeners(count: Double) = Unit
 
     override fun invalidate() {
+        reactApplicationContext.removeActivityEventListener(pickResultListener)
+        pendingPick?.resolve("")
+        pendingPick = null
         controller.invalidate()
         soundCues.release()
         super.invalidate()
@@ -146,5 +214,6 @@ class BullTrackModule(
 
     companion object {
         const val NAME = "BullTrackModule"
+        private const val PICK_TEXT_FILE_REQUEST = 4721
     }
 }

@@ -181,7 +181,7 @@ class BullTrackArtifactStore(
         val note: String
     )
 
-    private companion object {
+    internal companion object {
         const val KEEP_ROUNDS = 10
         const val LOG_NAME = "log.txt"
         const val INFO_NAME = "info.txt"

@@ -6,9 +6,11 @@ import {
   clearHistory,
   deleteMatch,
   deletePlayer,
+  exportHistory,
   getMatchDetail,
   getPlayerDetail,
   getSetting,
+  importHistory,
   listKnownPlayerNames,
   listPlayerStats,
   listRecentMatches,
@@ -253,4 +255,66 @@ test('player detail: X01 averages and checkout, cricket MPR, best scores and tre
   const bob = await getPlayerDetail((await statsOf('Bob'))!.playerId);
   expect(bob?.x01).toMatchObject({ average: 3, bestCheckout: null });
   expect(await getPlayerDetail(9999)).toBeNull();
+});
+
+test('a backup restores every match, and importing it again adds nothing', async () => {
+  const firstId = await saveSampleMatch(1000);
+  await saveCompletedMatch({
+    mode: 'highScore',
+    modeLabel: '高分赛',
+    createdAt: 2000,
+    players: [
+      { id: 'player-1', name: 'Carol', teamIndex: 0, finalScore: 60 },
+      { id: 'player-2', name: 'Bob', teamIndex: 1, finalScore: 3 },
+    ],
+    winnerIds: ['player-1'],
+    rounds: [
+      { playerId: 'player-1', roundIndex: 1, throws: [T20] },
+      { playerId: 'player-2', roundIndex: 1, throws: [S1, S1, S1] },
+    ],
+  });
+  await deletePlayer((await statsOf('Carol'))!.playerId);
+  const before = {
+    matches: await listRecentMatches(),
+    stats: await listPlayerStats(),
+    detail: await getMatchDetail(firstId as number),
+  };
+  const backup = await exportHistory(5000);
+
+  await clearHistory();
+  expect(await importHistory(backup)).toEqual({ status: 'imported', added: 2, skipped: 0 });
+  const recent = await listRecentMatches();
+  expect(recent.map(({ id: _id, ...match }) => match)).toEqual(
+    before.matches.map(({ id: _id, ...match }) => match),
+  );
+  expect((await listPlayerStats()).map(({ playerId: _playerId, ...stats }) => stats)).toEqual(
+    before.stats.map(({ playerId: _playerId, ...stats }) => stats),
+  );
+  const detail = await getMatchDetail(recent.find(match => match.createdAt === 1000)!.id);
+  expect(detail?.rounds.map(round => round.throws)).toEqual(
+    before.detail?.rounds.map(round => round.throws),
+  );
+  // Carol stays deleted (hidden), Bob keeps his team match.
+  expect(await listKnownPlayerNames()).not.toContain('Carol');
+
+  expect(await importHistory(backup)).toEqual({ status: 'imported', added: 0, skipped: 2 });
+  expect(await listRecentMatches()).toHaveLength(2);
+});
+
+test('importing merges with the phone: players join by name, local matches stay', async () => {
+  await saveSampleMatch(1000);
+  const backup = await exportHistory();
+  await clearHistory();
+  await saveSoloMatch('Alice', 3000);
+
+  expect(await importHistory(backup)).toEqual({ status: 'imported', added: 1, skipped: 0 });
+  expect(await statsOf('Alice')).toMatchObject({ matchesPlayed: 2, wins: 2 });
+  expect(await statsOf('Bob')).toMatchObject({ matchesPlayed: 1 });
+});
+
+test('a file that is not a backup is refused without changes', async () => {
+  await saveSampleMatch(1000);
+  expect(await importHistory('not json')).toEqual({ status: 'invalid' });
+  expect(await importHistory('{"app":"Other","matches":[]}')).toEqual({ status: 'invalid' });
+  expect(await listRecentMatches()).toHaveLength(1);
 });

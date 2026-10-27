@@ -78,6 +78,10 @@ export interface BullTrackNativeBridge {
   // Zips the round's debug images, log and app/device info and opens the share sheet;
   // resolves with the bundle's file name.
   shareDebugRound(roundId: string): Promise<string>;
+  // Writes the text to a cache file and opens the share sheet; resolves with the file name.
+  shareTextFile(fileName: string, content: string): Promise<string>;
+  // Lets the user pick a file and resolves with its text; '' when they cancel.
+  pickTextFile(): Promise<string>;
   setZoomRatio(zoomRatio: number): Promise<CameraReadyState>;
   preloadSoundCues(): void;
   playSoundCue(cue: SoundCue): void;
