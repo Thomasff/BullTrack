@@ -4,7 +4,7 @@ export const colors = {
   panelStrong: '#EFE6D4',
   textPrimary: '#1E1A16',
   textSecondary: '#5E5447',
-  accent: '#B24C2C',
+  accent: '#C8282E',
   border: '#D7CCBC',
   success: '#216E39',
   warning: '#8C5B11',

@@ -6,7 +6,7 @@
         <!-- Customize your theme here. -->
         <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
         <!-- App accent (colors.accent) for text cursor, selection handles and switches. -->
-        <item name="colorAccent">#B24C2C</item>
+        <item name="colorAccent">#C8282E</item>
     </style>
 
 </resources>
