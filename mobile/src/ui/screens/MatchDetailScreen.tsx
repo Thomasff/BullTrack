@@ -11,7 +11,7 @@ import { getTeamName } from '../../domain/game/teams';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MatchDetail'>;
 
-const formatDart = (dart: { target: string; multiplier: number }) => {
+export const formatDart = (dart: { target: string; multiplier: number }) => {
   if (dart.target === 'miss') {
     return '脱靶';
   }

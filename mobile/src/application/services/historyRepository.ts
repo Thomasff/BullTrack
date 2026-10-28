@@ -9,11 +9,14 @@ import type {
   MatchDetailRound,
   PlayerDetail,
   PlayerModeStats,
+  PlayerSegmentCount,
   PlayerStats,
+  PlayerX01Stats,
   RecentMatchSummary,
 } from '../../domain/history/types';
 import type { ThrowResult } from '../../domain/game/types';
 import { getDefaultPlayerName, isDefaultPlayerName } from '../../domain/game/players';
+import { DARTS_99_TARGET } from './gameRules';
 
 SQLite.DEBUG(false);
 SQLite.enablePromise(true);
@@ -578,6 +581,71 @@ const MPR_TARGETS: Record<string, number> = {
 
 const X01_TREND_LENGTH = 10;
 
+const X01_STARTING_SCORES: Record<string, number> = { game301: 301, game501: 501, game701: 701 };
+
+// One dart can finish it: an even score up to 40 (a double) or 50 (the inner bull).
+const isOneDartFinish = (left: number) => left === 50 || (left > 0 && left <= 40 && left % 2 === 0);
+
+// Per X01 match: darts this player threw at a one-dart finish, and how many of them won.
+// Replays every round of the match, since teammates share one score and a bust puts it back.
+const countCheckoutAttempts = async (database: SQLiteDatabase, playerId: number) => {
+  const rows = rowsOf(
+    await execute(
+      database,
+      `SELECT throws.match_id, throws.player_id, throws.round_index, throws.score,
+        throws.multiplier, matches.mode, match_players.team_index
+      FROM throws
+      JOIN matches ON matches.id = throws.match_id
+      JOIN match_players ON match_players.match_id = throws.match_id
+        AND match_players.player_id = throws.player_id
+      WHERE matches.mode IN (${X01_MODES.map(() => '?').join(', ')})
+        AND throws.match_id IN (SELECT match_id FROM match_players WHERE player_id = ?)
+      ORDER BY throws.id`,
+      [...X01_MODES, playerId],
+    ),
+  );
+  const counts = new Map<number, { attempts: number; hits: number }>();
+  const scoreLeft = new Map<string, number>();
+  let start = 0;
+  while (start < rows.length) {
+    const first = rows[start];
+    let end = start + 1;
+    while (
+      end < rows.length &&
+      rows[end].match_id === first.match_id &&
+      rows[end].player_id === first.player_id &&
+      rows[end].round_index === first.round_index
+    ) {
+      end += 1;
+    }
+    const round = rows.slice(start, end);
+    start = end;
+
+    const matchId = Number(first.match_id);
+    const side = `${matchId}|${first.team_index ?? `p${first.player_id}`}`;
+    const matchCounts = counts.get(matchId) ?? { attempts: 0, hits: 0 };
+    counts.set(matchId, matchCounts);
+    const isMine = Number(first.player_id) === playerId;
+    let left = scoreLeft.get(side) ?? X01_STARTING_SCORES[String(first.mode)];
+    const roundStart = left;
+    round.forEach(dart => {
+      const score = Number(dart.score ?? 0);
+      if (isMine && isOneDartFinish(left)) {
+        matchCounts.attempts += 1;
+        // A double or the inner bull (both saved with multiplier 2).
+        if (score === left && Number(dart.multiplier) === 2) {
+          matchCounts.hits += 1;
+        }
+      }
+      left -= score;
+    });
+    // Same bust rule as the X01 engine: below zero, one left, or zero without a double.
+    const doubleOut = Number(round[round.length - 1].multiplier) === 2;
+    scoreLeft.set(side, left > 1 || (left === 0 && doubleOut) ? left : roundStart);
+  }
+  return counts;
+};
+
 const average = (values: number[]) =>
   values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
 
@@ -659,39 +727,61 @@ export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | 
     }
   }
 
-  const x01Matches = matches.filter(match => X01_MODES.includes(match.mode));
-  const x01Rounds = x01Matches.flatMap(match => roundTotals(match.id));
-  const checkouts = x01Matches
-    .filter(match => match.isWinner && finishingRound.has(match.id))
-    .map(match =>
-      (roundsByMatch.get(match.id)?.get(finishingRound.get(match.id)!) ?? []).reduce(
-        (sum, dart) => sum + dart.score,
+  const dartsOf = (matchId: number) => [...(roundsByMatch.get(matchId)?.values() ?? [])].flat();
+  const checkoutsByMatch = await countCheckoutAttempts(database, playerId);
+
+  const buildX01Stats = (x01Matches: typeof matches): PlayerX01Stats | null => {
+    const x01Rounds = x01Matches.flatMap(match => roundTotals(match.id));
+    if (x01Rounds.length === 0) {
+      return null;
+    }
+    const checkouts = x01Matches
+      .filter(match => match.isWinner && finishingRound.has(match.id))
+      .map(match =>
+        (roundsByMatch.get(match.id)?.get(finishingRound.get(match.id)!) ?? []).reduce(
+          (sum, dart) => sum + dart.score,
+          0,
+        ),
+      );
+    const countRounds = (low: number, high: number) =>
+      x01Rounds.filter(total => total >= low && total <= high).length;
+    return {
+      average: average(x01Rounds),
+      first9Average: average(x01Matches.flatMap(match => roundTotals(match.id).slice(0, 3))),
+      count60: countRounds(60, 99),
+      count100: countRounds(100, 139),
+      count140: countRounds(140, 179),
+      count180: countRounds(180, 180),
+      bestCheckout: checkouts.length > 0 ? Math.max(...checkouts) : null,
+      checkoutAttempts: x01Matches.reduce(
+        (sum, match) => sum + (checkoutsByMatch.get(match.id)?.attempts ?? 0),
         0,
       ),
-    );
-  const x01 =
-    x01Rounds.length > 0
-      ? {
-          average: average(x01Rounds),
-          first9Average: average(x01Matches.flatMap(match => roundTotals(match.id).slice(0, 3))),
-          count180: x01Rounds.filter(total => total === 180).length,
-          bestCheckout: checkouts.length > 0 ? Math.max(...checkouts) : null,
-        }
-      : null;
-
-  const cricketMarks = matches
-    .filter(match => MPR_TARGETS[match.mode] !== undefined)
-    .flatMap(match =>
-      [...(roundsByMatch.get(match.id)?.values() ?? [])].map(darts =>
-        darts.reduce((sum, dart) => {
-          if (dart.target === 'IB' || dart.target === 'OB') {
-            return sum + dart.multiplier;
-          }
-          const sector = Number(dart.target);
-          return sector >= MPR_TARGETS[match.mode] && sector <= 20 ? sum + dart.multiplier : sum;
-        }, 0),
+      checkoutHits: x01Matches.reduce(
+        (sum, match) => sum + (checkoutsByMatch.get(match.id)?.hits ?? 0),
+        0,
       ),
-    );
+    };
+  };
+
+  const marksPerRound = (matchList: typeof matches) =>
+    matchList
+      .filter(match => MPR_TARGETS[match.mode] !== undefined)
+      .flatMap(match =>
+        [...(roundsByMatch.get(match.id)?.values() ?? [])].map(darts =>
+          darts.reduce((sum, dart) => {
+            if (dart.target === 'IB' || dart.target === 'OB') {
+              return sum + dart.multiplier;
+            }
+            const sector = Number(dart.target);
+            return sector >= MPR_TARGETS[match.mode] && sector <= 20 ? sum + dart.multiplier : sum;
+          }, 0),
+        ),
+      );
+
+  const x01Matches = matches.filter(match => X01_MODES.includes(match.mode));
+  const x01 = buildX01Stats(x01Matches);
+  const cricketMarks = marksPerRound(matches);
 
   const modes: PlayerModeStats[] = [];
   matches.forEach(match => {
@@ -703,17 +793,70 @@ export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | 
         matchesPlayed: 0,
         wins: 0,
         bestScore: null,
+        averageScore: null,
+        x01: null,
+        mpr: null,
+        hitRate: null,
+        dartsToFinish: null,
+        matches: [],
       };
       modes.push(stats);
     }
     stats.matchesPlayed += 1;
     stats.wins += match.isWinner ? 1 : 0;
     // Team scores are shared, so only solo matches count as a personal best.
-    if (BEST_SCORE_MODES.includes(match.mode) && !match.isTeam && match.finalScore !== null) {
-      stats.bestScore = Math.max(stats.bestScore ?? match.finalScore, match.finalScore);
+    const score =
+      BEST_SCORE_MODES.includes(match.mode) && !match.isTeam ? match.finalScore : null;
+    if (score !== null) {
+      stats.bestScore = Math.max(stats.bestScore ?? score, score);
+    }
+    const rounds = roundTotals(match.id);
+    stats.matches.unshift({
+      matchId: match.id,
+      createdAt: match.createdAt,
+      isWinner: match.isWinner,
+      score,
+      average: X01_MODES.includes(match.mode) && rounds.length > 0 ? average(rounds) : null,
+    });
+  });
+  modes.forEach(stats => {
+    const modeMatches = matches.filter(match => match.mode === stats.mode);
+    const scores = stats.matches.flatMap(match => (match.score === null ? [] : [match.score]));
+    stats.averageScore = scores.length > 0 ? average(scores) : null;
+    stats.x01 = X01_MODES.includes(stats.mode) ? buildX01Stats(modeMatches) : null;
+    const marks = marksPerRound(modeMatches);
+    stats.mpr = marks.length > 0 ? average(marks) : null;
+    if (stats.mode === 'darts99') {
+      const darts = modeMatches.flatMap(match => dartsOf(match.id));
+      stats.hitRate =
+        darts.length > 0
+          ? darts.filter(dart => dart.target === String(DARTS_99_TARGET)).length / darts.length
+          : null;
+    }
+    if (stats.mode === 'aroundTheClock') {
+      const used = modeMatches
+        .filter(match => match.isWinner && !match.isTeam)
+        .map(match => dartsOf(match.id).length)
+        .filter(count => count > 0);
+      stats.dartsToFinish =
+        used.length > 0 ? { best: Math.min(...used), average: average(used) } : null;
     }
   });
   modes.sort((left, right) => right.matchesPlayed - left.matchesPlayed);
+
+  const segmentCounts = new Map<string, PlayerSegmentCount>();
+  matches.forEach(match =>
+    dartsOf(match.id).forEach(dart => {
+      const key = `${dart.target}|${dart.multiplier}`;
+      const segment = segmentCounts.get(key) ?? {
+        target: dart.target,
+        multiplier: dart.multiplier,
+        count: 0,
+      };
+      segment.count += 1;
+      segmentCounts.set(key, segment);
+    }),
+  );
 
   return {
     playerId,
@@ -731,6 +874,7 @@ export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | 
         createdAt: match.createdAt,
         average: average(roundTotals(match.id)),
       })),
+    segments: [...segmentCounts.values()],
   };
 };
 

@@ -1,36 +1,33 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors } from '../theme/colors';
 import { PlayerEditDialog } from '../components/PlayerEditDialog';
+import { HitMapBoard } from '../components/HitMapBoard';
+import { StatTile, StatTiles, X01StatBlock, formatRate } from '../components/PlayerStatBlocks';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { getPlayerDetail } from '../../application/services/historyRepository';
 import type { PlayerDetail } from '../../domain/history/types';
+import { formatDart } from './MatchDetailScreen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PlayerDetail'>;
 
 const TREND_HEIGHT = 96;
-
-const formatRate = (wins: number, played: number) =>
-  `${Math.round((wins / Math.max(1, played)) * 100)}%`;
 
 const formatDay = (createdAt: number) => {
   const date = new Date(createdAt);
   return `${date.getMonth() + 1}/${date.getDate()}`;
 };
 
-const StatTile = ({ label, value }: { label: string; value: string }) => (
-  <View style={styles.tile}>
-    <Text style={styles.tileValue}>{value}</Text>
-    <Text style={styles.tileLabel}>{label}</Text>
-  </View>
-);
+const HIT_MAP_MAX_SIZE = 320;
+const TOP_SEGMENTS = 3;
 
 export const PlayerDetailScreen = ({ navigation, route }: Props) => {
   const [detail, setDetail] = useState<PlayerDetail | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const { width } = useWindowDimensions();
 
   useEffect(() => {
     getPlayerDetail(route.params.playerId)
@@ -53,6 +50,12 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
   }
 
   const trendMax = Math.max(1, ...detail.x01Trend.map(point => point.average));
+  const dartsThrown = detail.segments.reduce((sum, segment) => sum + segment.count, 0);
+  const misses = detail.segments.find(segment => segment.target === 'miss')?.count ?? 0;
+  const topSegments = detail.segments
+    .filter(segment => segment.target !== 'miss')
+    .sort((left, right) => right.count - left.count)
+    .slice(0, TOP_SEGMENTS);
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
@@ -77,12 +80,7 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
       {detail.x01 ? (
         <>
           <Text style={styles.sectionTitle}>X01</Text>
-          <View style={styles.tiles}>
-            <StatTile label="三镖均分" value={detail.x01.average.toFixed(1)} />
-            <StatTile label="前 9 镖均分" value={detail.x01.first9Average.toFixed(1)} />
-            <StatTile label="180 次数" value={`${detail.x01.count180}`} />
-            <StatTile label="最高收镖" value={`${detail.x01.bestCheckout ?? '—'}`} />
-          </View>
+          <X01StatBlock stats={detail.x01} />
         </>
       ) : null}
 
@@ -109,8 +107,31 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
       {detail.cricketMpr !== null ? (
         <>
           <Text style={styles.sectionTitle}>Cricket</Text>
-          <View style={styles.tiles}>
+          <StatTiles>
             <StatTile label="MPR（每轮平均记次）" value={detail.cricketMpr.toFixed(2)} />
+          </StatTiles>
+        </>
+      ) : null}
+
+      {dartsThrown > 0 ? (
+        <>
+          <Text style={styles.sectionTitle}>命中分布</Text>
+          <View style={[styles.card, styles.hitMap]}>
+            <HitMapBoard
+              size={Math.min(HIT_MAP_MAX_SIZE, width - 72)}
+              segments={detail.segments}
+            />
+            <Text style={styles.hitMapText}>
+              共 {dartsThrown} 镖 · 脱靶 {formatRate(misses, dartsThrown)}
+            </Text>
+            {topSegments.length > 0 ? (
+              <Text style={styles.hitMapText}>
+                最常命中：
+                {topSegments
+                  .map(segment => `${formatDart(segment)} ${formatRate(segment.count, dartsThrown)}`)
+                  .join(' · ')}
+              </Text>
+            ) : null}
           </View>
         </>
       ) : null}
@@ -122,21 +143,33 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
           <Text style={[styles.cell, styles.headerText]}>场次</Text>
           <Text style={[styles.cell, styles.headerText]}>胜率</Text>
           <Text style={[styles.cell, styles.headerText]}>最好成绩</Text>
+          <Text style={styles.chevron} />
         </View>
         {detail.modes.map(mode => (
-          <View key={mode.mode} style={styles.tableRow}>
+          <Pressable
+            key={mode.mode}
+            onPress={() =>
+              navigation.navigate('PlayerMode', {
+                playerId: detail.playerId,
+                playerName: detail.name,
+                mode: mode.mode,
+                title: mode.modeLabel ?? mode.mode,
+              })
+            }
+            style={({ pressed }) => [styles.tableRow, pressed && styles.pressed]}>
             <Text numberOfLines={1} style={styles.cellName}>
               {mode.modeLabel ?? mode.mode}
             </Text>
             <Text style={styles.cell}>{mode.matchesPlayed}</Text>
             <Text style={styles.cell}>{formatRate(mode.wins, mode.matchesPlayed)}</Text>
             <Text style={styles.cell}>{mode.bestScore ?? '—'}</Text>
-          </View>
+            <Text style={styles.chevron}>›</Text>
+          </Pressable>
         ))}
       </View>
 
       <Text style={styles.note}>
-        X01 均分按每镖实际得分算，爆镖轮也计入。最好成绩只算计分类玩法的个人赛，从这个版本起记录。
+        X01 均分按每镖实际得分算，爆镖轮也计入。收镖成功率：剩下的分一镖就能收（2–40 的双数或 50）时投出的镖里，收镖成功的比例。最好成绩只算计分类玩法的个人赛。点玩法可看该玩法的详细数据和对局记录。
       </Text>
 
       <PlayerEditDialog
@@ -204,37 +237,23 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     marginTop: 4,
   },
-  tiles: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-  },
-  tile: {
-    flexGrow: 1,
-    flexBasis: '45%',
-    backgroundColor: colors.panel,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    gap: 2,
-  },
-  tileValue: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: colors.accent,
-  },
-  tileLabel: {
-    fontSize: 13,
-    color: colors.textSecondary,
-  },
   card: {
     backgroundColor: colors.panel,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: colors.border,
     paddingVertical: 6,
+  },
+  hitMap: {
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+  },
+  hitMapText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    textAlign: 'center',
   },
   trend: {
     flexDirection: 'row',
@@ -286,6 +305,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     color: colors.textPrimary,
+  },
+  chevron: {
+    width: 14,
+    fontSize: 18,
+    textAlign: 'right',
+    color: colors.textSecondary,
   },
   note: {
     fontSize: 12,

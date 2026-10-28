@@ -240,21 +240,113 @@ test('player detail: X01 averages and checkout, cricket MPR, best scores and tre
   const alice = await statsOf('Alice');
   const detail = await getPlayerDetail(alice!.playerId);
   expect(detail).toMatchObject({ name: 'Alice', matchesPlayed: 6, wins: 6 });
-  expect(detail?.x01).toMatchObject({ count180: 2, bestCheckout: 121 });
+  expect(detail?.x01).toMatchObject({
+    count60: 0,
+    count100: 2,
+    count140: 0,
+    count180: 2,
+    bestCheckout: 121,
+    // The D20 with 40 left, once per match.
+    checkoutAttempts: 2,
+    checkoutHits: 2,
+  });
   expect(detail?.x01?.average).toBeCloseTo(150.5);
   expect(detail?.x01?.first9Average).toBeCloseTo(150.5);
   expect(detail?.cricketMpr).toBeCloseTo(3);
-  expect(detail?.modes.find(mode => mode.mode === 'highScore')).toMatchObject({
-    matchesPlayed: 3,
-    bestScore: 200,
-  });
-  expect(detail?.modes.find(mode => mode.mode === 'game301')?.bestScore).toBeNull();
+  const highScore = detail?.modes.find(mode => mode.mode === 'highScore');
+  // The team match is left out of the best and average score.
+  expect(highScore).toMatchObject({ matchesPlayed: 3, bestScore: 200, averageScore: 175 });
+  expect(highScore?.matches.map(match => [match.createdAt, match.score])).toEqual([
+    [6000, null],
+    [5000, 150],
+    [4000, 200],
+  ]);
+  const game301 = detail?.modes.find(mode => mode.mode === 'game301');
+  expect(game301).toMatchObject({ bestScore: null, x01: { checkoutAttempts: 2 } });
+  expect(game301?.matches[0].average).toBeCloseTo(150.5);
+  expect(detail?.modes.find(mode => mode.mode === 'cricket')?.mpr).toBeCloseTo(3);
   expect(detail?.x01Trend.map(point => point.createdAt)).toEqual([1000, 2000]);
+  expect(detail?.segments).toContainEqual({ target: '20', multiplier: 3, count: 12 });
 
   // Bob lost every X01 match, so he has no checkout.
   const bob = await getPlayerDetail((await statsOf('Bob'))!.playerId);
   expect(bob?.x01).toMatchObject({ average: 3, bestCheckout: null });
   expect(await getPlayerDetail(9999)).toBeNull();
+});
+
+test('checkout attempts follow the shared team score and undo a bust', async () => {
+  const S = (sector: number) => createThrow('single', sector);
+  await saveCompletedMatch({
+    mode: 'game301',
+    modeLabel: '301',
+    createdAt: 1000,
+    players: [
+      { id: 'ann', name: 'Ann', teamIndex: 0 },
+      { id: 'ben', name: 'Ben', teamIndex: 0 },
+      { id: 'cat', name: 'Cat', teamIndex: 1 },
+    ],
+    winnerIds: ['ann', 'ben'],
+    rounds: [
+      { playerId: 'ann', roundIndex: 1, throws: [T20, T20, T20] }, // 121 left
+      { playerId: 'cat', roundIndex: 1, throws: [S1, S1, S1] },
+      { playerId: 'ben', roundIndex: 1, throws: [T20, S(20), S1] }, // 40 left
+      { playerId: 'cat', roundIndex: 2, throws: [S1, S1, S1] },
+      // Three darts at a finish (40, 20, 10 left), then zero on a single: bust, back to 40.
+      { playerId: 'ann', roundIndex: 2, throws: [S(20), createThrow('double', 5), S(10)] },
+      { playerId: 'cat', roundIndex: 3, throws: [S1, S1, S1] },
+      { playerId: 'ben', roundIndex: 2, throws: [D20] },
+    ],
+  });
+
+  const ann = await getPlayerDetail((await statsOf('Ann'))!.playerId);
+  expect(ann?.x01).toMatchObject({ checkoutAttempts: 3, checkoutHits: 0 });
+  const ben = await getPlayerDetail((await statsOf('Ben'))!.playerId);
+  expect(ben?.x01).toMatchObject({ checkoutAttempts: 1, checkoutHits: 1, bestCheckout: 40 });
+  expect(ben?.segments).toEqual(
+    expect.arrayContaining([
+      { target: '20', multiplier: 3, count: 1 },
+      { target: '20', multiplier: 1, count: 1 },
+      { target: '1', multiplier: 1, count: 1 },
+      { target: '20', multiplier: 2, count: 1 },
+    ]),
+  );
+});
+
+test('mode stats: 99 Darts hit rate and Around the clock darts to finish', async () => {
+  const S = (sector: number) => createThrow('single', sector);
+  await saveCompletedMatch({
+    mode: 'darts99',
+    modeLabel: '99 Darts at 20',
+    createdAt: 1000,
+    players: [{ id: 'player-1', name: 'Alice', finalScore: 80 }],
+    winnerIds: ['player-1'],
+    rounds: [
+      { playerId: 'player-1', roundIndex: 1, throws: [S(20), T20] },
+      { playerId: 'player-1', roundIndex: 2, throws: [S(5), createThrow('miss')] },
+    ],
+  });
+  const saveClock = (createdAt: number, darts: number) =>
+    saveCompletedMatch({
+      mode: 'aroundTheClock',
+      modeLabel: 'Around the clock',
+      createdAt,
+      players: [{ id: 'player-1', name: 'Alice' }],
+      winnerIds: ['player-1'],
+      rounds: [{ playerId: 'player-1', roundIndex: 1, throws: Array(darts).fill(S1) }],
+    });
+  await saveClock(2000, 5);
+  await saveClock(3000, 7);
+
+  const detail = await getPlayerDetail((await statsOf('Alice'))!.playerId);
+  expect(detail?.modes.find(mode => mode.mode === 'darts99')).toMatchObject({
+    hitRate: 0.5,
+    bestScore: 80,
+  });
+  expect(detail?.modes.find(mode => mode.mode === 'aroundTheClock')?.dartsToFinish).toEqual({
+    best: 5,
+    average: 6,
+  });
+  expect(detail?.x01).toBeNull();
 });
 
 test('a backup restores every match, and importing it again adds nothing', async () => {

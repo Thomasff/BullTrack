@@ -45,7 +45,7 @@ interface DartBoardProps {
 }
 
 // Annular wedge between two radii (normalized) and two clockwise-from-top angles.
-const wedgePath = (
+export const wedgePath = (
   scale: number,
   innerRadius: number,
   outerRadius: number,
