@@ -2,10 +2,12 @@
 
 #include "DebugImageConfig.h"
 
+#include <android/log.h>
 #include <ncnn/gpu.h>
 #include <ncnn/net.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <mutex>
@@ -42,6 +44,11 @@ constexpr float kDartNmsThreshold = 0.7f;
 constexpr int kGpuDeviceIndex = 0;
 
 AAssetManager* g_asset_manager = nullptr;
+
+long long ElapsedMs(std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start).count();
+}
 
 std::vector<unsigned char> ReadAssetBytes(AAssetManager* asset_manager, const char* asset_path) {
     if (asset_manager == nullptr) {
@@ -281,7 +288,9 @@ private:
             return gpu_available_;
         }
         gpu_checked_ = true;
+        const auto start = std::chrono::steady_clock::now();
         const int create_result = ncnn::create_gpu_instance();
+        __android_log_print(ANDROID_LOG_INFO, "BullTrackYolo", "GPU instance took %lld ms", ElapsedMs(start));
         if (create_result != 0) {
             gpu_failure_reason_ = "create_gpu_instance failed";
             gpu_available_ = false;
@@ -311,12 +320,22 @@ private:
             runtime.net.set_vulkan_device(kGpuDeviceIndex);
         }
 
+        auto start = std::chrono::steady_clock::now();
         if (runtime.net.load_param(g_asset_manager, kModelParamAssetPath) != 0) {
             throw std::runtime_error("加载 YOLO param 失败: ncnn/model.ncnn.param");
         }
+        const long long param_ms = ElapsedMs(start);
+        start = std::chrono::steady_clock::now();
         if (runtime.net.load_model(g_asset_manager, kModelBinAssetPath) != 0) {
             throw std::runtime_error("加载 YOLO bin 失败: ncnn/model.ncnn.bin");
         }
+        __android_log_print(
+            ANDROID_LOG_INFO,
+            "BullTrackYolo",
+            "Model load (%s): param %lld ms, model %lld ms",
+            runtime.use_vulkan ? "GPU" : "CPU",
+            param_ms,
+            ElapsedMs(start));
         runtime.initialized = true;
     }
 
