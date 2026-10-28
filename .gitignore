@@ -30,6 +30,7 @@ before.jpg
 
 # Local third-party SDKs and developer secrets
 /app/src/main/cpp/opencv-sdk/
+/app/src/main/cpp/.deps-download/
 /mobile/android/app/debug.keystore
 /mobile/metro-*.log
 *.log
