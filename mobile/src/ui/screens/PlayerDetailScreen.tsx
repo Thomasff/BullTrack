@@ -1,5 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import {
+  Animated,
+  Easing,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors } from '../theme/colors';
 import { PlayerEditDialog } from '../components/PlayerEditDialog';
@@ -21,6 +30,11 @@ import { formatMatchTime } from './StatsTab';
 type Props = NativeStackScreenProps<RootStackParamList, 'PlayerDetail'>;
 
 const TREND_HEIGHT = 96;
+// Bars grow one after another: each starts TREND_STAGGER later and grows for TREND_GROW,
+// as shares of the whole animation.
+const TREND_DURATION = 900;
+const TREND_STAGGER = 0.04;
+const TREND_GROW = 0.6;
 const HIT_MAP_MAX_SIZE = 320;
 const TOP_SEGMENTS = 3;
 
@@ -133,19 +147,46 @@ const modeNote = (stats: PlayerModeStats) => {
   return null;
 };
 
+// The bars grow up from the bottom each time the chart is shown.
 const TrendChart = ({ points }: { points: PlayerTrendPoint[] }) => {
+  const progress = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(progress, {
+      toValue: 1,
+      duration: TREND_DURATION,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [progress]);
+
   const max = Math.max(...points.map(point => point.value), 0.001);
   return (
     <View style={[styles.card, styles.trend]}>
-      {points.map(point => (
-        <View key={point.matchId} style={styles.trendColumn}>
-          <Text style={styles.trendValue}>{formatTrendValue(point.value)}</Text>
-          <View
-            style={[styles.trendBar, { height: Math.max(2, (point.value / max) * TREND_HEIGHT) }]}
-          />
-          <Text style={styles.trendDay}>{formatDay(point.createdAt)}</Text>
-        </View>
-      ))}
+      {points.map((point, index) => {
+        const start = Math.min(index * TREND_STAGGER, 1 - TREND_GROW);
+        const grow = progress.interpolate({
+          inputRange: [start, start + TREND_GROW],
+          outputRange: [0.001, 1],
+          extrapolate: 'clamp',
+        });
+        return (
+          <View key={point.matchId} style={styles.trendColumn}>
+            <Animated.Text style={[styles.trendValue, { opacity: grow }]}>
+              {formatTrendValue(point.value)}
+            </Animated.Text>
+            <Animated.View
+              style={[
+                styles.trendBar,
+                {
+                  height: Math.max(2, (point.value / max) * TREND_HEIGHT),
+                  transform: [{ scaleY: grow }],
+                },
+              ]}
+            />
+            <Text style={styles.trendDay}>{formatDay(point.createdAt)}</Text>
+          </View>
+        );
+      })}
     </View>
   );
 };
@@ -229,7 +270,7 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
       {detail.segments.length > 0 ? (
         <>
           <Text style={styles.sectionTitle}>命中分布（全部玩法）</Text>
-          <HitMapCard segments={detail.segments} size={hitMapSize} />
+          <HitMapCard key="overview" segments={detail.segments} size={hitMapSize} />
         </>
       ) : null}
 
@@ -281,14 +322,14 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
             <Text style={styles.sectionTitle}>
               最近 {stats.trend.length} 场{trendTitle(stats)}
             </Text>
-            <TrendChart points={stats.trend} />
+            <TrendChart key={stats.mode} points={stats.trend} />
           </>
         ) : null}
 
         {stats.segments.length > 0 ? (
           <>
             <Text style={styles.sectionTitle}>命中分布</Text>
-            <HitMapCard segments={stats.segments} size={hitMapSize} />
+            <HitMapCard key={stats.mode} segments={stats.segments} size={hitMapSize} />
           </>
         ) : null}
 
@@ -460,6 +501,7 @@ const styles = StyleSheet.create({
   },
   trendBar: {
     width: '60%',
+    transformOrigin: 'bottom',
     borderRadius: 4,
     backgroundColor: colors.accent,
   },
