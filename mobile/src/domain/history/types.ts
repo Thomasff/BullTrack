@@ -81,25 +81,10 @@ export interface PlayerModeMatch {
   average: number | null;
 }
 
-export interface PlayerModeStats {
-  mode: GameType | string;
-  modeLabel: string | null;
-  matchesPlayed: number;
-  wins: number;
-  // Highest final score in solo matches of a scoring mode (高分赛, Catch 40...); null otherwise.
-  bestScore: number | null;
-  // Average final score over the same solo matches; null otherwise.
-  averageScore: number | null;
-  // X01 modes only.
-  x01: PlayerX01Stats | null;
-  // Cricket modes with fixed targets only.
-  mpr: number | null;
-  // 99 Darts at 20 only: share of darts that landed in the 20.
-  hitRate: number | null;
-  // Around the clock only: darts used in solo wins.
-  dartsToFinish: { best: number; average: number } | null;
-  // Newest first.
-  matches: PlayerModeMatch[];
+export interface PlayerTrendPoint {
+  matchId: number;
+  createdAt: number;
+  value: number;
 }
 
 export interface PlayerX01Stats {
@@ -116,6 +101,17 @@ export interface PlayerX01Stats {
   // Darts thrown at a one-dart finish (an even 2-40 or 50 left), and how many of them won.
   checkoutAttempts: number;
   checkoutHits: number;
+  // Darts this player threw in the solo matches they won.
+  dartsPerLeg: { best: number; average: number } | null;
+}
+
+export interface PlayerCricketStats {
+  // Marks per round on the mode's targets.
+  mpr: number;
+  // Marks per round over the first three rounds of each match.
+  first9Mpr: number;
+  // Rounds with five marks or more.
+  count5Marks: number;
 }
 
 // Darts that landed in one board segment; target is '1'-'20', 'OB', 'IB' or 'miss'.
@@ -125,10 +121,39 @@ export interface PlayerSegmentCount {
   count: number;
 }
 
-export interface PlayerTrendPoint {
-  matchId: number;
-  createdAt: number;
-  average: number;
+export interface PlayerModeStats {
+  mode: GameType | string;
+  modeLabel: string | null;
+  matchesPlayed: number;
+  wins: number;
+  // Highest final score in solo matches of a scoring mode (高分赛, Catch 40...); null otherwise.
+  bestScore: number | null;
+  // Average final score over the same solo matches; null otherwise.
+  averageScore: number | null;
+  // The groups below are filled only for the modes they belong to.
+  x01: PlayerX01Stats | null;
+  // Cricket modes with fixed targets.
+  cricket: PlayerCricketStats | null;
+  // 高分赛: three-dart round totals.
+  rounds: { average: number; best: number } | null;
+  // 99 Darts at 20: shares of all darts that hit the 20, a triple 20 and a double 20.
+  darts99: { hitRate: number; tripleRate: number; doubleRate: number } | null;
+  // Around the clock, solo matches: darts that hit the current target, and darts used in wins.
+  aroundTheClock: {
+    hitRate: number;
+    dartsToFinish: { best: number; average: number } | null;
+  } | null;
+  // Shanghai, Half it and Bermuda: darts on the round's target, Shanghai rounds (single,
+  // double and triple of the target), and rounds without a hit (halved) per match.
+  targetRounds: { hitRate: number; shanghais: number; halvedPerMatch: number } | null;
+  // Catch 40 and 41-60, solo matches: finishes made and played, average darts per finish.
+  checkoutDrill: { finished: number; attempted: number; averageDarts: number | null } | null;
+  // The mode's main figure for the latest matches, oldest first: X01 average, cricket MPR,
+  // final score, or Around the clock darts to finish.
+  trend: PlayerTrendPoint[];
+  segments: PlayerSegmentCount[];
+  // Newest first.
+  matches: PlayerModeMatch[];
 }
 
 export interface PlayerDetail {
@@ -136,12 +161,8 @@ export interface PlayerDetail {
   name: string;
   matchesPlayed: number;
   wins: number;
-  x01: PlayerX01Stats | null;
-  // Cricket marks per round over the cricket modes with fixed targets; null without such rounds.
-  cricketMpr: number | null;
+  // Most played first.
   modes: PlayerModeStats[];
-  // Three-dart average of the latest X01 matches, oldest first.
-  x01Trend: PlayerTrendPoint[];
   // Every dart this player threw in any mode, by segment.
   segments: PlayerSegmentCount[];
 }

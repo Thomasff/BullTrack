@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors } from '../theme/colors';
@@ -7,26 +7,181 @@ import { HitMapBoard } from '../components/HitMapBoard';
 import { StatTile, StatTiles, X01StatBlock, formatRate } from '../components/PlayerStatBlocks';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { getPlayerDetail } from '../../application/services/historyRepository';
-import type { PlayerDetail } from '../../domain/history/types';
+import type {
+  PlayerDetail,
+  PlayerModeMatch,
+  PlayerModeStats,
+  PlayerSegmentCount,
+  PlayerTrendPoint,
+} from '../../domain/history/types';
 import { formatDart } from './MatchDetailScreen';
+import { formatMatchTime } from './StatsTab';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PlayerDetail'>;
 
 const TREND_HEIGHT = 96;
+const HIT_MAP_MAX_SIZE = 320;
+const TOP_SEGMENTS = 3;
 
 const formatDay = (createdAt: number) => {
   const date = new Date(createdAt);
   return `${date.getMonth() + 1}/${date.getDate()}`;
 };
 
-const HIT_MAP_MAX_SIZE = 320;
-const TOP_SEGMENTS = 3;
+const formatPercent = (share: number) => `${Math.round(share * 100)}%`;
+
+const modeTitle = (stats: PlayerModeStats) => stats.modeLabel ?? stats.mode;
+
+// Tiles for the figures a mode has besides X01 (which has its own block).
+const modeTiles = (stats: PlayerModeStats) => {
+  const tiles: Array<{ label: string; value: string }> = [
+    { label: '场次', value: `${stats.matchesPlayed}` },
+    { label: '胜率', value: formatRate(stats.wins, stats.matchesPlayed) },
+  ];
+  if (stats.bestScore !== null) {
+    tiles.push({ label: '最好成绩', value: `${stats.bestScore}` });
+  }
+  if (stats.averageScore !== null) {
+    tiles.push({ label: '平均成绩', value: stats.averageScore.toFixed(1) });
+  }
+  if (stats.cricket) {
+    tiles.push(
+      { label: 'MPR（每轮记次）', value: stats.cricket.mpr.toFixed(2) },
+      { label: '前 9 镖 MPR', value: stats.cricket.first9Mpr.toFixed(2) },
+      { label: '记 5 次以上的轮数', value: `${stats.cricket.count5Marks}` },
+    );
+  }
+  if (stats.rounds) {
+    tiles.push(
+      { label: '每轮平均分', value: stats.rounds.average.toFixed(1) },
+      { label: '最高单轮', value: `${stats.rounds.best}` },
+    );
+  }
+  if (stats.darts99) {
+    tiles.push(
+      { label: '命中 20 区', value: formatPercent(stats.darts99.hitRate) },
+      { label: '三倍 20', value: formatPercent(stats.darts99.tripleRate) },
+      { label: '双倍 20', value: formatPercent(stats.darts99.doubleRate) },
+    );
+  }
+  if (stats.aroundTheClock) {
+    const finish = stats.aroundTheClock.dartsToFinish;
+    tiles.push(
+      { label: '命中当前目标', value: formatPercent(stats.aroundTheClock.hitRate) },
+      { label: '最少用镖', value: finish ? `${finish.best}` : '—' },
+      { label: '平均用镖', value: finish ? finish.average.toFixed(1) : '—' },
+    );
+  }
+  if (stats.targetRounds) {
+    tiles.push({ label: '命中本轮目标', value: formatPercent(stats.targetRounds.hitRate) });
+    if (stats.mode === 'shanghai') {
+      tiles.push({ label: 'Shanghai 次数', value: `${stats.targetRounds.shanghais}` });
+    } else {
+      tiles.push({
+        label: '每局被减半次数',
+        value: stats.targetRounds.halvedPerMatch.toFixed(1),
+      });
+    }
+  }
+  if (stats.checkoutDrill) {
+    const drill = stats.checkoutDrill;
+    tiles.push(
+      {
+        label: `收掉的数（${drill.finished}/${drill.attempted}）`,
+        value: formatRate(drill.finished, drill.attempted),
+      },
+      {
+        label: '收掉时平均用镖',
+        value: drill.averageDarts !== null ? drill.averageDarts.toFixed(1) : '—',
+      },
+    );
+  }
+  return tiles;
+};
+
+const trendTitle = (stats: PlayerModeStats) => {
+  if (stats.x01) {
+    return '均分';
+  }
+  if (stats.cricket) {
+    return 'MPR';
+  }
+  return stats.mode === 'aroundTheClock' ? '用镖（胜局）' : '得分';
+};
+
+const formatTrendValue = (value: number) =>
+  value < 10 ? value.toFixed(1) : `${Math.round(value)}`;
+
+const formatMatchResult = (match: PlayerModeMatch) => {
+  if (match.score !== null) {
+    return `${match.score} 分`;
+  }
+  return match.average !== null ? `均分 ${match.average.toFixed(1)}` : '';
+};
+
+const modeNote = (stats: PlayerModeStats) => {
+  if (stats.x01) {
+    return 'X01 均分按每镖实际得分算，爆镖轮也计入。收镖成功率：剩下的分一镖就能收（2–40 的双数或 50）时投出的镖里，收镖成功的比例。用镖只算个人赛的胜局。';
+  }
+  if (stats.aroundTheClock || stats.checkoutDrill) {
+    return '只算个人赛。';
+  }
+  if (stats.bestScore !== null) {
+    return '最好、平均成绩和走势只算个人赛。';
+  }
+  return null;
+};
+
+const TrendChart = ({ points }: { points: PlayerTrendPoint[] }) => {
+  const max = Math.max(...points.map(point => point.value), 0.001);
+  return (
+    <View style={[styles.card, styles.trend]}>
+      {points.map(point => (
+        <View key={point.matchId} style={styles.trendColumn}>
+          <Text style={styles.trendValue}>{formatTrendValue(point.value)}</Text>
+          <View
+            style={[styles.trendBar, { height: Math.max(2, (point.value / max) * TREND_HEIGHT) }]}
+          />
+          <Text style={styles.trendDay}>{formatDay(point.createdAt)}</Text>
+        </View>
+      ))}
+    </View>
+  );
+};
+
+const HitMapCard = ({ segments, size }: { segments: PlayerSegmentCount[]; size: number }) => {
+  const dartsThrown = segments.reduce((sum, segment) => sum + segment.count, 0);
+  const misses = segments.find(segment => segment.target === 'miss')?.count ?? 0;
+  const topSegments = segments
+    .filter(segment => segment.target !== 'miss')
+    .sort((left, right) => right.count - left.count)
+    .slice(0, TOP_SEGMENTS);
+  return (
+    <View style={[styles.card, styles.hitMap]}>
+      <HitMapBoard size={size} segments={segments} />
+      <Text style={styles.hitMapText}>
+        共 {dartsThrown} 镖 · 脱靶 {formatRate(misses, dartsThrown)}
+      </Text>
+      {topSegments.length > 0 ? (
+        <Text style={styles.hitMapText}>
+          最常命中：
+          {topSegments
+            .map(segment => `${formatDart(segment)} ${formatRate(segment.count, dartsThrown)}`)
+            .join(' · ')}
+        </Text>
+      ) : null}
+    </View>
+  );
+};
 
 export const PlayerDetailScreen = ({ navigation, route }: Props) => {
   const [detail, setDetail] = useState<PlayerDetail | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  // null shows the overview.
+  const [selectedMode, setSelectedMode] = useState<string | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
   const { width } = useWindowDimensions();
 
   useEffect(() => {
@@ -49,16 +204,109 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
     return <Text style={styles.empty}>找不到这个玩家。</Text>;
   }
 
-  const trendMax = Math.max(1, ...detail.x01Trend.map(point => point.average));
-  const dartsThrown = detail.segments.reduce((sum, segment) => sum + segment.count, 0);
-  const misses = detail.segments.find(segment => segment.target === 'miss')?.count ?? 0;
-  const topSegments = detail.segments
-    .filter(segment => segment.target !== 'miss')
-    .sort((left, right) => right.count - left.count)
-    .slice(0, TOP_SEGMENTS);
+  const hitMapSize = Math.min(HIT_MAP_MAX_SIZE, width - 72);
+  const selected = detail.modes.find(mode => mode.mode === selectedMode) ?? null;
+  const selectMode = (mode: string | null) => {
+    setSelectedMode(mode);
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  };
+  const chips = [
+    { key: null, label: '总览' },
+    ...detail.modes.map(mode => ({ key: mode.mode, label: modeTitle(mode) })),
+  ];
+
+  const renderOverview = () => (
+    <>
+      {detail.segments.length > 0 ? (
+        <>
+          <Text style={styles.sectionTitle}>命中分布（全部玩法）</Text>
+          <HitMapCard segments={detail.segments} size={hitMapSize} />
+        </>
+      ) : null}
+
+      <Text style={styles.sectionTitle}>各玩法</Text>
+      <View style={styles.card}>
+        <View style={[styles.tableRow, styles.tableHeader]}>
+          <Text style={[styles.cellName, styles.headerText]}>玩法</Text>
+          <Text style={[styles.cell, styles.headerText]}>场次</Text>
+          <Text style={[styles.cell, styles.headerText]}>胜率</Text>
+          <Text style={[styles.cell, styles.headerText]}>最好成绩</Text>
+          <Text style={styles.chevron} />
+        </View>
+        {detail.modes.map(mode => (
+          <Pressable
+            key={mode.mode}
+            onPress={() => selectMode(mode.mode)}
+            style={({ pressed }) => [styles.tableRow, pressed && styles.pressed]}>
+            <Text numberOfLines={1} style={styles.cellName}>
+              {modeTitle(mode)}
+            </Text>
+            <Text style={styles.cell}>{mode.matchesPlayed}</Text>
+            <Text style={styles.cell}>{formatRate(mode.wins, mode.matchesPlayed)}</Text>
+            <Text style={styles.cell}>{mode.bestScore ?? '—'}</Text>
+            <Text style={styles.chevron}>›</Text>
+          </Pressable>
+        ))}
+      </View>
+
+      <Text style={styles.note}>
+        点上面的玩法或表里的一行，看该玩法的详细数据和对局记录。最好成绩只算计分类玩法的个人赛。
+      </Text>
+    </>
+  );
+
+  const renderMode = (stats: PlayerModeStats) => {
+    const note = modeNote(stats);
+    return (
+      <>
+        <StatTiles>
+          {modeTiles(stats).map(tile => (
+            <StatTile key={tile.label} label={tile.label} value={tile.value} />
+          ))}
+        </StatTiles>
+
+        {stats.x01 ? <X01StatBlock stats={stats.x01} /> : null}
+
+        {stats.trend.length >= 2 ? (
+          <>
+            <Text style={styles.sectionTitle}>
+              最近 {stats.trend.length} 场{trendTitle(stats)}
+            </Text>
+            <TrendChart points={stats.trend} />
+          </>
+        ) : null}
+
+        {stats.segments.length > 0 ? (
+          <>
+            <Text style={styles.sectionTitle}>命中分布</Text>
+            <HitMapCard segments={stats.segments} size={hitMapSize} />
+          </>
+        ) : null}
+
+        <Text style={styles.sectionTitle}>对局记录</Text>
+        <View style={styles.card}>
+          {stats.matches.map(match => (
+            <Pressable
+              key={match.matchId}
+              onPress={() => navigation.navigate('MatchDetail', { matchId: match.matchId })}
+              style={({ pressed }) => [styles.matchRow, pressed && styles.pressed]}>
+              <Text style={styles.matchTime}>{formatMatchTime(match.createdAt)}</Text>
+              <Text style={styles.matchResult}>{formatMatchResult(match)}</Text>
+              <Text style={[styles.matchOutcome, match.isWinner && styles.won]}>
+                {match.isWinner ? '胜' : '负'}
+              </Text>
+              <Text style={styles.chevron}>›</Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {note ? <Text style={styles.note}>{note}</Text> : null}
+      </>
+    );
+  };
 
   return (
-    <ScrollView contentContainerStyle={styles.content}>
+    <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
       <View style={styles.summary}>
         <View style={styles.summaryText}>
           <Text numberOfLines={1} style={styles.name}>
@@ -77,100 +325,31 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
         </Pressable>
       </View>
 
-      {detail.x01 ? (
-        <>
-          <Text style={styles.sectionTitle}>X01</Text>
-          <X01StatBlock stats={detail.x01} />
-        </>
-      ) : null}
-
-      {detail.x01Trend.length >= 2 ? (
-        <>
-          <Text style={styles.sectionTitle}>最近 {detail.x01Trend.length} 场 X01 均分</Text>
-          <View style={[styles.card, styles.trend]}>
-            {detail.x01Trend.map(point => (
-              <View key={point.matchId} style={styles.trendColumn}>
-                <Text style={styles.trendValue}>{Math.round(point.average)}</Text>
-                <View
-                  style={[
-                    styles.trendBar,
-                    { height: Math.max(2, (point.average / trendMax) * TREND_HEIGHT) },
-                  ]}
-                />
-                <Text style={styles.trendDay}>{formatDay(point.createdAt)}</Text>
-              </View>
-            ))}
-          </View>
-        </>
-      ) : null}
-
-      {detail.cricketMpr !== null ? (
-        <>
-          <Text style={styles.sectionTitle}>Cricket</Text>
-          <StatTiles>
-            <StatTile label="MPR（每轮平均记次）" value={detail.cricketMpr.toFixed(2)} />
-          </StatTiles>
-        </>
-      ) : null}
-
-      {dartsThrown > 0 ? (
-        <>
-          <Text style={styles.sectionTitle}>命中分布</Text>
-          <View style={[styles.card, styles.hitMap]}>
-            <HitMapBoard
-              size={Math.min(HIT_MAP_MAX_SIZE, width - 72)}
-              segments={detail.segments}
-            />
-            <Text style={styles.hitMapText}>
-              共 {dartsThrown} 镖 · 脱靶 {formatRate(misses, dartsThrown)}
-            </Text>
-            {topSegments.length > 0 ? (
-              <Text style={styles.hitMapText}>
-                最常命中：
-                {topSegments
-                  .map(segment => `${formatDart(segment)} ${formatRate(segment.count, dartsThrown)}`)
-                  .join(' · ')}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.chipScroller}
+        contentContainerStyle={styles.chips}>
+        {chips.map(chip => {
+          const active = chip.key === (selected?.mode ?? null);
+          return (
+            <Pressable
+              key={chip.key ?? 'overview'}
+              onPress={() => selectMode(chip.key)}
+              style={({ pressed }) => [
+                styles.chip,
+                active && styles.chipActive,
+                pressed && styles.pressed,
+              ]}>
+              <Text style={[styles.chipLabel, active && styles.chipLabelActive]}>
+                {chip.label}
               </Text>
-            ) : null}
-          </View>
-        </>
-      ) : null}
+            </Pressable>
+          );
+        })}
+      </ScrollView>
 
-      <Text style={styles.sectionTitle}>各玩法</Text>
-      <View style={styles.card}>
-        <View style={[styles.tableRow, styles.tableHeader]}>
-          <Text style={[styles.cellName, styles.headerText]}>玩法</Text>
-          <Text style={[styles.cell, styles.headerText]}>场次</Text>
-          <Text style={[styles.cell, styles.headerText]}>胜率</Text>
-          <Text style={[styles.cell, styles.headerText]}>最好成绩</Text>
-          <Text style={styles.chevron} />
-        </View>
-        {detail.modes.map(mode => (
-          <Pressable
-            key={mode.mode}
-            onPress={() =>
-              navigation.navigate('PlayerMode', {
-                playerId: detail.playerId,
-                playerName: detail.name,
-                mode: mode.mode,
-                title: mode.modeLabel ?? mode.mode,
-              })
-            }
-            style={({ pressed }) => [styles.tableRow, pressed && styles.pressed]}>
-            <Text numberOfLines={1} style={styles.cellName}>
-              {mode.modeLabel ?? mode.mode}
-            </Text>
-            <Text style={styles.cell}>{mode.matchesPlayed}</Text>
-            <Text style={styles.cell}>{formatRate(mode.wins, mode.matchesPlayed)}</Text>
-            <Text style={styles.cell}>{mode.bestScore ?? '—'}</Text>
-            <Text style={styles.chevron}>›</Text>
-          </Pressable>
-        ))}
-      </View>
-
-      <Text style={styles.note}>
-        X01 均分按每镖实际得分算，爆镖轮也计入。收镖成功率：剩下的分一镖就能收（2–40 的双数或 50）时投出的镖里，收镖成功的比例。最好成绩只算计分类玩法的个人赛。点玩法可看该玩法的详细数据和对局记录。
-      </Text>
+      {selected ? renderMode(selected) : renderOverview()}
 
       <PlayerEditDialog
         player={editTarget}
@@ -230,6 +409,34 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: colors.textPrimary,
+  },
+  // Runs to the screen edges so chips scroll out of view instead of being cut at the padding.
+  chipScroller: {
+    marginHorizontal: -20,
+  },
+  chips: {
+    gap: 8,
+    paddingHorizontal: 20,
+  },
+  chip: {
+    backgroundColor: colors.panel,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  chipActive: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
+  },
+  chipLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  chipLabelActive: {
+    color: colors.panel,
   },
   sectionTitle: {
     fontSize: 16,
@@ -311,6 +518,32 @@ const styles = StyleSheet.create({
     fontSize: 18,
     textAlign: 'right',
     color: colors.textSecondary,
+  },
+  matchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  matchTime: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.textPrimary,
+  },
+  matchResult: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  matchOutcome: {
+    width: 20,
+    fontSize: 14,
+    fontWeight: '700',
+    textAlign: 'center',
+    color: colors.textSecondary,
+  },
+  won: {
+    color: colors.success,
   },
   note: {
     fontSize: 12,

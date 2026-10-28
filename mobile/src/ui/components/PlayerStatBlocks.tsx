@@ -39,6 +39,11 @@ export const X01StatBlock = ({ stats }: { stats: PlayerX01Stats }) => {
           }
         />
         <StatTile label="最高收镖" value={`${stats.bestCheckout ?? '—'}`} />
+        <StatTile label="最少用镖" value={`${stats.dartsPerLeg?.best ?? '—'}`} />
+        <StatTile
+          label="平均用镖"
+          value={stats.dartsPerLeg ? stats.dartsPerLeg.average.toFixed(1) : '—'}
+        />
       </StatTiles>
       <View style={styles.bands}>
         {bands.map(band => (

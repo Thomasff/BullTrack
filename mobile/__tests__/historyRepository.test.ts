@@ -240,7 +240,10 @@ test('player detail: X01 averages and checkout, cricket MPR, best scores and tre
   const alice = await statsOf('Alice');
   const detail = await getPlayerDetail(alice!.playerId);
   expect(detail).toMatchObject({ name: 'Alice', matchesPlayed: 6, wins: 6 });
-  expect(detail?.x01).toMatchObject({
+  expect(detail?.modes.map(mode => mode.mode)).toEqual(['highScore', 'game301', 'cricket']);
+
+  const game301 = detail?.modes.find(mode => mode.mode === 'game301');
+  expect(game301?.x01).toMatchObject({
     count60: 0,
     count100: 2,
     count140: 0,
@@ -249,28 +252,42 @@ test('player detail: X01 averages and checkout, cricket MPR, best scores and tre
     // The D20 with 40 left, once per match.
     checkoutAttempts: 2,
     checkoutHits: 2,
+    // Alice won both against Bob, which are not team matches.
+    dartsPerLeg: { best: 6, average: 6 },
   });
-  expect(detail?.x01?.average).toBeCloseTo(150.5);
-  expect(detail?.x01?.first9Average).toBeCloseTo(150.5);
-  expect(detail?.cricketMpr).toBeCloseTo(3);
+  expect(game301?.x01?.average).toBeCloseTo(150.5);
+  expect(game301?.x01?.first9Average).toBeCloseTo(150.5);
+  expect(game301?.bestScore).toBeNull();
+  expect(game301?.matches[0].average).toBeCloseTo(150.5);
+  expect(game301?.trend.map(point => point.createdAt)).toEqual([1000, 2000]);
+  expect(game301?.segments).toContainEqual({ target: '20', multiplier: 3, count: 8 });
+
+  const cricket = detail?.modes.find(mode => mode.mode === 'cricket');
+  expect(cricket?.cricket?.mpr).toBeCloseTo(3);
+  expect(cricket?.cricket?.first9Mpr).toBeCloseTo(3);
+  expect(cricket?.cricket?.count5Marks).toBe(1);
+  expect(cricket?.trend.map(point => point.value)).toEqual([3]);
+
   const highScore = detail?.modes.find(mode => mode.mode === 'highScore');
-  // The team match is left out of the best and average score.
-  expect(highScore).toMatchObject({ matchesPlayed: 3, bestScore: 200, averageScore: 175 });
+  // The team match is left out of the best and average score and the trend.
+  expect(highScore).toMatchObject({
+    matchesPlayed: 3,
+    bestScore: 200,
+    averageScore: 175,
+    rounds: { average: 60, best: 60 },
+  });
   expect(highScore?.matches.map(match => [match.createdAt, match.score])).toEqual([
     [6000, null],
     [5000, 150],
     [4000, 200],
   ]);
-  const game301 = detail?.modes.find(mode => mode.mode === 'game301');
-  expect(game301).toMatchObject({ bestScore: null, x01: { checkoutAttempts: 2 } });
-  expect(game301?.matches[0].average).toBeCloseTo(150.5);
-  expect(detail?.modes.find(mode => mode.mode === 'cricket')?.mpr).toBeCloseTo(3);
-  expect(detail?.x01Trend.map(point => point.createdAt)).toEqual([1000, 2000]);
+  expect(highScore?.trend.map(point => point.value)).toEqual([200, 150]);
+  expect(highScore?.x01).toBeNull();
   expect(detail?.segments).toContainEqual({ target: '20', multiplier: 3, count: 12 });
 
   // Bob lost every X01 match, so he has no checkout.
   const bob = await getPlayerDetail((await statsOf('Bob'))!.playerId);
-  expect(bob?.x01).toMatchObject({ average: 3, bestCheckout: null });
+  expect(bob?.modes[0].x01).toMatchObject({ average: 3, bestCheckout: null, dartsPerLeg: null });
   expect(await getPlayerDetail(9999)).toBeNull();
 });
 
@@ -299,9 +316,15 @@ test('checkout attempts follow the shared team score and undo a bust', async () 
   });
 
   const ann = await getPlayerDetail((await statsOf('Ann'))!.playerId);
-  expect(ann?.x01).toMatchObject({ checkoutAttempts: 3, checkoutHits: 0 });
+  expect(ann?.modes[0].x01).toMatchObject({ checkoutAttempts: 3, checkoutHits: 0 });
   const ben = await getPlayerDetail((await statsOf('Ben'))!.playerId);
-  expect(ben?.x01).toMatchObject({ checkoutAttempts: 1, checkoutHits: 1, bestCheckout: 40 });
+  expect(ben?.modes[0].x01).toMatchObject({
+    checkoutAttempts: 1,
+    checkoutHits: 1,
+    bestCheckout: 40,
+    // A team win is not a leg of their own.
+    dartsPerLeg: null,
+  });
   expect(ben?.segments).toEqual(
     expect.arrayContaining([
       { target: '20', multiplier: 3, count: 1 },
@@ -312,8 +335,9 @@ test('checkout attempts follow the shared team score and undo a bust', async () 
   );
 });
 
-test('mode stats: 99 Darts hit rate and Around the clock darts to finish', async () => {
+test('mode stats: 99 Darts and Around the clock', async () => {
   const S = (sector: number) => createThrow('single', sector);
+  const MISS = createThrow('miss');
   await saveCompletedMatch({
     mode: 'darts99',
     modeLabel: '99 Darts at 20',
@@ -322,31 +346,98 @@ test('mode stats: 99 Darts hit rate and Around the clock darts to finish', async
     winnerIds: ['player-1'],
     rounds: [
       { playerId: 'player-1', roundIndex: 1, throws: [S(20), T20] },
-      { playerId: 'player-1', roundIndex: 2, throws: [S(5), createThrow('miss')] },
+      { playerId: 'player-1', roundIndex: 2, throws: [S(5), MISS] },
     ],
   });
-  const saveClock = (createdAt: number, darts: number) =>
+  // 1 to 20 and a bull in order, with some misses first.
+  const saveClock = (createdAt: number, misses: number) =>
     saveCompletedMatch({
       mode: 'aroundTheClock',
       modeLabel: 'Around the clock',
       createdAt,
       players: [{ id: 'player-1', name: 'Alice' }],
       winnerIds: ['player-1'],
-      rounds: [{ playerId: 'player-1', roundIndex: 1, throws: Array(darts).fill(S1) }],
+      rounds: [
+        {
+          playerId: 'player-1',
+          roundIndex: 1,
+          throws: [
+            ...Array(misses).fill(MISS),
+            ...Array.from({ length: 20 }, (_, index) => S(index + 1)),
+            createThrow('outerBull'),
+          ],
+        },
+      ],
     });
-  await saveClock(2000, 5);
-  await saveClock(3000, 7);
+  await saveClock(2000, 0);
+  await saveClock(3000, 2);
 
   const detail = await getPlayerDetail((await statsOf('Alice'))!.playerId);
   expect(detail?.modes.find(mode => mode.mode === 'darts99')).toMatchObject({
-    hitRate: 0.5,
     bestScore: 80,
+    darts99: { hitRate: 0.5, tripleRate: 0.25, doubleRate: 0 },
   });
-  expect(detail?.modes.find(mode => mode.mode === 'aroundTheClock')?.dartsToFinish).toEqual({
-    best: 5,
-    average: 6,
+  const clock = detail?.modes.find(mode => mode.mode === 'aroundTheClock');
+  expect(clock?.aroundTheClock?.dartsToFinish).toEqual({ best: 21, average: 22 });
+  expect(clock?.aroundTheClock?.hitRate).toBeCloseTo(42 / 44);
+  expect(clock?.trend.map(point => point.value)).toEqual([21, 23]);
+});
+
+test('mode stats: Shanghai, Half it and Catch 40', async () => {
+  const S = (sector: number) => createThrow('single', sector);
+  const D = (sector: number) => createThrow('double', sector);
+  const T = (sector: number) => createThrow('triple', sector);
+  const MISS = createThrow('miss');
+  await saveCompletedMatch({
+    mode: 'shanghai',
+    modeLabel: 'Shanghai',
+    createdAt: 1000,
+    players: [{ id: 'player-1', name: 'Alice', finalScore: 13 }],
+    winnerIds: ['player-1'],
+    rounds: [
+      { playerId: 'player-1', roundIndex: 1, throws: [S1, S(5), MISS] },
+      // Single, double and triple of 2: a Shanghai.
+      { playerId: 'player-1', roundIndex: 2, throws: [S(2), D(2), T(2)] },
+    ],
   });
-  expect(detail?.x01).toBeNull();
+  await saveCompletedMatch({
+    mode: 'halfIt',
+    modeLabel: 'Half it',
+    createdAt: 2000,
+    players: [{ id: 'player-1', name: 'Alice', finalScore: 35 }],
+    winnerIds: ['player-1'],
+    rounds: [
+      { playerId: 'player-1', roundIndex: 1, throws: [S(15), MISS, MISS] },
+      { playerId: 'player-1', roundIndex: 2, throws: [MISS, MISS, MISS] }, // halved
+      // Round 3 wants any double; the inner bull counts.
+      { playerId: 'player-1', roundIndex: 3, throws: [createThrow('innerBull'), S(3), S(3)] },
+    ],
+  });
+  await saveCompletedMatch({
+    mode: 'catch40',
+    modeLabel: 'Catch 40',
+    createdAt: 3000,
+    players: [{ id: 'player-1', name: 'Alice', finalScore: 3 }],
+    winnerIds: ['player-1'],
+    rounds: [
+      // 61: T7, D20 with two darts.
+      { playerId: 'player-1', roundIndex: 1, throws: [T(7), D20] },
+      // 62: two visits without a finish, then it moves on.
+      { playerId: 'player-1', roundIndex: 2, throws: [MISS, MISS, MISS] },
+      { playerId: 'player-1', roundIndex: 3, throws: [MISS, MISS, MISS] },
+      // 63: only one visit so far.
+      { playerId: 'player-1', roundIndex: 4, throws: [S(3), MISS, MISS] },
+    ],
+  });
+
+  const detail = await getPlayerDetail((await statsOf('Alice'))!.playerId);
+  const shanghai = detail?.modes.find(mode => mode.mode === 'shanghai');
+  expect(shanghai?.targetRounds).toEqual({ hitRate: 4 / 6, shanghais: 1, halvedPerMatch: 0 });
+  const halfIt = detail?.modes.find(mode => mode.mode === 'halfIt');
+  expect(halfIt?.targetRounds).toEqual({ hitRate: 2 / 9, shanghais: 0, halvedPerMatch: 1 });
+  const catch40 = detail?.modes.find(mode => mode.mode === 'catch40');
+  expect(catch40?.checkoutDrill).toEqual({ finished: 1, attempted: 2, averageDarts: 2 });
+  expect(catch40?.trend.map(point => point.value)).toEqual([3]);
 });
 
 test('a backup restores every match, and importing it again adds nothing', async () => {
