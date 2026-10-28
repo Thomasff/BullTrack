@@ -15,7 +15,13 @@ import { colors } from '../theme/colors';
 import { PlayerEditDialog } from '../components/PlayerEditDialog';
 import { HitMapBoard, usesLandingPoints } from '../components/HitMapBoard';
 import { ModeBar, ModeMenu } from '../components/ModePicker';
-import { StatTile, StatTiles, X01StatBlock, formatRate } from '../components/PlayerStatBlocks';
+import {
+  CricketMarkRounds,
+  StatTile,
+  StatTiles,
+  X01StatBlock,
+  formatRate,
+} from '../components/PlayerStatBlocks';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { getPlayerDetail } from '../../application/services/historyRepository';
 import type {
@@ -73,7 +79,6 @@ const modeTiles = (stats: PlayerModeStats) => {
     tiles.push(
       { label: 'MPR（每轮记次）', value: stats.cricket.mpr.toFixed(2) },
       { label: '前 9 镖 MPR', value: stats.cricket.first9Mpr.toFixed(2) },
-      { label: '记 5 次以上的轮数', value: `${stats.cricket.count5Marks}` },
     );
   }
   if (stats.rounds) {
@@ -370,6 +375,38 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
       <Text style={styles.note}>
         点上面的玩法或表里的一行，看该玩法的详细数据和对局记录。最好成绩只算计分类玩法的个人赛。
       </Text>
+
+      {detail.opponents.length > 0 ? (
+        <>
+          <Text style={styles.sectionTitle}>对战记录</Text>
+          <View style={styles.card}>
+            <View style={[styles.tableRow, styles.tableHeader]}>
+              <Text style={[styles.cellName, styles.headerText]}>对手</Text>
+              <Text style={[styles.cell, styles.headerText]}>场次</Text>
+              <Text style={[styles.cell, styles.headerText]}>胜</Text>
+              <Text style={[styles.cell, styles.headerText]}>负</Text>
+              <Text style={styles.chevron} />
+            </View>
+            {detail.opponents.map(opponent => (
+              <Pressable
+                key={opponent.playerId}
+                onPress={() => navigation.push('PlayerDetail', { playerId: opponent.playerId })}
+                style={({ pressed }) => [styles.tableRow, pressed && styles.pressed]}>
+                <Text numberOfLines={1} style={styles.cellName}>
+                  {opponent.name}
+                </Text>
+                <Text style={styles.cell}>{opponent.played}</Text>
+                <Text style={[styles.cell, styles.won]}>{opponent.wins}</Text>
+                <Text style={styles.cell}>{opponent.losses}</Text>
+                <Text style={styles.chevron}>›</Text>
+              </Pressable>
+            ))}
+          </View>
+          <Text style={styles.note}>
+            队友不算对手；多人局里由别人获胜的场次只计入场次。点一行看对手的统计。
+          </Text>
+        </>
+      ) : null}
     </>
   );
 
@@ -384,6 +421,7 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
         </StatTiles>
 
         {stats.x01 ? <X01StatBlock stats={stats.x01} /> : null}
+        {stats.cricket ? <CricketMarkRounds stats={stats.cricket} /> : null}
 
         {stats.trend.length >= 2 ? (
           <>

@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { colors } from '../theme/colors';
-import type { PlayerX01Stats } from '../../domain/history/types';
+import type { PlayerCricketStats, PlayerX01Stats } from '../../domain/history/types';
 
 export const formatRate = (wins: number, played: number) =>
   `${Math.round((wins / Math.max(1, played)) * 100)}%`;
@@ -15,6 +15,25 @@ export const StatTile = ({ label, value }: { label: string; value: string }) => 
 
 export const StatTiles = ({ children }: { children: React.ReactNode }) => (
   <View style={styles.tiles}>{children}</View>
+);
+
+// One row of round counts, e.g. per score band.
+const BandRow = ({ bands }: { bands: Array<{ label: string; count: number }> }) => (
+  <View style={styles.bands}>
+    {bands.map(band => (
+      <View key={band.label} style={styles.band}>
+        <Text style={styles.bandValue}>{band.count}</Text>
+        <Text style={styles.bandLabel}>{band.label}</Text>
+      </View>
+    ))}
+  </View>
+);
+
+// Rounds per mark count, from 5 marks up.
+export const CricketMarkRounds = ({ stats }: { stats: PlayerCricketStats }) => (
+  <BandRow
+    bands={stats.markRounds.map((count, index) => ({ label: `记 ${index + 5} 次`, count }))}
+  />
 );
 
 // X01 tiles plus a row counting rounds per score band.
@@ -45,14 +64,7 @@ export const X01StatBlock = ({ stats }: { stats: PlayerX01Stats }) => {
           value={stats.dartsPerLeg ? stats.dartsPerLeg.average.toFixed(1) : '—'}
         />
       </StatTiles>
-      <View style={styles.bands}>
-        {bands.map(band => (
-          <View key={band.label} style={styles.band}>
-            <Text style={styles.bandValue}>{band.count}</Text>
-            <Text style={styles.bandLabel}>{band.label}</Text>
-          </View>
-        ))}
-      </View>
+      <BandRow bands={bands} />
     </>
   );
 };

@@ -111,8 +111,8 @@ export interface PlayerCricketStats {
   mpr: number;
   // Marks per round over the first three rounds of each match.
   first9Mpr: number;
-  // Rounds with five marks or more.
-  count5Marks: number;
+  // Rounds with exactly 5, 6, 7, 8 and 9 marks (9 is the most a round can have).
+  markRounds: number[];
 }
 
 // Darts that landed in one board segment; target is '1'-'20', 'OB', 'IB' or 'miss'.
@@ -160,6 +160,16 @@ export interface PlayerModeStats {
   matches: PlayerModeMatch[];
 }
 
+// Matches against one other player (teammates are not opponents). A match someone else
+// won counts as played but neither a win nor a loss.
+export interface PlayerOpponentRecord {
+  playerId: number;
+  name: string;
+  played: number;
+  wins: number;
+  losses: number;
+}
+
 export interface PlayerDetail {
   playerId: number;
   name: string;
@@ -170,4 +180,6 @@ export interface PlayerDetail {
   // Every dart this player threw in any mode, by segment.
   segments: PlayerSegmentCount[];
   points: BoardPoint[];
+  // Most played first.
+  opponents: PlayerOpponentRecord[];
 }

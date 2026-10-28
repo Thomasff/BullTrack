@@ -9,6 +9,7 @@ import type {
   MatchDetailRound,
   PlayerDetail,
   PlayerModeStats,
+  PlayerOpponentRecord,
   PlayerSegmentCount,
   PlayerStats,
   PlayerX01Stats,
@@ -732,6 +733,7 @@ export const getPlayerDetail = async (
       createdAt: Number(row.created_at),
       isWinner: Number(row.is_winner) === 1,
       isTeam: row.team_index !== null && row.team_index !== undefined,
+      teamIndex: toNullableNumber(row.team_index),
       finalScore: toNullableNumber(row.final_score),
     };
   }).filter(match => since === null || match.createdAt >= since);
@@ -871,7 +873,9 @@ export const getPlayerDetail = async (
       ? {
           mpr: average(rounds),
           first9Mpr: average(marks.flatMap(match => match.slice(0, 3))),
-          count5Marks: rounds.filter(count => count >= 5).length,
+          markRounds: [5, 6, 7, 8, 9].map(
+            target => rounds.filter(count => count === target).length,
+          ),
         }
       : null;
   };
@@ -1093,6 +1097,44 @@ export const getPlayerDetail = async (
   });
   modes.sort((left, right) => right.matchesPlayed - left.matchesPlayed);
 
+  // Everyone else in this player's matches; deleted players and unnamed guests are left out.
+  const otherRows = rowsOf(
+    await execute(
+      database,
+      `SELECT match_players.match_id, match_players.player_id, match_players.team_index,
+        match_players.is_winner, players.name
+      FROM match_players
+      JOIN players ON players.id = match_players.player_id
+      WHERE match_players.match_id IN (SELECT match_id FROM match_players WHERE player_id = ?)
+        AND match_players.player_id != ? AND players.hidden = 0`,
+      [playerId, playerId],
+    ),
+  );
+  const matchById = new Map(matches.map(match => [match.id, match]));
+  const opponents = new Map<number, PlayerOpponentRecord>();
+  otherRows.forEach(row => {
+    const match = matchById.get(Number(row.match_id));
+    const name = String(row.name);
+    if (!match || isDefaultPlayerName(name)) {
+      return;
+    }
+    if (match.teamIndex !== null && match.teamIndex === toNullableNumber(row.team_index)) {
+      return;
+    }
+    const opponentId = Number(row.player_id);
+    const record = opponents.get(opponentId) ?? {
+      playerId: opponentId,
+      name,
+      played: 0,
+      wins: 0,
+      losses: 0,
+    };
+    record.played += 1;
+    record.wins += match.isWinner ? 1 : 0;
+    record.losses += Number(row.is_winner) === 1 ? 1 : 0;
+    opponents.set(opponentId, record);
+  });
+
   return {
     playerId,
     name: String(playerResult.rows.item(0).name),
@@ -1101,6 +1143,7 @@ export const getPlayerDetail = async (
     modes,
     segments: countSegments(matches),
     points: landingPoints(matches),
+    opponents: [...opponents.values()].sort((left, right) => right.played - left.played),
   };
 };
 

@@ -269,7 +269,7 @@ test('player detail: X01 averages and checkout, cricket MPR, best scores and tre
   const cricket = detail?.modes.find(mode => mode.mode === 'cricket');
   expect(cricket?.cricket?.mpr).toBeCloseTo(3);
   expect(cricket?.cricket?.first9Mpr).toBeCloseTo(3);
-  expect(cricket?.cricket?.count5Marks).toBe(1);
+  expect(cricket?.cricket?.markRounds).toEqual([1, 0, 0, 0, 0]);
   expect(cricket?.trend.map(point => point.value)).toEqual([3]);
 
   const highScore = detail?.modes.find(mode => mode.mode === 'highScore');
@@ -522,6 +522,46 @@ test('the trend has one point per day, and since leaves out older matches', asyn
   expect(recent?.segments).toEqual([{ target: '1', multiplier: 1, count: 3 }]);
 
   expect((await getPlayerDetail(playerId, 4 * DAY))?.modes).toEqual([]);
+});
+
+test('opponent records leave out teammates and guests, and count third-party wins as played', async () => {
+  // Alice beats Bob.
+  await saveSampleMatch(1000);
+  // Carol wins a three-player match against Alice and Bob.
+  await saveCompletedMatch({
+    mode: 'game301',
+    modeLabel: '301',
+    createdAt: 2000,
+    players: [
+      { id: 'a', name: 'Alice' },
+      { id: 'b', name: 'Bob' },
+      { id: 'c', name: 'Carol' },
+      { id: 'g', name: '玩家 4' },
+    ],
+    winnerIds: ['c'],
+    rounds: [],
+  });
+  // Alice and Bob together beat Carol.
+  await saveCompletedMatch({
+    mode: 'game301',
+    modeLabel: '301',
+    createdAt: 3000,
+    players: [
+      { id: 'a', name: 'Alice', teamIndex: 0 },
+      { id: 'b', name: 'Bob', teamIndex: 0 },
+      { id: 'c', name: 'Carol', teamIndex: 1 },
+    ],
+    winnerIds: ['a', 'b'],
+    rounds: [],
+  });
+
+  const alice = await getPlayerDetail((await statsOf('Alice'))!.playerId);
+  expect(alice?.opponents.map(({ playerId: _id, ...record }) => record)).toEqual([
+    { name: 'Bob', played: 2, wins: 1, losses: 0 },
+    { name: 'Carol', played: 2, wins: 1, losses: 1 },
+  ]);
+  const recent = await getPlayerDetail((await statsOf('Alice'))!.playerId, 2500);
+  expect(recent?.opponents.map(record => record.name)).toEqual(['Carol']);
 });
 
 test('only detected hits keep a landing point, and a backup carries them', async () => {
