@@ -183,3 +183,18 @@ export interface PlayerDetail {
   // Most played first.
   opponents: PlayerOpponentRecord[];
 }
+
+// Who won one match between the two players; 'other' is a third player or team.
+export interface HeadToHeadResult {
+  matchId: number;
+  createdAt: number;
+  winner: 'left' | 'right' | 'other';
+}
+
+// Two players' stats, each over only the matches they played against each other.
+export interface HeadToHead {
+  left: PlayerDetail;
+  right: PlayerDetail;
+  // Newest first.
+  results: HeadToHeadResult[];
+}

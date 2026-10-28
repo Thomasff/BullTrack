@@ -5,6 +5,8 @@ import SQLite, {
 } from 'react-native-sqlite-storage';
 import type {
   CompletedMatchInput,
+  HeadToHead,
+  HeadToHeadResult,
   MatchDetail,
   MatchDetailRound,
   PlayerDetail,
@@ -704,14 +706,26 @@ const average = (values: number[]) =>
   values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
 
 // since limits the stats to matches started from that time on; null takes them all.
+// opponentId limits them to matches against that player (not as teammates).
 export const getPlayerDetail = async (
   playerId: number,
   since: number | null = null,
+  opponentId: number | null = null,
 ): Promise<PlayerDetail | null> => {
   const database = await getDatabase();
   const playerResult = await execute(database, 'SELECT name FROM players WHERE id = ?', [playerId]);
   if (playerResult.rows.length === 0) {
     return null;
+  }
+
+  // The opponent's team per match they played; null when it was not a team match.
+  const opponentTeams = new Map<number, number | null>();
+  if (opponentId !== null) {
+    rowsOf(
+      await execute(database, 'SELECT match_id, team_index FROM match_players WHERE player_id = ?', [
+        opponentId,
+      ]),
+    ).forEach(row => opponentTeams.set(Number(row.match_id), toNullableNumber(row.team_index)));
   }
 
   const matchResult = await execute(
@@ -736,7 +750,14 @@ export const getPlayerDetail = async (
       teamIndex: toNullableNumber(row.team_index),
       finalScore: toNullableNumber(row.final_score),
     };
-  }).filter(match => since === null || match.createdAt >= since);
+  })
+    .filter(match => since === null || match.createdAt >= since)
+    .filter(
+      match =>
+        opponentId === null ||
+        (opponentTeams.has(match.id) &&
+          (match.teamIndex === null || match.teamIndex !== opponentTeams.get(match.id))),
+    );
 
   // This player's rounds per match, in throwing order.
   const throwResult = await execute(
@@ -1121,9 +1142,9 @@ export const getPlayerDetail = async (
     if (match.teamIndex !== null && match.teamIndex === toNullableNumber(row.team_index)) {
       return;
     }
-    const opponentId = Number(row.player_id);
-    const record = opponents.get(opponentId) ?? {
-      playerId: opponentId,
+    const otherId = Number(row.player_id);
+    const record = opponents.get(otherId) ?? {
+      playerId: otherId,
       name,
       played: 0,
       wins: 0,
@@ -1132,7 +1153,7 @@ export const getPlayerDetail = async (
     record.played += 1;
     record.wins += match.isWinner ? 1 : 0;
     record.losses += Number(row.is_winner) === 1 ? 1 : 0;
-    opponents.set(opponentId, record);
+    opponents.set(otherId, record);
   });
 
   return {
@@ -1145,6 +1166,31 @@ export const getPlayerDetail = async (
     points: landingPoints(matches),
     opponents: [...opponents.values()].sort((left, right) => right.played - left.played),
   };
+};
+
+// Both players' stats over the matches they played against each other.
+export const getHeadToHead = async (
+  playerId: number,
+  opponentId: number,
+  since: number | null = null,
+): Promise<HeadToHead | null> => {
+  const left = await getPlayerDetail(playerId, since, opponentId);
+  const right = await getPlayerDetail(opponentId, since, playerId);
+  if (!left || !right) {
+    return null;
+  }
+  const rightWins = new Set(
+    right.modes.flatMap(mode => mode.matches.filter(match => match.isWinner).map(match => match.matchId)),
+  );
+  const results: HeadToHeadResult[] = left.modes
+    .flatMap(mode => mode.matches)
+    .sort((first, second) => second.createdAt - first.createdAt)
+    .map(match => ({
+      matchId: match.matchId,
+      createdAt: match.createdAt,
+      winner: match.isWinner ? 'left' : rightWins.has(match.matchId) ? 'right' : 'other',
+    }));
+  return { left, right, results };
 };
 
 export const getSetting = async (key: string): Promise<string | null> => {

@@ -8,6 +8,7 @@ import {
   deleteMatch,
   deletePlayer,
   exportHistory,
+  getHeadToHead,
   getMatchDetail,
   getPlayerDetail,
   getSetting,
@@ -562,6 +563,50 @@ test('opponent records leave out teammates and guests, and count third-party win
   ]);
   const recent = await getPlayerDetail((await statsOf('Alice'))!.playerId, 2500);
   expect(recent?.opponents.map(record => record.name)).toEqual(['Carol']);
+});
+
+test('head to head keeps only the matches the two played against each other', async () => {
+  // Alice beats Bob, then Carol wins a match against both, then Alice and Bob team up.
+  await saveSampleMatch(1000);
+  await saveCompletedMatch({
+    mode: 'game301',
+    modeLabel: '301',
+    createdAt: 2000,
+    players: [
+      { id: 'a', name: 'Alice' },
+      { id: 'b', name: 'Bob' },
+      { id: 'c', name: 'Carol' },
+    ],
+    winnerIds: ['c'],
+    rounds: [{ playerId: 'b', roundIndex: 1, throws: [T20, T20, T20] }],
+  });
+  await saveCompletedMatch({
+    mode: 'cricket',
+    modeLabel: 'Cricket',
+    createdAt: 3000,
+    players: [
+      { id: 'a', name: 'Alice', teamIndex: 0 },
+      { id: 'b', name: 'Bob', teamIndex: 0 },
+      { id: 'c', name: 'Carol', teamIndex: 1 },
+    ],
+    winnerIds: ['a', 'b'],
+    rounds: [],
+  });
+  await saveSoloMatch('Bob', 4000);
+  const alice = (await statsOf('Alice'))!.playerId;
+  const bob = (await statsOf('Bob'))!.playerId;
+
+  const record = await getHeadToHead(alice, bob);
+  expect(record?.results.map(result => result.winner)).toEqual(['other', 'left']);
+  expect(record?.left).toMatchObject({ matchesPlayed: 2, wins: 1 });
+  expect(record?.right).toMatchObject({ matchesPlayed: 2, wins: 0 });
+  expect(record?.left.modes.map(mode => mode.mode)).toEqual(['game301']);
+  expect(record?.left.modes[0].x01?.average).toBeCloseTo(150.5);
+  expect(record?.right.modes[0].x01?.average).toBeCloseTo(91.5);
+
+  expect((await getHeadToHead(alice, bob, 1500))?.results.map(result => result.winner)).toEqual([
+    'other',
+  ]);
 });
 
 test('only detected hits keep a landing point, and a backup carries them', async () => {

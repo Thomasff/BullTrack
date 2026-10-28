@@ -8,4 +8,5 @@ export type RootStackParamList = {
   Debug: undefined;
   MatchDetail: { matchId: number };
   PlayerDetail: { playerId: number };
+  HeadToHead: { playerId: number; opponentId: number };
 };

@@ -44,13 +44,39 @@ const TREND_DURATION = 900;
 // Up to this many days the line also shows a dot per day.
 const TREND_MAX_DOTS = 31;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const RECENT_DAYS = 30;
+export const RECENT_DAYS = 30;
 
-type StatsRange = 'all' | 'recent';
+export type StatsRange = 'all' | 'recent';
 const RANGE_OPTIONS: Array<{ key: StatsRange; label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'recent', label: `近 ${RECENT_DAYS} 天` },
 ];
+
+// The since argument of the stats queries for a range.
+export const rangeStart = (range: StatsRange) =>
+  range === 'recent' ? Date.now() - RECENT_DAYS * DAY_MS : null;
+
+export const RangeSwitch = ({
+  range,
+  onChange,
+}: {
+  range: StatsRange;
+  onChange: (range: StatsRange) => void;
+}) => (
+  <View style={styles.rangeSwitch}>
+    {RANGE_OPTIONS.map(option => (
+      <Pressable
+        key={option.key}
+        hitSlop={4}
+        onPress={() => onChange(option.key)}
+        style={[styles.rangeOption, range === option.key && styles.rangeOptionActive]}>
+        <Text style={[styles.rangeLabel, range === option.key && styles.rangeLabelActive]}>
+          {option.label}
+        </Text>
+      </Pressable>
+    ))}
+  </View>
+);
 const HIT_MAP_MAX_SIZE = 320;
 const TOP_SEGMENTS = 3;
 
@@ -297,8 +323,7 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
   const { width } = useWindowDimensions();
 
   useEffect(() => {
-    const since = range === 'recent' ? Date.now() - RECENT_DAYS * DAY_MS : null;
-    getPlayerDetail(route.params.playerId, since)
+    getPlayerDetail(route.params.playerId, rangeStart(range))
       .then(setDetail)
       .catch(() => setDetail(null))
       .finally(() => setLoaded(true));
@@ -390,7 +415,12 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
             {detail.opponents.map(opponent => (
               <Pressable
                 key={opponent.playerId}
-                onPress={() => navigation.push('PlayerDetail', { playerId: opponent.playerId })}
+                onPress={() =>
+                  navigation.push('HeadToHead', {
+                    playerId: detail.playerId,
+                    opponentId: opponent.playerId,
+                  })
+                }
                 style={({ pressed }) => [styles.tableRow, pressed && styles.pressed]}>
                 <Text numberOfLines={1} style={styles.cellName}>
                   {opponent.name}
@@ -403,7 +433,7 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
             ))}
           </View>
           <Text style={styles.note}>
-            队友不算对手；多人局里由别人获胜的场次只计入场次。点一行看对手的统计。
+            队友不算对手；多人局里由别人获胜的场次只计入场次。点一行看两人对比。
           </Text>
         </>
       ) : null}
@@ -485,19 +515,7 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
             {detail.matchesPlayed} 场 · 胜 {detail.wins} 场 · 胜率{' '}
             {formatRate(detail.wins, detail.matchesPlayed)}
           </Text>
-          <View style={styles.rangeSwitch}>
-            {RANGE_OPTIONS.map(option => (
-              <Pressable
-                key={option.key}
-                hitSlop={4}
-                onPress={() => setRange(option.key)}
-                style={[styles.rangeOption, range === option.key && styles.rangeOptionActive]}>
-                <Text style={[styles.rangeLabel, range === option.key && styles.rangeLabelActive]}>
-                  {option.label}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+          <RangeSwitch range={range} onChange={setRange} />
         </View>
       </View>
 
