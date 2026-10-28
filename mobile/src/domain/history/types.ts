@@ -61,6 +61,8 @@ export interface PlayerStats {
   // Average 3-dart round total in X01 games; null when the player has no X01 rounds.
   x01Average: number | null;
   bestRound: number | null;
+  // Start time of the player's latest match.
+  lastPlayedAt: number;
 }
 
 export interface RecentMatchSummary {

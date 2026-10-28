@@ -9,7 +9,11 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useNavigation } from '@react-navigation/native';
+import type {
+  NativeStackNavigationProp,
+  NativeStackScreenProps,
+} from '@react-navigation/native-stack';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { colors } from '../theme/colors';
 import { PlayerEditDialog } from '../components/PlayerEditDialog';
@@ -33,7 +37,7 @@ import type {
 } from '../../domain/history/types';
 import type { BoardPoint } from '../../domain/game/boardGeometry';
 import { formatDart } from './MatchDetailScreen';
-import { formatMatchTime } from './StatsTab';
+import { formatMatchTime } from './MatchListScreen';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PlayerDetail'>;
 
@@ -79,6 +83,7 @@ export const RangeSwitch = ({
 );
 const HIT_MAP_MAX_SIZE = 320;
 const TOP_SEGMENTS = 3;
+const RECENT_MATCHES = 5;
 
 const formatDay = (createdAt: number) => {
   const date = new Date(createdAt);
@@ -308,7 +313,21 @@ const HitMapCard = ({
   );
 };
 
-export const PlayerDetailScreen = ({ navigation, route }: Props) => {
+// One player's stats page; the stats tab shows it with a player switch on the name.
+export const PlayerStatsView = ({
+  playerId,
+  onPickPlayer,
+  onRenamed,
+  onPlayerGone,
+}: {
+  playerId: number;
+  // Set when the name should open a list to pick another player.
+  onPickPlayer?: () => void;
+  onRenamed?: () => void;
+  // After the player was merged into another or deleted.
+  onPlayerGone: () => void;
+}) => {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [detail, setDetail] = useState<PlayerDetail | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -323,11 +342,11 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
   const { width } = useWindowDimensions();
 
   useEffect(() => {
-    getPlayerDetail(route.params.playerId, rangeStart(range))
+    getPlayerDetail(playerId, rangeStart(range))
       .then(setDetail)
       .catch(() => setDetail(null))
       .finally(() => setLoaded(true));
-  }, [route.params.playerId, reloadKey, range]);
+  }, [playerId, reloadKey, range]);
 
   // Stable while open, so the dialog does not reset its input on re-render.
   const editTarget = useMemo(
@@ -357,6 +376,10 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
       detail: `${mode.matchesPlayed} 场`,
     })),
   ];
+  const recentMatches = detail.modes
+    .flatMap(stats => stats.matches.map(match => ({ match, stats })))
+    .sort((left, right) => right.match.createdAt - left.match.createdAt)
+    .slice(0, RECENT_MATCHES);
 
   const renderOverview = () => (
     <>
@@ -371,6 +394,31 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
           />
         </>
       ) : null}
+
+      <Text style={styles.sectionTitle}>最近比赛</Text>
+      <View style={styles.card}>
+        {recentMatches.map(({ match, stats }) => (
+          <Pressable
+            key={match.matchId}
+            onPress={() => navigation.navigate('MatchDetail', { matchId: match.matchId })}
+            style={({ pressed }) => [styles.matchRow, pressed && styles.pressed]}>
+            <Text style={styles.matchTime}>{formatMatchTime(match.createdAt)}</Text>
+            <Text numberOfLines={1} style={styles.matchMode}>
+              {modeTitle(stats)}
+            </Text>
+            <Text style={[styles.matchOutcome, match.isWinner && styles.won]}>
+              {match.isWinner ? '胜' : '负'}
+            </Text>
+            <Text style={styles.chevron}>›</Text>
+          </Pressable>
+        ))}
+        <Pressable
+          onPress={() => navigation.navigate('MatchList')}
+          style={({ pressed }) => [styles.matchRow, styles.allMatches, pressed && styles.pressed]}>
+          <Text style={styles.allMatchesLabel}>全部比赛（所有玩家）</Text>
+          <Text style={styles.chevron}>›</Text>
+        </Pressable>
+      </View>
 
       <Text style={styles.sectionTitle}>各玩法</Text>
       <View style={styles.card}>
@@ -500,9 +548,20 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
     <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
       <View style={styles.summary}>
         <View style={styles.summaryRow}>
-          <Text numberOfLines={1} style={styles.name}>
-            {detail.name}
-          </Text>
+          {onPickPlayer ? (
+            <Pressable
+              onPress={onPickPlayer}
+              style={({ pressed }) => [styles.playerSwitch, pressed && styles.pressed]}>
+              <Text numberOfLines={1} style={styles.playerSwitchName}>
+                {detail.name}
+              </Text>
+              <Text style={styles.playerSwitchArrow}>▾</Text>
+            </Pressable>
+          ) : (
+            <Text numberOfLines={1} style={styles.name}>
+              {detail.name}
+            </Text>
+          )}
           <Pressable
             hitSlop={8}
             onPress={() => setEditing(true)}
@@ -558,14 +617,19 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
           setEditing(false);
           if (change === 'renamed') {
             setReloadKey(key => key + 1);
+            onRenamed?.();
           } else {
-            navigation.goBack();
+            onPlayerGone();
           }
         }}
       />
     </ScrollView>
   );
 };
+
+export const PlayerDetailScreen = ({ navigation, route }: Props) => (
+  <PlayerStatsView playerId={route.params.playerId} onPlayerGone={() => navigation.goBack()} />
+);
 
 const styles = StyleSheet.create({
   content: {
@@ -627,6 +691,29 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.7,
+  },
+  playerSwitch: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.panel,
+    borderWidth: 1,
+    borderColor: colors.accent,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  playerSwitchName: {
+    flexShrink: 1,
+    fontSize: 22,
+    fontWeight: '800',
+    color: colors.textPrimary,
+  },
+  playerSwitchArrow: {
+    marginLeft: 'auto',
+    fontSize: 18,
+    color: colors.accent,
   },
   editLabel: {
     fontSize: 14,
@@ -730,6 +817,21 @@ const styles = StyleSheet.create({
   matchResult: {
     fontSize: 14,
     color: colors.textSecondary,
+  },
+  matchMode: {
+    maxWidth: '45%',
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  allMatches: {
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  allMatchesLabel: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.accent,
   },
   matchOutcome: {
     width: 20,

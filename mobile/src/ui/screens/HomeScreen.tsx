@@ -62,10 +62,7 @@ export const HomeScreen = ({ navigation }: Props) => {
           ) : activeTab === 'stats' ? (
             // Remount on focus so a just-finished match shows up.
             isFocused ? (
-              <StatsTab
-                onOpenMatch={matchId => navigation.navigate('MatchDetail', { matchId })}
-                onOpenPlayer={playerId => navigation.navigate('PlayerDetail', { playerId })}
-              />
+              <StatsTab onOpenMatch={matchId => navigation.navigate('MatchDetail', { matchId })} />
             ) : null
           ) : (
             <SettingsTab />

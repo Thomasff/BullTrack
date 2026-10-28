@@ -9,4 +9,5 @@ export type RootStackParamList = {
   MatchDetail: { matchId: number };
   PlayerDetail: { playerId: number };
   HeadToHead: { playerId: number; opponentId: number };
+  MatchList: undefined;
 };

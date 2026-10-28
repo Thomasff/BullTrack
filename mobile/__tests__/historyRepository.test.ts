@@ -155,6 +155,15 @@ const saveSoloMatch = (name: string, createdAt: number) =>
 const statsOf = async (name: string) =>
   (await listPlayerStats()).find(item => item.name === name);
 
+test('player stats carry the last match time, and a null limit lists every match', async () => {
+  await saveSampleMatch(1000);
+  await saveSoloMatch('Alice', 5000);
+  expect((await statsOf('Alice'))?.lastPlayedAt).toBe(5000);
+  expect((await statsOf('Bob'))?.lastPlayedAt).toBe(1000);
+  expect(await listRecentMatches(1)).toHaveLength(1);
+  expect(await listRecentMatches(null)).toHaveLength(2);
+});
+
 test('renames a player and keeps their matches', async () => {
   await saveSampleMatch(1000);
   const alice = await statsOf('Alice');

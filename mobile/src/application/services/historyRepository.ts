@@ -433,7 +433,10 @@ export const listKnownPlayerNames = async (limit = 30): Promise<string[]> => {
     .slice(0, limit);
 };
 
-export const listRecentMatches = async (limit = 20): Promise<RecentMatchSummary[]> => {
+// limit null lists every match.
+export const listRecentMatches = async (
+  limit: number | null = 20,
+): Promise<RecentMatchSummary[]> => {
   const database = await getDatabase();
   const result = await execute(
     database,
@@ -450,7 +453,8 @@ export const listRecentMatches = async (limit = 20): Promise<RecentMatchSummary[
     GROUP BY matches.id
     ORDER BY matches.created_at DESC
     LIMIT ?`,
-    [limit],
+    // A negative limit means no limit in SQLite.
+    [limit ?? -1],
   );
 
   return Array.from({ length: result.rows.length }, (_, index) => {
@@ -559,12 +563,14 @@ export const listPlayerStats = async (): Promise<PlayerStats[]> => {
       GROUP BY player_id
     ),
     match_stats AS (
-      SELECT player_id, COUNT(*) AS matches_played, SUM(is_winner) AS wins
+      SELECT match_players.player_id, COUNT(*) AS matches_played,
+        SUM(match_players.is_winner) AS wins, MAX(matches.created_at) AS last_played_at
       FROM match_players
-      GROUP BY player_id
+      JOIN matches ON matches.id = match_players.match_id
+      GROUP BY match_players.player_id
     )
     SELECT players.id, players.name, match_stats.matches_played, match_stats.wins,
-      round_stats.x01_average, round_stats.best_round
+      match_stats.last_played_at, round_stats.x01_average, round_stats.best_round
     FROM players
     JOIN match_stats ON match_stats.player_id = players.id
     LEFT JOIN round_stats ON round_stats.player_id = players.id
@@ -582,6 +588,7 @@ export const listPlayerStats = async (): Promise<PlayerStats[]> => {
       wins: Number(row.wins ?? 0),
       x01Average: toNullableNumber(row.x01_average),
       bestRound: toNullableNumber(row.best_round),
+      lastPlayedAt: Number(row.last_played_at),
     };
   }).filter(player => !isDefaultPlayerName(player.name));
 };

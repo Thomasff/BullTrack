@@ -1,43 +1,70 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { colors } from '../theme/colors';
 import {
+  getSetting,
   listPlayerStats,
   listRecentMatches,
+  setSetting,
 } from '../../application/services/historyRepository';
-import type { PlayerStats, RecentMatchSummary } from '../../domain/history/types';
+import type {
+  PlayerStats,
+  RecentMatchSummary,
+} from '../../domain/history/types';
+import { formatRate } from '../components/PlayerStatBlocks';
+import { MatchCard } from './MatchListScreen';
+import { PlayerStatsView } from './PlayerDetailScreen';
+
+// The player the tab showed last, so it opens on them again.
+const SELECTED_PLAYER_KEY = 'statsPlayerId';
 
 interface StatsTabProps {
   onOpenMatch: (matchId: number) => void;
-  onOpenPlayer: (playerId: number) => void;
 }
 
-export const formatMatchTime = (createdAt: number) => {
-  const date = new Date(createdAt);
-  const pad = (value: number) => `${value}`.padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
-    date.getHours(),
-  )}:${pad(date.getMinutes())}`;
-};
+// Saved player if still listed, else whoever played most recently.
+const pickPlayer = (players: PlayerStats[], savedId: number | null) =>
+  players.find(player => player.playerId === savedId)?.playerId ??
+  [...players].sort((left, right) => right.lastPlayedAt - left.lastPlayedAt)[0]
+    ?.playerId ??
+  null;
 
-export const StatsTab = ({ onOpenMatch, onOpenPlayer }: StatsTabProps) => {
+export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
   const [players, setPlayers] = useState<PlayerStats[]>([]);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // Only read when no player has a name, to list the matches instead.
   const [matches, setMatches] = useState<RecentMatchSummary[]>([]);
+  const [picking, setPicking] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
-    Promise.all([listPlayerStats(), listRecentMatches(50)])
-      .then(([playerStats, recentMatches]) => {
+    Promise.all([listPlayerStats(), getSetting(SELECTED_PLAYER_KEY)])
+      .then(async ([playerStats, savedId]) => {
+        const recentMatches =
+          playerStats.length === 0 ? await listRecentMatches(null) : [];
         if (isMounted) {
           setPlayers(playerStats);
+          setSelectedId(
+            pickPlayer(playerStats, savedId === null ? null : Number(savedId)),
+          );
           setMatches(recentMatches);
         }
       })
       .catch(loadError => {
         if (isMounted) {
-          setError(loadError instanceof Error ? loadError.message : '读取历史失败');
+          setError(
+            loadError instanceof Error ? loadError.message : '读取历史失败',
+          );
         }
       })
       .finally(() => {
@@ -48,69 +75,104 @@ export const StatsTab = ({ onOpenMatch, onOpenPlayer }: StatsTabProps) => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [reloadKey]);
+
+  const selectPlayer = (playerId: number) => {
+    setSelectedId(playerId);
+    setPicking(false);
+    setSetting(SELECTED_PLAYER_KEY, `${playerId}`).catch(() => undefined);
+  };
 
   if (loading) {
     return <Text style={styles.empty}>正在读取…</Text>;
   }
   if (error) {
-    return <Text style={[styles.empty, styles.error]}>读取历史失败：{error}</Text>;
+    return (
+      <Text style={[styles.empty, styles.error]}>读取历史失败：{error}</Text>
+    );
   }
-  if (matches.length === 0) {
-    return <Text style={styles.empty}>还没有完成的比赛。打完一局后会出现在这里。</Text>;
+  if (selectedId === null) {
+    if (matches.length === 0) {
+      return (
+        <Text style={styles.empty}>
+          还没有完成的比赛。打完一局后会出现在这里。
+        </Text>
+      );
+    }
+    return (
+      <ScrollView contentContainerStyle={styles.content}>
+        <Text style={styles.hint}>
+          给玩家起名字后，这里会显示个人统计；没填名字的「玩家 N」不计入统计。
+        </Text>
+        <Text style={styles.sectionTitle}>全部比赛</Text>
+        {matches.map(match => (
+          <MatchCard
+            key={match.id}
+            match={match}
+            onPress={() => onOpenMatch(match.id)}
+          />
+        ))}
+      </ScrollView>
+    );
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.content}>
-      <Text style={styles.sectionTitle}>玩家</Text>
-      <Text style={styles.hint}>点玩家查看详细统计或编辑；没填名字的「玩家 N」不计入统计。</Text>
-      <View style={styles.card}>
-        <View style={[styles.tableRow, styles.tableHeader]}>
-          <Text style={[styles.cellName, styles.headerText]}>玩家</Text>
-          <Text style={[styles.cell, styles.headerText]}>场次</Text>
-          <Text style={[styles.cell, styles.headerText]}>胜率</Text>
-          <Text style={[styles.cell, styles.headerText]}>X01 均分</Text>
-          <Text style={[styles.cell, styles.headerText]}>最高轮</Text>
-        </View>
-        {players.length === 0 ? <Text style={styles.noPlayers}>暂无</Text> : null}
-        {players.map(player => (
-          <Pressable
-            key={player.playerId}
-            onPress={() => onOpenPlayer(player.playerId)}
-            style={({ pressed }) => [styles.tableRow, pressed && styles.pressed]}>
-            <Text numberOfLines={1} style={styles.cellName}>
-              {player.name}
-            </Text>
-            <Text style={styles.cell}>{player.matchesPlayed}</Text>
-            <Text style={styles.cell}>
-              {Math.round((player.wins / Math.max(1, player.matchesPlayed)) * 100)}%
-            </Text>
-            <Text style={styles.cell}>
-              {player.x01Average === null ? '—' : player.x01Average.toFixed(1)}
-            </Text>
-            <Text style={styles.cell}>{player.bestRound ?? '—'}</Text>
-          </Pressable>
-        ))}
-      </View>
+    <>
+      <PlayerStatsView
+        key={selectedId}
+        playerId={selectedId}
+        onPickPlayer={() => setPicking(true)}
+        onRenamed={() => setReloadKey(key => key + 1)}
+        onPlayerGone={() => setReloadKey(key => key + 1)}
+      />
 
-      <Text style={styles.sectionTitle}>最近比赛</Text>
-      <View style={styles.matchList}>
-        {matches.map(match => (
-          <Pressable
-            key={match.id}
-            onPress={() => onOpenMatch(match.id)}
-            style={({ pressed }) => [styles.matchCard, pressed && styles.pressed]}>
-            <View style={styles.matchText}>
-              <Text style={styles.matchTitle}>{match.modeLabel ?? match.mode}</Text>
-              <Text style={styles.matchMeta}>
-                {formatMatchTime(match.createdAt)} · {match.playerCount} 人
-              </Text>
+      <Modal
+        transparent
+        statusBarTranslucent
+        animationType="fade"
+        visible={picking}
+        onRequestClose={() => setPicking(false)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setPicking(false)}>
+          <Pressable style={styles.picker} onPress={() => undefined}>
+            <Text style={styles.pickerTitle}>选择玩家</Text>
+            <View style={[styles.tableRow, styles.tableHeader]}>
+              <Text style={[styles.cellName, styles.headerText]}>玩家</Text>
+              <Text style={[styles.cell, styles.headerText]}>场次</Text>
+              <Text style={[styles.cell, styles.headerText]}>胜率</Text>
+              <Text style={[styles.cell, styles.headerText]}>X01 均分</Text>
             </View>
-            <Text style={styles.winner}>🏆 {match.winnerName ?? '—'}</Text>
+            <ScrollView>
+              {players.map(player => (
+                <Pressable
+                  key={player.playerId}
+                  onPress={() => selectPlayer(player.playerId)}
+                  style={({ pressed }) => [
+                    styles.tableRow,
+                    player.playerId === selectedId && styles.selectedRow,
+                    pressed && styles.pressed,
+                  ]}
+                >
+                  <Text numberOfLines={1} style={styles.cellName}>
+                    {player.name}
+                  </Text>
+                  <Text style={styles.cell}>{player.matchesPlayed}</Text>
+                  <Text style={styles.cell}>
+                    {formatRate(player.wins, player.matchesPlayed)}
+                  </Text>
+                  <Text style={styles.cell}>
+                    {player.x01Average === null
+                      ? '—'
+                      : player.x01Average.toFixed(1)}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+            <Text style={styles.hint}>没填名字的「玩家 N」不计入统计。</Text>
           </Pressable>
-        ))}
-      </View>
-    </ScrollView>
+        </Pressable>
+      </Modal>
+    </>
   );
 };
 
@@ -140,28 +202,42 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     color: colors.textSecondary,
   },
-  noPlayers: {
-    padding: 12,
-    fontSize: 14,
-    color: colors.textSecondary,
-    textAlign: 'center',
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(20, 16, 12, 0.45)',
+    justifyContent: 'center',
+    padding: 28,
   },
-  card: {
+  picker: {
+    maxHeight: '75%',
     backgroundColor: colors.panel,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: 6,
+    borderRadius: 22,
+    padding: 18,
+    gap: 6,
+  },
+  pickerTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    marginBottom: 4,
   },
   tableRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    borderRadius: 10,
   },
   tableHeader: {
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+    borderRadius: 0,
+  },
+  selectedRow: {
+    backgroundColor: colors.panelStrong,
+  },
+  pressed: {
+    opacity: 0.7,
   },
   headerText: {
     fontSize: 12,
@@ -179,39 +255,5 @@ const styles = StyleSheet.create({
     fontSize: 14,
     textAlign: 'center',
     color: colors.textPrimary,
-  },
-  matchList: {
-    gap: 10,
-  },
-  matchCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.panel,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 14,
-    gap: 12,
-  },
-  pressed: {
-    backgroundColor: colors.panelStrong,
-  },
-  matchText: {
-    flex: 1,
-    gap: 4,
-  },
-  matchTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: colors.textPrimary,
-  },
-  matchMeta: {
-    fontSize: 13,
-    color: colors.textSecondary,
-  },
-  winner: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.success,
   },
 });

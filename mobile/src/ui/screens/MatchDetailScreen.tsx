@@ -6,7 +6,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { deleteMatch, getMatchDetail } from '../../application/services/historyRepository';
 import type { MatchDetail } from '../../domain/history/types';
-import { formatMatchTime } from './StatsTab';
+import { formatMatchTime } from './MatchListScreen';
 import { getTeamName } from '../../domain/game/teams';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MatchDetail'>;

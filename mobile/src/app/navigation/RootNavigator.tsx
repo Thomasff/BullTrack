@@ -8,6 +8,7 @@ import { DebugScreen } from '../../ui/screens/DebugScreen';
 import { MatchDetailScreen } from '../../ui/screens/MatchDetailScreen';
 import { PlayerDetailScreen } from '../../ui/screens/PlayerDetailScreen';
 import { HeadToHeadScreen } from '../../ui/screens/HeadToHeadScreen';
+import { MatchListScreen } from '../../ui/screens/MatchListScreen';
 import { CurrentModeRulesButton, ModeRulesButton } from '../../ui/components/ModeRulesButton';
 import { colors } from '../../ui/theme/colors';
 import type { RootStackParamList } from './types';
@@ -73,5 +74,6 @@ export const RootNavigator = () => (
       options={{ title: '玩家统计' }}
     />
     <Stack.Screen name="HeadToHead" component={HeadToHeadScreen} options={{ title: '对战' }} />
+    <Stack.Screen name="MatchList" component={MatchListScreen} options={{ title: '全部比赛' }} />
   </Stack.Navigator>
 );
