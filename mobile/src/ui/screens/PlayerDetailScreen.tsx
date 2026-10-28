@@ -4,6 +4,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors } from '../theme/colors';
 import { PlayerEditDialog } from '../components/PlayerEditDialog';
 import { HitMapBoard } from '../components/HitMapBoard';
+import { ModeBar, ModeMenu } from '../components/ModePicker';
 import { StatTile, StatTiles, X01StatBlock, formatRate } from '../components/PlayerStatBlocks';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { getPlayerDetail } from '../../application/services/historyRepository';
@@ -181,6 +182,9 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
   const [reloadKey, setReloadKey] = useState(0);
   // null shows the overview.
   const [selectedMode, setSelectedMode] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Bottom edge of the mode bar in the scroll content, where the dropdown opens.
+  const [menuTop, setMenuTop] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
   const { width } = useWindowDimensions();
 
@@ -208,11 +212,16 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
   const selected = detail.modes.find(mode => mode.mode === selectedMode) ?? null;
   const selectMode = (mode: string | null) => {
     setSelectedMode(mode);
+    setMenuOpen(false);
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   };
-  const chips = [
-    { key: null, label: '总览' },
-    ...detail.modes.map(mode => ({ key: mode.mode, label: modeTitle(mode) })),
+  const modeOptions = [
+    { key: null, label: '总览', detail: `${detail.matchesPlayed} 场` },
+    ...detail.modes.map(mode => ({
+      key: mode.mode,
+      label: modeTitle(mode),
+      detail: `${mode.matchesPlayed} 场`,
+    })),
   ];
 
   const renderOverview = () => (
@@ -325,31 +334,31 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
         </Pressable>
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.chipScroller}
-        contentContainerStyle={styles.chips}>
-        {chips.map(chip => {
-          const active = chip.key === (selected?.mode ?? null);
-          return (
-            <Pressable
-              key={chip.key ?? 'overview'}
-              onPress={() => selectMode(chip.key)}
-              style={({ pressed }) => [
-                styles.chip,
-                active && styles.chipActive,
-                pressed && styles.pressed,
-              ]}>
-              <Text style={[styles.chipLabel, active && styles.chipLabelActive]}>
-                {chip.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
+      <View
+        onLayout={event => {
+          const { y, height } = event.nativeEvent.layout;
+          setMenuTop(y + height + 4);
+        }}>
+        <ModeBar
+          options={modeOptions}
+          selectedKey={selected?.mode ?? null}
+          menuOpen={menuOpen}
+          onSelect={selectMode}
+          onToggleMenu={() => setMenuOpen(open => !open)}
+        />
+      </View>
 
       {selected ? renderMode(selected) : renderOverview()}
+
+      {menuOpen ? (
+        <ModeMenu
+          options={modeOptions}
+          selectedKey={selected?.mode ?? null}
+          top={menuTop}
+          onSelect={selectMode}
+          onClose={() => setMenuOpen(false)}
+        />
+      ) : null}
 
       <PlayerEditDialog
         player={editTarget}
@@ -409,34 +418,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: colors.textPrimary,
-  },
-  // Runs to the screen edges so chips scroll out of view instead of being cut at the padding.
-  chipScroller: {
-    marginHorizontal: -20,
-  },
-  chips: {
-    gap: 8,
-    paddingHorizontal: 20,
-  },
-  chip: {
-    backgroundColor: colors.panel,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-  },
-  chipActive: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
-  },
-  chipLabel: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  chipLabelActive: {
-    color: colors.panel,
   },
   sectionTitle: {
     fontSize: 16,
