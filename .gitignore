@@ -53,6 +53,17 @@ before.jpg
 *.sqlite3
 
 # Local repository-maintenance artifacts
-/Docs/GitRepositorySanitizationDesign.md
-/Docs/GitRepositorySanitizationPlan.md
 /scripts/git-history/
+
+# Private development docs and editor configs (local only)
+/Docs/
+/AGENTS.md
+/.idea/
+/.trae/
+/.vscode/
+
+# Old prototypes, kept in history but not in the current tree
+/cpp_windows_DartDetector/
+/cpp_dart_detector_v2/
+/dart_test/
+/python/
