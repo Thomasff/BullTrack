@@ -25,9 +25,9 @@ const HIT_COLORS = {
 
 const SECTOR_SWEEP = (2 * Math.PI) / 20;
 
-// Square root, so a few darts in a segment still show next to a well-used one.
+// Linear, so the most used segments stand out; any hit still shows faintly.
 const heatOpacity = (count: number, max: number) =>
-  count > 0 ? 0.15 + 0.85 * Math.sqrt(count / max) : 0;
+  count > 0 ? 0.08 + 0.92 * (count / max) : 0;
 
 // Dartboard shaded by how many darts landed in each segment. A single counts for both
 // single areas of its sector, since the saved throw does not say which one it was.

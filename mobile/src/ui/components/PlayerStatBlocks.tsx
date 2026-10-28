@@ -31,7 +31,7 @@ export const X01StatBlock = ({ stats }: { stats: PlayerX01Stats }) => {
         <StatTile label="三镖均分" value={stats.average.toFixed(1)} />
         <StatTile label="前 9 镖均分" value={stats.first9Average.toFixed(1)} />
         <StatTile
-          label={`收镖成功率 · ${stats.checkoutHits}/${stats.checkoutAttempts} 镖`}
+          label={`收镖成功率（${stats.checkoutHits}/${stats.checkoutAttempts}）`}
           value={
             stats.checkoutAttempts > 0
               ? formatRate(stats.checkoutHits, stats.checkoutAttempts)

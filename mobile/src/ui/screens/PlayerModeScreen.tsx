@@ -38,9 +38,7 @@ export const PlayerModeScreen = ({ navigation, route }: Props) => {
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <Text style={styles.meta}>
-        {route.params.playerName} · {stats.matchesPlayed} 场 · 胜 {stats.wins} 场
-      </Text>
+      <Text style={styles.meta}>{route.params.playerName}</Text>
       <StatTiles>
         <StatTile label="场次" value={`${stats.matchesPlayed}`} />
         <StatTile label="胜率" value={formatRate(stats.wins, stats.matchesPlayed)} />
