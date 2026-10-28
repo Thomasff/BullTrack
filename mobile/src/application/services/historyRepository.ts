@@ -14,6 +14,7 @@ import type {
   PlayerX01Stats,
   RecentMatchSummary,
 } from '../../domain/history/types';
+import type { BoardPoint } from '../../domain/game/boardGeometry';
 import type { ThrowResult } from '../../domain/game/types';
 import { getDefaultPlayerName, isDefaultPlayerName } from '../../domain/game/players';
 import {
@@ -32,7 +33,7 @@ SQLite.enablePromise(true);
 
 const DATABASE_NAME = 'bulltrack_history.db';
 // All schema statements are idempotent, so older versions simply re-run them.
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 let databasePromise: Promise<SQLiteDatabase> | null = null;
 
@@ -115,6 +116,8 @@ const initializeDatabase = async (database: SQLiteDatabase) => {
       target TEXT,
       is_hit INTEGER,
       created_at INTEGER NOT NULL,
+      point_x REAL,
+      point_y REAL,
       FOREIGN KEY(match_id) REFERENCES matches(id),
       FOREIGN KEY(player_id) REFERENCES players(id),
       UNIQUE(match_id, player_id, round_index, dart_index)
@@ -145,6 +148,9 @@ const initializeDatabase = async (database: SQLiteDatabase) => {
   await addColumnIfMissing('players', 'hidden', 'INTEGER NOT NULL DEFAULT 0');
   // Schema v5: final score for best results; matches saved before stay null.
   await addColumnIfMissing('match_players', 'final_score', 'INTEGER');
+  // Schema v6: where a detected dart landed on the board; null when unknown.
+  await addColumnIfMissing('throws', 'point_x', 'REAL');
+  await addColumnIfMissing('throws', 'point_y', 'REAL');
   await execute(
     database,
     'CREATE INDEX IF NOT EXISTS idx_matches_created_at ON matches(created_at)',
@@ -197,6 +203,13 @@ const getTarget = (throwResult: ThrowResult) => {
   return throwResult.label.replace(/^[DST]/, '') || throwResult.label;
 };
 
+// Only darts the camera placed on the board keep a landing point: a hand-placed or guessed
+// marker is not where the dart landed, and a miss is not drawn on the board.
+const landingPoint = (throwResult: ThrowResult) =>
+  throwResult.ring === 'miss' || throwResult.placedByHand || throwResult.needsCheck
+    ? null
+    : throwResult.pointNorm;
+
 // Resolves with the new match id, so an undone final round can remove the match again.
 export const saveCompletedMatch = async (
   input: CompletedMatchInput,
@@ -218,7 +231,8 @@ export const saveCompletedMatch = async (
             }
 
             round.throws.forEach((throwResult, index) => {
-              executeTransactionSql(transaction, 'INSERT INTO throws (match_id, player_id, round_index, dart_index, score, multiplier, target, is_hit, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [
+              const point = landingPoint(throwResult);
+              executeTransactionSql(transaction, 'INSERT INTO throws (match_id, player_id, round_index, dart_index, score, multiplier, target, is_hit, created_at, point_x, point_y) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [
                 matchId,
                 databasePlayerId,
                 round.roundIndex,
@@ -228,6 +242,8 @@ export const saveCompletedMatch = async (
                 getTarget(throwResult),
                 throwResult.ring === 'miss' ? 0 : 1,
                 now,
+                point?.x ?? null,
+                point?.y ?? null,
               ]);
             });
           });
@@ -656,7 +672,7 @@ const countCheckoutAttempts = async (database: SQLiteDatabase, playerId: number)
   return counts;
 };
 
-type SavedDart = { score: number; multiplier: number; target: string };
+type SavedDart = { score: number; multiplier: number; target: string; point: BoardPoint | null };
 
 // Board sector of a saved dart: 1-20, 25 for either bull, 0 for a miss.
 const savedSector = (dart: SavedDart) => {
@@ -716,7 +732,7 @@ export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | 
   // This player's rounds per match, in throwing order.
   const throwResult = await execute(
     database,
-    `SELECT match_id, round_index, score, multiplier, target FROM throws
+    `SELECT match_id, round_index, score, multiplier, target, point_x, point_y FROM throws
     WHERE player_id = ?
     ORDER BY match_id, round_index, dart_index`,
     [playerId],
@@ -734,6 +750,10 @@ export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | 
       score: Number(row.score ?? 0),
       multiplier: Number(row.multiplier ?? 0),
       target: String(row.target ?? 'miss'),
+      point:
+        row.point_x === null || row.point_x === undefined
+          ? null
+          : { x: Number(row.point_x), y: Number(row.point_y) },
     });
   }
 
@@ -781,6 +801,8 @@ export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | 
     );
     return [...counts.values()];
   };
+  const landingPoints = (matchList: typeof matches) =>
+    matchList.flatMap(match => dartsOf(match.id).flatMap(dart => (dart.point ? [dart.point] : [])));
 
   const buildX01Stats = (x01Matches: typeof matches): PlayerX01Stats | null => {
     const x01Rounds = x01Matches.flatMap(match => roundTotals(match.id));
@@ -999,6 +1021,7 @@ export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | 
         checkoutDrill: null,
         trend: [],
         segments: [],
+        points: [],
         matches: [],
       };
       modes.push(stats);
@@ -1052,6 +1075,7 @@ export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | 
       stats.checkoutDrill = buildCheckoutDrillStats(mode, modeMatches);
     }
     stats.segments = countSegments(modeMatches);
+    stats.points = landingPoints(modeMatches);
   });
   modes.sort((left, right) => right.matchesPlayed - left.matchesPlayed);
 
@@ -1062,6 +1086,7 @@ export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | 
     wins: matches.filter(match => match.isWinner).length,
     modes,
     segments: countSegments(matches),
+    points: landingPoints(matches),
   };
 };
 
@@ -1116,6 +1141,9 @@ interface BackupMatch {
     target: string | null;
     hit: number | null;
     at: number;
+    // Landing point, only present when known (absent in older backups).
+    x?: number;
+    y?: number;
   }>;
 }
 
@@ -1158,7 +1186,8 @@ export const exportHistory = async (exportedAt = Date.now()): Promise<string> =>
     await execute(
       database,
       `SELECT throws.match_id, players.name, throws.round_index, throws.dart_index, throws.score,
-        throws.multiplier, throws.target, throws.is_hit, throws.created_at
+        throws.multiplier, throws.target, throws.is_hit, throws.created_at, throws.point_x,
+        throws.point_y
       FROM throws
       JOIN players ON players.id = throws.player_id
       ORDER BY throws.id`,
@@ -1195,6 +1224,9 @@ export const exportHistory = async (exportedAt = Date.now()): Promise<string> =>
       target: row.target === null ? null : String(row.target),
       hit: toNullableNumber(row.is_hit),
       at: Number(row.created_at),
+      ...(row.point_x === null || row.point_x === undefined
+        ? {}
+        : { x: Number(row.point_x), y: Number(row.point_y) }),
     });
   });
 
@@ -1289,8 +1321,8 @@ export const importHistory = async (text: string): Promise<ImportHistoryResult> 
               match.throws.forEach(dart => {
                 executeTransactionSql(
                   transaction,
-                  `INSERT INTO throws (match_id, player_id, round_index, dart_index, score, multiplier, target, is_hit, created_at) VALUES (?, ${playerId}, ?, ?, ?, ?, ?, ?, ?)`,
-                  [matchId, dart.player, dart.round, dart.dart, dart.score, dart.multiplier, dart.target, dart.hit, dart.at],
+                  `INSERT INTO throws (match_id, player_id, round_index, dart_index, score, multiplier, target, is_hit, created_at, point_x, point_y) VALUES (?, ${playerId}, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  [matchId, dart.player, dart.round, dart.dart, dart.score, dart.multiplier, dart.target, dart.hit, dart.at, dart.x ?? null, dart.y ?? null],
                 );
               });
             },

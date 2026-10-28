@@ -1,4 +1,5 @@
 import type { GameType, ThrowResult } from '../game/types';
+import type { BoardPoint } from '../game/boardGeometry';
 
 export interface CompletedRoundRecord {
   // The person who threw these darts (in a team game, the team member).
@@ -152,6 +153,9 @@ export interface PlayerModeStats {
   // final score, or Around the clock darts to finish.
   trend: PlayerTrendPoint[];
   segments: PlayerSegmentCount[];
+  // Where this mode's detected darts landed; darts saved before landing points or placed
+  // by hand have none.
+  points: BoardPoint[];
   // Newest first.
   matches: PlayerModeMatch[];
 }
@@ -165,4 +169,5 @@ export interface PlayerDetail {
   modes: PlayerModeStats[];
   // Every dart this player threw in any mode, by segment.
   segments: PlayerSegmentCount[];
+  points: BoardPoint[];
 }

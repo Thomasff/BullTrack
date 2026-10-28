@@ -1,3 +1,4 @@
+import { throwAt } from '../src/domain/game/boardGeometry';
 import { createThrow } from '../src/domain/game/throws';
 
 jest.mock('react-native-sqlite-storage', () => require('../jest/sqliteNodeAdapter'));
@@ -493,6 +494,38 @@ test('importing merges with the phone: players join by name, local matches stay'
   expect(await importHistory(backup)).toEqual({ status: 'imported', added: 1, skipped: 0 });
   expect(await statsOf('Alice')).toMatchObject({ matchesPlayed: 2, wins: 2 });
   expect(await statsOf('Bob')).toMatchObject({ matchesPlayed: 1 });
+});
+
+test('only detected hits keep a landing point, and a backup carries them', async () => {
+  const detected = throwAt({ x: 0.03, y: -0.52 });
+  await saveCompletedMatch({
+    mode: 'highScore',
+    modeLabel: '高分赛',
+    createdAt: 1000,
+    players: [{ id: 'player-1', name: 'Alice', finalScore: 60 }],
+    winnerIds: ['player-1'],
+    rounds: [
+      {
+        playerId: 'player-1',
+        roundIndex: 1,
+        throws: [
+          detected,
+          { ...throwAt({ x: 0, y: -0.53 }), placedByHand: true },
+          { ...throwAt({ x: 0.5, y: 0.5 }), needsCheck: true },
+        ],
+      },
+      { playerId: 'player-1', roundIndex: 2, throws: [throwAt({ x: 1.05, y: 0 })] },
+    ],
+  });
+  const expected = [{ x: 0.03, y: -0.52 }];
+  const playerId = (await statsOf('Alice'))!.playerId;
+  expect((await getPlayerDetail(playerId))?.points).toEqual(expected);
+  expect((await getPlayerDetail(playerId))?.modes[0].points).toEqual(expected);
+
+  const backup = await exportHistory();
+  await clearHistory();
+  await importHistory(backup);
+  expect((await getPlayerDetail((await statsOf('Alice'))!.playerId))?.points).toEqual(expected);
 });
 
 test('a file that is not a backup is refused without changes', async () => {

@@ -37,7 +37,7 @@ export const ThrowEditor = ({ visible, initialThrow, onCancel, onSave }: ThrowEd
   }, [initialThrow, visible]);
 
   const save = (ring: ThrowRing, sector = 0) => {
-    onSave(createThrow(ring, sector, initialThrow?.id));
+    onSave({ ...createThrow(ring, sector, initialThrow?.id), placedByHand: true });
   };
   const currentSector = initialThrow ? getThrowSector(initialThrow) : -1;
 

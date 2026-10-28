@@ -49,6 +49,9 @@ export interface ThrowResult {
   };
   // Detection is unsure about this dart; its board marker shows ? until the player moves it.
   needsCheck?: boolean;
+  // Set by the throw editor or a marker drag: pointNorm is then where the marker was put,
+  // not where the dart landed, so it is not saved as a landing point.
+  placedByHand?: boolean;
 }
 
 export interface PlayerSummary {

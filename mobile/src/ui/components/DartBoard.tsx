@@ -263,7 +263,10 @@ export const DartBoard = ({ size, throws, editable, onThrowChange }: DartBoardPr
           onDragEnd={(dragIndex, point) => {
             setDrag(null);
             const snapped = snapToRegionCenter(point);
-            onThrowChange?.(dragIndex, throwAt(snapped, throws[dragIndex]?.id));
+            onThrowChange?.(dragIndex, {
+              ...throwAt(snapped, throws[dragIndex]?.id),
+              placedByHand: true,
+            });
           }}
         />
       ))}

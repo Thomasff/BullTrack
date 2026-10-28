@@ -12,7 +12,7 @@ import {
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors } from '../theme/colors';
 import { PlayerEditDialog } from '../components/PlayerEditDialog';
-import { HitMapBoard } from '../components/HitMapBoard';
+import { HitMapBoard, usesLandingPoints } from '../components/HitMapBoard';
 import { ModeBar, ModeMenu } from '../components/ModePicker';
 import { StatTile, StatTiles, X01StatBlock, formatRate } from '../components/PlayerStatBlocks';
 import type { RootStackParamList } from '../../app/navigation/types';
@@ -24,6 +24,7 @@ import type {
   PlayerSegmentCount,
   PlayerTrendPoint,
 } from '../../domain/history/types';
+import type { BoardPoint } from '../../domain/game/boardGeometry';
 import { formatDart } from './MatchDetailScreen';
 import { formatMatchTime } from './StatsTab';
 
@@ -191,16 +192,26 @@ const TrendChart = ({ points }: { points: PlayerTrendPoint[] }) => {
   );
 };
 
-const HitMapCard = ({ segments, size }: { segments: PlayerSegmentCount[]; size: number }) => {
+const HitMapCard = ({
+  segments,
+  points,
+  size,
+}: {
+  segments: PlayerSegmentCount[];
+  points: BoardPoint[];
+  size: number;
+}) => {
   const dartsThrown = segments.reduce((sum, segment) => sum + segment.count, 0);
   const misses = segments.find(segment => segment.target === 'miss')?.count ?? 0;
+  // Older, hand-placed and guessed darts have no landing point.
+  const partialLanding = usesLandingPoints(points) && points.length < dartsThrown - misses;
   const topSegments = segments
     .filter(segment => segment.target !== 'miss')
     .sort((left, right) => right.count - left.count)
     .slice(0, TOP_SEGMENTS);
   return (
     <View style={[styles.card, styles.hitMap]}>
-      <HitMapBoard size={size} segments={segments} />
+      <HitMapBoard size={size} segments={segments} points={points} />
       <Text style={styles.hitMapText}>
         共 {dartsThrown} 镖 · 脱靶 {formatRate(misses, dartsThrown)}
       </Text>
@@ -211,6 +222,9 @@ const HitMapCard = ({ segments, size }: { segments: PlayerSegmentCount[]; size: 
             .map(segment => `${formatDart(segment)} ${formatRate(segment.count, dartsThrown)}`)
             .join(' · ')}
         </Text>
+      ) : null}
+      {partialLanding ? (
+        <Text style={styles.hitMapText}>落点图按记下落点的 {points.length} 镖画</Text>
       ) : null}
     </View>
   );
@@ -270,7 +284,12 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
       {detail.segments.length > 0 ? (
         <>
           <Text style={styles.sectionTitle}>命中分布（全部玩法）</Text>
-          <HitMapCard key="overview" segments={detail.segments} size={hitMapSize} />
+          <HitMapCard
+            key="overview"
+            segments={detail.segments}
+            points={detail.points}
+            size={hitMapSize}
+          />
         </>
       ) : null}
 
@@ -329,7 +348,12 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
         {stats.segments.length > 0 ? (
           <>
             <Text style={styles.sectionTitle}>命中分布</Text>
-            <HitMapCard key={stats.mode} segments={stats.segments} size={hitMapSize} />
+            <HitMapCard
+              key={stats.mode}
+              segments={stats.segments}
+              points={stats.points}
+              size={hitMapSize}
+            />
           </>
         ) : null}
 
