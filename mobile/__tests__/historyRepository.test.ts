@@ -21,6 +21,7 @@ import {
   setSetting,
 } from '../src/application/services/historyRepository';
 
+const DAY = 24 * 60 * 60 * 1000;
 const T20 = createThrow('triple', 20);
 const S1 = createThrow('single', 1);
 const D20 = createThrow('double', 20);
@@ -260,7 +261,9 @@ test('player detail: X01 averages and checkout, cricket MPR, best scores and tre
   expect(game301?.x01?.first9Average).toBeCloseTo(150.5);
   expect(game301?.bestScore).toBeNull();
   expect(game301?.matches[0].average).toBeCloseTo(150.5);
-  expect(game301?.trend.map(point => point.createdAt)).toEqual([1000, 2000]);
+  // Both matches were on the same day, which makes one point.
+  expect(game301?.trend).toHaveLength(1);
+  expect(game301?.trend[0].value).toBeCloseTo(150.5);
   expect(game301?.segments).toContainEqual({ target: '20', multiplier: 3, count: 8 });
 
   const cricket = detail?.modes.find(mode => mode.mode === 'cricket');
@@ -282,7 +285,7 @@ test('player detail: X01 averages and checkout, cricket MPR, best scores and tre
     [5000, 150],
     [4000, 200],
   ]);
-  expect(highScore?.trend.map(point => point.value)).toEqual([200, 150]);
+  expect(highScore?.trend.map(point => point.value)).toEqual([175]);
   expect(highScore?.x01).toBeNull();
   expect(detail?.segments).toContainEqual({ target: '20', multiplier: 3, count: 12 });
 
@@ -371,7 +374,7 @@ test('mode stats: 99 Darts and Around the clock', async () => {
       ],
     });
   await saveClock(2000, 0);
-  await saveClock(3000, 2);
+  await saveClock(DAY + 3000, 2);
 
   const detail = await getPlayerDetail((await statsOf('Alice'))!.playerId);
   expect(detail?.modes.find(mode => mode.mode === 'darts99')).toMatchObject({
@@ -494,6 +497,31 @@ test('importing merges with the phone: players join by name, local matches stay'
   expect(await importHistory(backup)).toEqual({ status: 'imported', added: 1, skipped: 0 });
   expect(await statsOf('Alice')).toMatchObject({ matchesPlayed: 2, wins: 2 });
   expect(await statsOf('Bob')).toMatchObject({ matchesPlayed: 1 });
+});
+
+test('the trend has one point per day, and since leaves out older matches', async () => {
+  await saveSoloMatch('Alice', 1000);
+  await saveSoloMatch('Alice', 2000);
+  await saveCompletedMatch({
+    mode: 'game301',
+    modeLabel: '301',
+    createdAt: 3 * DAY,
+    players: [{ id: 'player-1', name: 'Alice' }],
+    winnerIds: ['player-1'],
+    rounds: [{ playerId: 'player-1', roundIndex: 1, throws: [S1, S1, S1] }],
+  });
+  const playerId = (await statsOf('Alice'))!.playerId;
+
+  const all = await getPlayerDetail(playerId);
+  expect(all?.modes[0].trend.map(point => point.value)).toEqual([180, 3]);
+  expect(all!.modes[0].trend[1].day - all!.modes[0].trend[0].day).toBe(3 * DAY);
+
+  const recent = await getPlayerDetail(playerId, 2 * DAY);
+  expect(recent).toMatchObject({ matchesPlayed: 1, wins: 1 });
+  expect(recent?.modes[0].trend.map(point => point.value)).toEqual([3]);
+  expect(recent?.segments).toEqual([{ target: '1', multiplier: 1, count: 3 }]);
+
+  expect((await getPlayerDetail(playerId, 4 * DAY))?.modes).toEqual([]);
 });
 
 test('only detected hits keep a landing point, and a backup carries them', async () => {

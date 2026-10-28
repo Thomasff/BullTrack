@@ -604,8 +604,11 @@ const MPR_TARGETS: Record<string, number> = {
   tactics: 10,
 };
 
-// Matches shown in a mode's trend.
-const TREND_LENGTH = 10;
+// Local midnight of the day a match was played.
+const dayOf = (createdAt: number) => {
+  const date = new Date(createdAt);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+};
 
 const X01_STARTING_SCORES: Record<string, number> = { game301: 301, game501: 501, game701: 701 };
 
@@ -699,7 +702,11 @@ const hitsRoundTarget = (dart: SavedDart, target: HalfItTarget) => {
 const average = (values: number[]) =>
   values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
 
-export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | null> => {
+// since limits the stats to matches started from that time on; null takes them all.
+export const getPlayerDetail = async (
+  playerId: number,
+  since: number | null = null,
+): Promise<PlayerDetail | null> => {
   const database = await getDatabase();
   const playerResult = await execute(database, 'SELECT name FROM players WHERE id = ?', [playerId]);
   if (playerResult.rows.length === 0) {
@@ -727,7 +734,7 @@ export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | 
       isTeam: row.team_index !== null && row.team_index !== undefined,
       finalScore: toNullableNumber(row.final_score),
     };
-  });
+  }).filter(match => since === null || match.createdAt >= since);
 
   // This player's rounds per match, in throwing order.
   const throwResult = await execute(
@@ -983,23 +990,25 @@ export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | 
       : null;
   };
 
-  const trendValue = (match: (typeof matches)[number]) => {
+  // What a match adds to its day in the trend; the day's value is the average of them all,
+  // so an X01 day is the average over every round thrown that day.
+  const trendSamples = (match: (typeof matches)[number]): number[] => {
     if (X01_MODES.includes(match.mode)) {
-      const totals = roundTotals(match.id);
-      return totals.length > 0 ? average(totals) : null;
+      return roundTotals(match.id);
     }
     if (MPR_TARGETS[match.mode] !== undefined) {
-      const marks = matchMarks(match);
-      return marks.length > 0 ? average(marks) : null;
+      return matchMarks(match);
     }
     if (BEST_SCORE_MODES.includes(match.mode)) {
-      return match.isTeam ? null : match.finalScore;
+      return match.isTeam || match.finalScore === null ? [] : [match.finalScore];
     }
     if (match.mode === 'aroundTheClock' && match.isWinner && !match.isTeam) {
-      return dartsOf(match.id).length;
+      return [dartsOf(match.id).length];
     }
-    return null;
+    return [];
   };
+  // Per mode, the trend samples of each day.
+  const trendDays = new Map<string, Map<number, number[]>>();
 
   const modes: PlayerModeStats[] = [];
   matches.forEach(match => {
@@ -1042,16 +1051,21 @@ export const getPlayerDetail = async (playerId: number): Promise<PlayerDetail | 
       score,
       average: X01_MODES.includes(match.mode) && totals.length > 0 ? average(totals) : null,
     });
-    const value = trendValue(match);
-    if (value !== null) {
-      stats.trend = [
-        ...stats.trend,
-        { matchId: match.id, createdAt: match.createdAt, value },
-      ].slice(-TREND_LENGTH);
+    const samples = trendSamples(match);
+    if (samples.length > 0) {
+      const days = trendDays.get(match.mode) ?? new Map<number, number[]>();
+      trendDays.set(match.mode, days);
+      const day = dayOf(match.createdAt);
+      days.set(day, [...(days.get(day) ?? []), ...samples]);
     }
   });
   modes.forEach(stats => {
     const mode = stats.mode;
+    // Matches are read oldest first, so the days are in order.
+    stats.trend = [...(trendDays.get(mode) ?? [])].map(([day, samples]) => ({
+      day,
+      value: average(samples),
+    }));
     const modeMatches = matches.filter(match => match.mode === mode);
     const scores = stats.matches.flatMap(match => (match.score === null ? [] : [match.score]));
     stats.averageScore = scores.length > 0 ? average(scores) : null;

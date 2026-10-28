@@ -82,9 +82,9 @@ export interface PlayerModeMatch {
   average: number | null;
 }
 
+// A day the mode was played, as local midnight, and the mode's main figure over that day.
 export interface PlayerTrendPoint {
-  matchId: number;
-  createdAt: number;
+  day: number;
   value: number;
 }
 
@@ -149,7 +149,7 @@ export interface PlayerModeStats {
   targetRounds: { hitRate: number; shanghais: number; halvedPerMatch: number } | null;
   // Catch 40 and 41-60, solo matches: finishes made and played, average darts per finish.
   checkoutDrill: { finished: number; attempted: number; averageDarts: number | null } | null;
-  // The mode's main figure for the latest matches, oldest first: X01 average, cricket MPR,
+  // The mode's main figure per day played, oldest first: X01 average, cricket MPR,
   // final score, or Around the clock darts to finish.
   trend: PlayerTrendPoint[];
   segments: PlayerSegmentCount[];

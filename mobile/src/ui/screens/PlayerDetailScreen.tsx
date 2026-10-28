@@ -10,6 +10,7 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import Svg, { Circle, Path } from 'react-native-svg';
 import { colors } from '../theme/colors';
 import { PlayerEditDialog } from '../components/PlayerEditDialog';
 import { HitMapBoard, usesLandingPoints } from '../components/HitMapBoard';
@@ -30,12 +31,20 @@ import { formatMatchTime } from './StatsTab';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PlayerDetail'>;
 
-const TREND_HEIGHT = 96;
-// Bars grow one after another: each starts TREND_STAGGER later and grows for TREND_GROW,
-// as shares of the whole animation.
+const TREND_HEIGHT = 110;
+// Room around the line so its dots are not cut off.
+const TREND_PAD = 6;
 const TREND_DURATION = 900;
-const TREND_STAGGER = 0.04;
-const TREND_GROW = 0.6;
+// Up to this many days the line also shows a dot per day.
+const TREND_MAX_DOTS = 31;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const RECENT_DAYS = 30;
+
+type StatsRange = 'all' | 'recent';
+const RANGE_OPTIONS: Array<{ key: StatsRange; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'recent', label: `近 ${RECENT_DAYS} 天` },
+];
 const HIT_MAP_MAX_SIZE = 320;
 const TOP_SEGMENTS = 3;
 
@@ -148,46 +157,84 @@ const modeNote = (stats: PlayerModeStats) => {
   return null;
 };
 
-// The bars grow up from the bottom each time the chart is shown.
-const TrendChart = ({ points }: { points: PlayerTrendPoint[] }) => {
-  const progress = useRef(new Animated.Value(0)).current;
+// The days as a line, uncovered from left to right each time the chart is shown.
+const TrendLine = ({ points }: { points: PlayerTrendPoint[] }) => {
+  const [width, setWidth] = useState(0);
+  const reveal = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.timing(progress, {
-      toValue: 1,
-      duration: TREND_DURATION,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    }).start();
-  }, [progress]);
+    if (width > 0) {
+      Animated.timing(reveal, {
+        toValue: 1,
+        duration: TREND_DURATION,
+        easing: Easing.inOut(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [reveal, width]);
 
-  const max = Math.max(...points.map(point => point.value), 0.001);
+  const values = points.map(point => point.value);
+  const max = Math.max(...values);
+  const min = Math.min(...values);
+  const xAt = (index: number) =>
+    TREND_PAD + (index / (points.length - 1)) * (width - 2 * TREND_PAD);
+  const yAt = (value: number) =>
+    TREND_PAD + (max === min ? 0.5 : (max - value) / (max - min)) * (TREND_HEIGHT - 2 * TREND_PAD);
+  const line = points
+    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${xAt(index).toFixed(1)} ${yAt(point.value).toFixed(1)}`)
+    .join(' ');
+  const area = `${line} L ${xAt(points.length - 1).toFixed(1)} ${TREND_HEIGHT} L ${xAt(0).toFixed(1)} ${TREND_HEIGHT} Z`;
+
   return (
     <View style={[styles.card, styles.trend]}>
-      {points.map((point, index) => {
-        const start = Math.min(index * TREND_STAGGER, 1 - TREND_GROW);
-        const grow = progress.interpolate({
-          inputRange: [start, start + TREND_GROW],
-          outputRange: [0.001, 1],
-          extrapolate: 'clamp',
-        });
-        return (
-          <View key={point.matchId} style={styles.trendColumn}>
-            <Animated.Text style={[styles.trendValue, { opacity: grow }]}>
-              {formatTrendValue(point.value)}
-            </Animated.Text>
+      <Text style={styles.trendSummary}>
+        最近一天 {formatTrendValue(values[values.length - 1])} · 最高 {formatTrendValue(max)} · 最低{' '}
+        {formatTrendValue(min)}
+      </Text>
+      <View
+        style={styles.trendPlot}
+        onLayout={event => setWidth(event.nativeEvent.layout.width)}>
+        {width > 0 ? (
+          <>
+            <Svg width={width} height={TREND_HEIGHT}>
+              <Path d={area} fill={colors.accent} fillOpacity={0.12} />
+              <Path
+                d={line}
+                fill="none"
+                stroke={colors.accent}
+                strokeWidth={2.5}
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+              {points.length <= TREND_MAX_DOTS
+                ? points.map((point, index) => (
+                    <Circle
+                      key={point.day}
+                      cx={xAt(index)}
+                      cy={yAt(point.value)}
+                      r={3}
+                      fill={colors.accent}
+                    />
+                  ))
+                : null}
+            </Svg>
             <Animated.View
+              pointerEvents="none"
               style={[
-                styles.trendBar,
+                styles.trendCover,
                 {
-                  height: Math.max(2, (point.value / max) * TREND_HEIGHT),
-                  transform: [{ scaleY: grow }],
+                  transform: [
+                    { translateX: reveal.interpolate({ inputRange: [0, 1], outputRange: [0, width] }) },
+                  ],
                 },
               ]}
             />
-            <Text style={styles.trendDay}>{formatDay(point.createdAt)}</Text>
-          </View>
-        );
-      })}
+          </>
+        ) : null}
+      </View>
+      <View style={styles.trendDays}>
+        <Text style={styles.trendDay}>{formatDay(points[0].day)}</Text>
+        <Text style={styles.trendDay}>{formatDay(points[points.length - 1].day)}</Text>
+      </View>
     </View>
   );
 };
@@ -235,6 +282,7 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
   const [loaded, setLoaded] = useState(false);
   const [editing, setEditing] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [range, setRange] = useState<StatsRange>('all');
   // null shows the overview.
   const [selectedMode, setSelectedMode] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -244,11 +292,12 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
   const { width } = useWindowDimensions();
 
   useEffect(() => {
-    getPlayerDetail(route.params.playerId)
+    const since = range === 'recent' ? Date.now() - RECENT_DAYS * DAY_MS : null;
+    getPlayerDetail(route.params.playerId, since)
       .then(setDetail)
       .catch(() => setDetail(null))
       .finally(() => setLoaded(true));
-  }, [route.params.playerId, reloadKey]);
+  }, [route.params.playerId, reloadKey, range]);
 
   // Stable while open, so the dialog does not reset its input on re-render.
   const editTarget = useMemo(
@@ -285,7 +334,7 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
         <>
           <Text style={styles.sectionTitle}>命中分布（全部玩法）</Text>
           <HitMapCard
-            key="overview"
+            key={`${range}-overview`}
             segments={detail.segments}
             points={detail.points}
             size={hitMapSize}
@@ -339,9 +388,9 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
         {stats.trend.length >= 2 ? (
           <>
             <Text style={styles.sectionTitle}>
-              最近 {stats.trend.length} 场{trendTitle(stats)}
+              {trendTitle(stats)}走势（按天，共 {stats.trend.length} 天）
             </Text>
-            <TrendChart key={stats.mode} points={stats.trend} />
+            <TrendLine key={`${range}-${stats.mode}`} points={stats.trend} />
           </>
         ) : null}
 
@@ -349,7 +398,7 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
           <>
             <Text style={styles.sectionTitle}>命中分布</Text>
             <HitMapCard
-              key={stats.mode}
+              key={`${range}-${stats.mode}`}
               segments={stats.segments}
               points={stats.points}
               size={hitMapSize}
@@ -382,38 +431,59 @@ export const PlayerDetailScreen = ({ navigation, route }: Props) => {
   return (
     <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
       <View style={styles.summary}>
-        <View style={styles.summaryText}>
+        <View style={styles.summaryRow}>
           <Text numberOfLines={1} style={styles.name}>
             {detail.name}
           </Text>
+          <Pressable
+            hitSlop={8}
+            onPress={() => setEditing(true)}
+            style={({ pressed }) => [styles.editButton, pressed && styles.pressed]}>
+            <Text style={styles.editLabel}>编辑</Text>
+          </Pressable>
+        </View>
+        <View style={styles.summaryRow}>
           <Text style={styles.meta}>
             {detail.matchesPlayed} 场 · 胜 {detail.wins} 场 · 胜率{' '}
             {formatRate(detail.wins, detail.matchesPlayed)}
           </Text>
+          <View style={styles.rangeSwitch}>
+            {RANGE_OPTIONS.map(option => (
+              <Pressable
+                key={option.key}
+                hitSlop={4}
+                onPress={() => setRange(option.key)}
+                style={[styles.rangeOption, range === option.key && styles.rangeOptionActive]}>
+                <Text style={[styles.rangeLabel, range === option.key && styles.rangeLabelActive]}>
+                  {option.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
         </View>
-        <Pressable
-          hitSlop={8}
-          onPress={() => setEditing(true)}
-          style={({ pressed }) => [styles.editButton, pressed && styles.pressed]}>
-          <Text style={styles.editLabel}>编辑</Text>
-        </Pressable>
       </View>
 
-      <View
-        onLayout={event => {
-          const { y, height } = event.nativeEvent.layout;
-          setMenuTop(y + height + 4);
-        }}>
-        <ModeBar
-          options={modeOptions}
-          selectedKey={selected?.mode ?? null}
-          menuOpen={menuOpen}
-          onSelect={selectMode}
-          onToggleMenu={() => setMenuOpen(open => !open)}
-        />
-      </View>
+      {detail.matchesPlayed === 0 ? (
+        <Text style={styles.note}>最近 {RECENT_DAYS} 天没有比赛。</Text>
+      ) : (
+        <>
+          <View
+            onLayout={event => {
+              const { y, height } = event.nativeEvent.layout;
+              setMenuTop(y + height + 4);
+            }}>
+            <ModeBar
+              options={modeOptions}
+              selectedKey={selected?.mode ?? null}
+              menuOpen={menuOpen}
+              onSelect={selectMode}
+              onToggleMenu={() => setMenuOpen(open => !open)}
+            />
+          </View>
 
-      {selected ? renderMode(selected) : renderOverview()}
+          {selected ? renderMode(selected) : renderOverview()}
+        </>
+      )}
 
       {menuOpen ? (
         <ModeMenu
@@ -453,22 +523,45 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   summary: {
+    gap: 6,
+  },
+  summaryRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
   },
-  summaryText: {
-    flex: 1,
-    gap: 4,
-  },
   name: {
+    flex: 1,
     fontSize: 22,
     fontWeight: '800',
     color: colors.textPrimary,
   },
   meta: {
+    flex: 1,
     fontSize: 14,
     color: colors.textSecondary,
+  },
+  rangeSwitch: {
+    flexDirection: 'row',
+    backgroundColor: colors.panelStrong,
+    borderRadius: 10,
+    padding: 2,
+  },
+  rangeOption: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  rangeOptionActive: {
+    backgroundColor: colors.panel,
+  },
+  rangeLabel: {
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  rangeLabelActive: {
+    fontWeight: '700',
+    color: colors.textPrimary,
   },
   editButton: {
     backgroundColor: colors.panelStrong,
@@ -509,25 +602,25 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   trend: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    paddingHorizontal: 8,
-    paddingTop: 12,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
   },
-  trendColumn: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 4,
-  },
-  trendValue: {
-    fontSize: 11,
+  trendSummary: {
+    fontSize: 13,
     color: colors.textSecondary,
   },
-  trendBar: {
-    width: '60%',
-    transformOrigin: 'bottom',
-    borderRadius: 4,
-    backgroundColor: colors.accent,
+  trendPlot: {
+    height: TREND_HEIGHT,
+    overflow: 'hidden',
+  },
+  trendCover: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: colors.panel,
+  },
+  trendDays: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
   },
   trendDay: {
     fontSize: 10,
