@@ -1080,7 +1080,9 @@ class BullTrackLiveRoundController(
         private const val MAX_DARTS = 3
         private const val NATIVE_CALL_TIMEOUT_MS = 12_000L
         private const val CAMERA_READY_TIMEOUT_MS = 4_000L
-        private const val FRAME_INTERVAL_MS = 333L
+        // Two stills a second (user's choice, for power): a still takes about 0.25 s, so this
+        // paces the loop rather than the camera.
+        private const val FRAME_INTERVAL_MS = 500L
         private const val START_ROUND_ATTEMPTS = 3
         // Board's left half over its right half in the image; below 1 the phone is right of the
         // board's centre line (user-tested 2026-10-26: front-left 1.04-1.11, right 0.92-0.96).

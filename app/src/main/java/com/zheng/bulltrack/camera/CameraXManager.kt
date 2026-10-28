@@ -113,6 +113,12 @@ class CameraXManager : CameraManager {
     private var latestSensitivity: Int? = null
 
     @Volatile
+    private var latestFrameDurationNs: Long? = null
+
+    @Volatile
+    private var latestAeMode: Int? = null
+
+    @Volatile
     private var latestFocusDistance: Float? = null
 
     @Volatile
@@ -143,6 +149,8 @@ class CameraXManager : CameraManager {
             latestAwbState = result.get(CaptureResult.CONTROL_AWB_STATE)
             latestExposureTimeNs = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
             latestSensitivity = result.get(CaptureResult.SENSOR_SENSITIVITY)
+            latestFrameDurationNs = result.get(CaptureResult.SENSOR_FRAME_DURATION)
+            latestAeMode = result.get(CaptureResult.CONTROL_AE_MODE)
             latestFocusDistance = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
 
             if (isAeStable(latestAeState)) {
@@ -437,13 +445,9 @@ class CameraXManager : CameraManager {
             .setTargetResolution(Size(TARGET_WIDTH, TARGET_HEIGHT))
         val extender = Camera2Interop.Extender(builder)
         extender.setSessionCaptureCallback(captureCallback)
-        extender.setCaptureRequestOption(
-            CaptureRequest.CONTROL_AE_MODE,
-            CaptureRequest.CONTROL_AE_MODE_ON
-        )
-        // The AF mode is left to CameraX (continuous picture unless a focus action runs): the
-        // round turns AF off through Camera2CameraControl, and CameraX 1.3 rejects an option that
-        // is also set here.
+        // The AE and AF modes are left to CameraX (auto exposure with the flash off; continuous
+        // picture unless a focus action runs): the round turns both off through
+        // Camera2CameraControl, and CameraX 1.3 rejects an option that is also set here.
         return builder.build()
     }
 
@@ -453,11 +457,7 @@ class CameraXManager : CameraManager {
             .setTargetResolution(Size(TARGET_WIDTH, TARGET_HEIGHT))
         val extender = Camera2Interop.Extender(builder)
         extender.setSessionCaptureCallback(captureCallback)
-        extender.setCaptureRequestOption(
-            CaptureRequest.CONTROL_AE_MODE,
-            CaptureRequest.CONTROL_AE_MODE_ON
-        )
-        // AF mode left to CameraX, as in buildPreview.
+        // AE and AF modes left to CameraX, as in buildPreview.
 
         return builder.build()
     }
@@ -646,6 +646,11 @@ class CameraXManager : CameraManager {
     // sharpness of frames compared with the empty board. Focus is held by turning AF off at the
     // distance the metering action locked: the AF lock alone is lost when the preview stream comes
     // off after the first frame (the capture session is rebuilt), and request options are kept.
+    // Exposure is held by turning AE off at the metered exposure time and sensitivity rather than
+    // with CONTROL_AE_LOCK: with the AE lock on, every still waited about 0.2 s before its exposure
+    // (0.5 s a still), while with manual exposure (or AE running) the camera hands over a frame it
+    // has already exposed (0.2-0.25 s). The AE lock stays the fallback without manual sensor
+    // control.
     // Not awaited (about 0.25 s): the lock keeps what the camera already settled on, so the first
     // still comes out the same whether it is taken before or after the lock applies, and the
     // next still comes much later.
@@ -654,7 +659,24 @@ class CameraXManager : CameraManager {
         val context = appContext ?: return
         val cameraInfo = Camera2CameraInfo.from(camera.cameraInfo)
         val options = CaptureRequestOptions.Builder()
-        if (lockExposure &&
+        val exposureTimeNs = latestExposureTimeNs
+        val sensitivity = latestSensitivity
+        val manualExposure = exposureTimeNs != null && sensitivity != null &&
+            cameraInfo.getCameraCharacteristic(
+                CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES
+            )?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) == true
+        if (lockExposure && manualExposure) {
+            options.setCaptureRequestOption(
+                CaptureRequest.CONTROL_AE_MODE,
+                CaptureRequest.CONTROL_AE_MODE_OFF
+            )
+            options.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, exposureTimeNs!!)
+            options.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, sensitivity!!)
+            options.setCaptureRequestOption(
+                CaptureRequest.SENSOR_FRAME_DURATION,
+                maxOf(latestFrameDurationNs ?: 0L, exposureTimeNs)
+            )
+        } else if (lockExposure &&
             cameraInfo.getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true
         ) {
             options.setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, true)
@@ -723,7 +745,7 @@ class CameraXManager : CameraManager {
         val exposureMs = latestExposureTimeNs?.let { "%.2f".format(it / 1_000_000.0) } ?: "?"
         val focus = latestFocusDistance?.let { "%.2f".format(it) } ?: "?"
         return "exposure=${exposureMs}ms iso=${latestSensitivity ?: "?"} focus=${focus}D " +
-            "ae=${describeAeState(latestAeState)} awb=${describeAwbState(latestAwbState)} " +
+            "ae=${if (latestAeMode == CaptureResult.CONTROL_AE_MODE_OFF) "manual" else describeAeState(latestAeState)} awb=${describeAwbState(latestAwbState)} " +
             "af=${latestAfState ?: "?"}"
     }
 
