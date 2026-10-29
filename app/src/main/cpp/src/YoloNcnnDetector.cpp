@@ -27,10 +27,10 @@ constexpr const char* kInputBlobName = "in0";
 constexpr const char* kOutputBlobName = "out0";
 constexpr int kInputSize = 640;
 constexpr float kScoreThreshold = 0.25f;
-// Darts on a dark or red bed (a red dart near the bull, a far board) often score 0.12-0.2; a box
-// that is not a new dart is still dropped by the board-change check and the settled-box check.
-// Measured 2026-10-21: real darts 0.12-0.17 below the old 0.25, a false box at 0.10.
-constexpr float kDartScoreThreshold = 0.12f;
+// Matches the bundled model: on 30 App frames real darts
+// scored 0.81 and up, false boxes on an empty board 0.10-0.18. The earlier phone model scored
+// real darts 0.12-0.17 on a dark or red bed and needed 0.12; set it back with that model.
+constexpr float kDartScoreThreshold = 0.25f;
 // With debug images on, dart candidates down to this score are kept apart for the log.
 constexpr float kLowDartScoreThreshold = 0.10f;
 
