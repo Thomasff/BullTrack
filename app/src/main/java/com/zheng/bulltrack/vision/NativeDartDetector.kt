@@ -38,6 +38,7 @@ class NativeDartDetector(
         rotationDegrees: Int
     ): NativeRedetectResult
     private external fun nativeFindMissedDarts(sessionId: Long): NativeRedetectResult
+    private external fun nativeDescribeFrameStageTimes(sessionId: Long): String
     private external fun nativeDetectPrepBoard(frame: Bitmap, rotationDegrees: Int): IntArray
 
     override fun init() {
@@ -113,6 +114,9 @@ class NativeDartDetector(
             yoloStatus = result.yoloStatus
         )
     }
+
+    /** Average and slowest per-frame time of the round's YOLO, alignment and debug JPEG stages. */
+    fun describeFrameStageTimes(sessionId: Long): String = nativeDescribeFrameStageTimes(sessionId)
 
     override fun findMissedDarts(sessionId: Long): RedetectDetectionUpdate {
         val result = nativeFindMissedDarts(sessionId)

@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -20,6 +21,68 @@
 
 namespace bulltrack {
 namespace {
+
+double MsSince(std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+}
+
+// Stage times of the frame ProcessFrame is working on; it adds them to the round's totals.
+struct FrameStageTimes {
+    double yolo_ms = 0.0;
+    double ecc_ms = 0.0;
+    int ecc_runs = 0;
+    double jpeg_ms = 0.0;
+    double change_ms = 0.0;
+    bool yolo_skipped = false;
+};
+FrameStageTimes g_frame_stage_times;
+
+// Skipping YOLO on unchanged frames. A frame counts as unchanged when no pixel of its shrunk,
+// blurred model square leaves the range (darkest to brightest) of the reference's 3x3
+// neighbourhood by more than kChangeTolerance in any channel, beyond a few scattered pixels: this
+// lets the whole picture shift by about 4 full-size pixels (a stand that shakes slightly) while a
+// new dart brings colours that were not there. On 128 recorded rounds (2026-10-31) no new dart had
+// a changed patch under 39 pixels, and about 75% of idle frame pairs had one under 20.
+constexpr double kChangeScale = 0.25;
+constexpr int kChangeTolerance = 15;
+constexpr int kMinChangedPatchArea = 20;
+// YOLO still runs at least every (this + 1) frames, so a dart judged unchanged is about 2 s late at most.
+constexpr int kMaxSkippedFramesInRow = 3;
+// Frames after a change that run YOLO whatever the check says: a dart YOLO missed on the frame it
+// landed would otherwise sit in the reference and be found only by the forced run.
+constexpr int kYoloFramesAfterChange = 2;
+
+cv::Mat PrepareChangeImage(const cv::Mat& frame_bgr, const cv::Rect& square) {
+    const cv::Rect area = square & cv::Rect(0, 0, frame_bgr.cols, frame_bgr.rows);
+    cv::Mat small;
+    cv::resize(frame_bgr(area), small, cv::Size(), kChangeScale, kChangeScale, cv::INTER_AREA);
+    cv::GaussianBlur(small, small, cv::Size(3, 3), 0);
+    return small;
+}
+
+// Area of the largest patch of current that falls outside reference's neighbourhood range.
+int LargestChangedPatch(const cv::Mat& reference, const cv::Mat& current) {
+    const cv::Mat kernel = cv::Mat::ones(3, 3, CV_8U);
+    cv::Mat upper;
+    cv::Mat lower;
+    cv::dilate(reference, upper, kernel);
+    cv::erode(reference, lower, kernel);
+    cv::add(upper, cv::Scalar::all(kChangeTolerance), upper);
+    cv::subtract(lower, cv::Scalar::all(kChangeTolerance), lower);
+    cv::Mat inside;
+    cv::inRange(current, lower, upper, inside);
+    cv::Mat changed;
+    cv::bitwise_not(inside, changed);
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    const int count = cv::connectedComponentsWithStats(changed, labels, stats, centroids, 8);
+    int largest = 0;
+    for (int label = 1; label < count; ++label) {
+        largest = std::max(largest, stats.at<int>(label, cv::CC_STAT_AREA));
+    }
+    return largest;
+}
 
 struct LocalizedDartDetectionResult {
     bool has_dart = false;
@@ -45,11 +108,13 @@ struct FirstFrameBoardBaseline {
 
 #if BT_ENABLE_DEBUG_IMAGES
 std::vector<std::uint8_t> EncodeJpegBytes(const cv::Mat& image) {
+    const auto start = std::chrono::steady_clock::now();
     std::vector<std::uint8_t> buffer;
     std::vector<int> params{cv::IMWRITE_JPEG_QUALITY, 95};
     if (!cv::imencode(".jpg", image, buffer, params)) {
         throw std::runtime_error("调试图 JPEG 编码失败");
     }
+    g_frame_stage_times.jpeg_ms += MsSince(start);
     return buffer;
 }
 #endif
@@ -1009,8 +1074,12 @@ PyramidECCResult AlignOnBoardArea(
     const cv::Mat& template_gray,
     const cv::Mat& target_gray,
     const BoardAlignmentArea& area) {
+    const auto start = std::chrono::steady_clock::now();
+    g_frame_stage_times.ecc_runs += 1;
     if (area.rect.area() <= 0) {
-        return AlignPyramidEcc(template_gray, target_gray, 3, kDartAlignmentMotion);
+        PyramidECCResult result = AlignPyramidEcc(template_gray, target_gray, 3, kDartAlignmentMotion);
+        g_frame_stage_times.ecc_ms += MsSince(start);
+        return result;
     }
     PyramidECCResult result = AlignPyramidEcc(
         template_gray(area.rect),
@@ -1025,6 +1094,7 @@ PyramidECCResult AlignOnBoardArea(
     result.warp_matrix.convertTo(crop_warp, CV_32F);
     result.warp_matrix = shift * crop_warp * shift.inv();
     result.aligned_target = WarpImageWithMatrix(target_gray, result.warp_matrix, kDartAlignmentMotion, template_gray.size());
+    g_frame_stage_times.ecc_ms += MsSince(start);
     return result;
 }
 
@@ -1755,6 +1825,11 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     }
 
     AndroidStartRoundResult result;
+    frame_stage_totals_ = FrameStageTotals();
+    change_reference_.release();
+    yolo_skipped_in_row_ = 0;
+    yolo_frames_after_change_ = 0;
+    last_frame_idle_ = false;
     first_frame_bgr_ = first_frame_bgr.clone();
     latest_frame_bgr_ = first_frame_bgr.clone();
 
@@ -2142,13 +2217,74 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
         throw std::runtime_error("输入帧为空");
     }
 
+    // Adds this frame's stage times to the round's totals on every way out.
+    struct StageTimesGuard {
+        FrameStageTotals& totals;
+        std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+        ~StageTimesGuard() {
+            const FrameStageTimes& frame = g_frame_stage_times;
+            const double total_ms = MsSince(start);
+            totals.frames += 1;
+            totals.total_ms += total_ms;
+            totals.total_max_ms = std::max(totals.total_max_ms, total_ms);
+            totals.yolo_ms += frame.yolo_ms;
+            totals.yolo_max_ms = std::max(totals.yolo_max_ms, frame.yolo_ms);
+            totals.ecc_ms += frame.ecc_ms;
+            totals.ecc_max_ms = std::max(totals.ecc_max_ms, frame.ecc_ms);
+            totals.ecc_runs += frame.ecc_runs;
+            totals.jpeg_ms += frame.jpeg_ms;
+            totals.jpeg_max_ms = std::max(totals.jpeg_max_ms, frame.jpeg_ms);
+            totals.change_ms += frame.change_ms;
+            totals.yolo_skipped += frame.yolo_skipped ? 1 : 0;
+        }
+    } stage_times_guard{frame_stage_totals_};
+    g_frame_stage_times = FrameStageTimes();
+
     latest_frame_bgr_ = frame_bgr;
     AndroidFrameProcessResult result;
+
+    // While nothing happens (no dart waiting to be confirmed, no box under review, the last frame
+    // idle), a frame whose model square has not changed since the last frame YOLO ran on skips it.
+    const auto change_start = std::chrono::steady_clock::now();
+    cv::Mat change_image = PrepareChangeImage(latest_frame_bgr_, model_square_);
+    const bool may_skip_yolo = last_frame_idle_ && !pending_candidate_.has_value() &&
+        clean_refresh_frames_left_ == 0 && phantom_boxes_.empty() && yolo_frames_after_change_ == 0 &&
+        yolo_skipped_in_row_ < kMaxSkippedFramesInRow && change_reference_.size() == change_image.size();
+    const int changed_patch = may_skip_yolo ? LargestChangedPatch(change_reference_, change_image) : -1;
+    g_frame_stage_times.change_ms = MsSince(change_start);
+    if (may_skip_yolo && changed_patch < kMinChangedPatchArea) {
+        yolo_skipped_in_row_ += 1;
+        g_frame_stage_times.yolo_skipped = true;
+        result.gate_reason = "yolo_skipped_unchanged";
+#if BT_ENABLE_DEBUG_IMAGES
+        if (DebugImagesActive()) {
+            __android_log_print(
+                ANDROID_LOG_INFO,
+                "BullTrackNativeV2",
+                "frame %d unchanged (patch %d), YOLO skipped",
+                current_frame_index_,
+                changed_patch);
+        }
+#endif
+        current_frame_index_ += 1;
+        return result;
+    }
+    if (changed_patch >= kMinChangedPatchArea) {
+        yolo_frames_after_change_ = kYoloFramesAfterChange;
+    } else if (yolo_frames_after_change_ > 0) {
+        yolo_frames_after_change_ -= 1;
+    }
+    yolo_skipped_in_row_ = 0;
+    change_reference_ = change_image;
+
     YoloDetectionResult yolo_detection;
     try {
+        const auto yolo_start = std::chrono::steady_clock::now();
         yolo_detection = DetectYoloObjects(latest_frame_bgr_, model_square_);
+        g_frame_stage_times.yolo_ms = MsSince(yolo_start);
     } catch (const std::exception& error) {
         result.gate_reason = std::string("yolo_detect_failed: ") + error.what();
+        last_frame_idle_ = false;
         current_frame_index_ += 1;
         return result;
     }
@@ -2194,10 +2330,11 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
         __android_log_print(
             ANDROID_LOG_INFO,
             "BullTrackNativeV2",
-            "frame %d darts=%d board=%d low=[%s ]",
+            "frame %d darts=%d board=%d change=%d low=[%s ]",
             current_frame_index_,
             current_count,
             stored_current.has_board_box ? 1 : 0,
+            changed_patch,
             low_scores.c_str());
     }
 #endif
@@ -2267,9 +2404,36 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
         }
     }
 
+    last_frame_idle_ = result.gate_reason == "yolo_count_not_increased";
     current_frame_index_ += 1;
 
     return result;
+}
+
+std::string AndroidBullTrackSession::DescribeFrameStageTimes() const {
+    const FrameStageTotals& t = frame_stage_totals_;
+    if (t.frames == 0) {
+        return "no frames";
+    }
+    char text[256];
+    std::snprintf(
+        text,
+        sizeof(text),
+        "native avg %.0f max %.0f ms: YOLO avg %.0f max %.0f ms, ECC avg %.0f max %.0f ms (%d runs), "
+        "debug JPEG avg %.0f max %.0f ms, change check avg %.1f ms, YOLO skipped on %d of %d frames",
+        t.total_ms / t.frames,
+        t.total_max_ms,
+        t.yolo_ms / t.frames,
+        t.yolo_max_ms,
+        t.ecc_ms / t.frames,
+        t.ecc_max_ms,
+        t.ecc_runs,
+        t.jpeg_ms / t.frames,
+        t.jpeg_max_ms,
+        t.change_ms / t.frames,
+        t.yolo_skipped,
+        t.frames);
+    return text;
 }
 
 AndroidRedetectResult AndroidBullTrackSession::FindMissedDartsAtEnd() {

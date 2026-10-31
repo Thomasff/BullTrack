@@ -77,6 +77,25 @@ struct BoardAlignmentArea {
     cv::Mat mask;
 };
 
+// Time a round's frames spent in the main stages: sums over the frames and the slowest frame.
+struct FrameStageTotals {
+    int frames = 0;
+    double total_ms = 0.0;
+    double total_max_ms = 0.0;
+    double yolo_ms = 0.0;
+    double yolo_max_ms = 0.0;
+    // Board alignment (ECC); a frame may align several images, or none.
+    double ecc_ms = 0.0;
+    double ecc_max_ms = 0.0;
+    int ecc_runs = 0;
+    // Debug images (only with debug info on).
+    double jpeg_ms = 0.0;
+    double jpeg_max_ms = 0.0;
+    // The unchanged-frame check, and frames it let skip YOLO.
+    double change_ms = 0.0;
+    int yolo_skipped = 0;
+};
+
 struct PendingYoloCandidateState {
     TrackedYoloFrameState base_frame;
     TrackedYoloFrameState candidate_frame;
@@ -92,8 +111,19 @@ public:
     // On a manual end: darts never confirmed (YOLO never saw them), found by comparing the last
     // frame with the clean frame. Points without a tip are left out (the round pads misses).
     AndroidRedetectResult FindMissedDartsAtEnd();
+    // Average and slowest per-frame time of ProcessFrame and its YOLO, ECC and debug JPEG parts
+    // this round, for the round's timing log.
+    std::string DescribeFrameStageTimes() const;
 
 private:
+    FrameStageTotals frame_stage_totals_;
+    // Skipping YOLO on unchanged frames: the shrunk model square of the last frame YOLO ran on,
+    // frames skipped since, frames after a change that still run YOLO, and whether the last frame
+    // was idle (no dart waiting to be confirmed).
+    cv::Mat change_reference_;
+    int yolo_skipped_in_row_ = 0;
+    int yolo_frames_after_change_ = 0;
+    bool last_frame_idle_ = false;
     PipelineConfig pipeline_config_{};
     cv::Rect first_frame_board_box_{};
     cv::Mat first_frame_bgr_;

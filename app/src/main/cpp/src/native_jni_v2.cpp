@@ -381,6 +381,19 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeFindMissedDarts(
     }
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeDescribeFrameStageTimes(
+    JNIEnv* env,
+    jobject thiz,
+    jlong session_id) {
+    (void)thiz;
+    auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
+    if (session == nullptr) {
+        return env->NewStringUTF("no session");
+    }
+    return env->NewStringUTF(session->DescribeFrameStageTimes().c_str());
+}
+
 // Returns frame width and height, band top and height, then 1 and the board box (x, y, width,
 // height) when a board was found, or 0 and four zeros.
 JNIEXPORT jintArray JNICALL

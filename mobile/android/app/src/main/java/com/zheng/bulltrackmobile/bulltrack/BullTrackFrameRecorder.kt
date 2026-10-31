@@ -67,7 +67,7 @@ class BullTrackFrameRecorder(
 
     fun recordFrame(frameIndex: Int, bitmap: Bitmap, rotationDegrees: Int, capturedNs: Long, gateReason: String) {
         val name = String.format(Locale.US, "frame_%04d", frameIndex)
-        val idle = gateReason == IDLE_GATE_REASON
+        val idle = gateReason in IDLE_GATE_REASONS
         when {
             !idle -> {
                 // Something happened: keep what led up to it too.
@@ -183,8 +183,9 @@ class BullTrackFrameRecorder(
         const val TAG = "BullTrackRound"
         const val CSV_NAME = "frames.csv"
         const val RESULT_NAME = "result.json"
-        // The gate's "nothing new" answer; any other reason means the frame is worth keeping.
-        const val IDLE_GATE_REASON = "yolo_count_not_increased"
+        // The gate's "nothing new" answers (YOLO ran, or was skipped on an unchanged frame); any
+        // other reason means the frame is worth keeping.
+        val IDLE_GATE_REASONS = setOf("yolo_count_not_increased", "yolo_skipped_unchanged")
         const val IDLE_FRAME_INTERVAL_NS = 1_000_000_000L
         const val FRAMES_KEPT_BEFORE_EVENT = 2
         // Full resolution and high quality: tip detection works on fine pixel differences.

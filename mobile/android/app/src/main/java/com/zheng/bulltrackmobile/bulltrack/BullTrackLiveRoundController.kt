@@ -615,7 +615,8 @@ class BullTrackLiveRoundController(
                 }
                 frameIndex += 1
             }
-            Log.i(TAG, "Round frame timing: $frameTimings")
+            val stageTimes = currentSession?.let { detector.describeFrameStageTimes(it.nativeSessionId) } ?: "?"
+            Log.i(TAG, "Round frame timing: $frameTimings; $stageTimes")
             batteryJob?.cancel()
             batteryMeter?.let { Log.i(TAG, "Round battery (YOLO on ${if (roundYoloOnCpu) "CPU" else "GPU"}): $it") }
 
@@ -714,7 +715,7 @@ class BullTrackLiveRoundController(
         artifactStore.saveArtifacts(session.roundId, frameUpdate.gateDebugImages)
         artifactStore.saveArtifacts(session.roundId, frameUpdate.preciseDebugImages)
 
-        if (frameUpdate.gateReason != "yolo_count_not_increased") {
+        if (frameUpdate.gateReason != "yolo_count_not_increased" && frameUpdate.gateReason != "yolo_skipped_unchanged") {
             // Every gate decision besides "nothing new", to trace slow or wrong confirmations.
             Log.i(TAG, "Frame $frameIndex: ${frameUpdate.gateReason}")
         }
@@ -997,6 +998,7 @@ class BullTrackLiveRoundController(
     private fun describeGateReason(gateReason: String): String {
         return when {
             gateReason == "yolo_count_not_increased" -> "YOLO 飞镖数量未增加"
+            gateReason == "yolo_skipped_unchanged" -> "画面没变，跳过 YOLO"
             gateReason == "yolo_count_increased_wait_next_frame" -> "YOLO 飞镖数量增加，等待下一张确认"
             gateReason == "yolo_count_not_stable" -> "YOLO 飞镖数量未稳定"
             gateReason == "yolo_phantom_box_ignored" -> "多出的框已确认不是新镖，忽略"
