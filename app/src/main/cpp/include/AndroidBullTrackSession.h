@@ -7,6 +7,7 @@
 
 #include <opencv2/opencv.hpp>
 
+#include <memory>
 #include <optional>
 #include <cstdint>
 #include <string>
@@ -55,6 +56,14 @@ struct AndroidRedetectResult {
     std::string yolo_status;
 };
 
+// A frame's board crop aligned to the round's first frame (ECC warp, inverse map, 3x3) and how
+// well it matched. It depends on that image alone, whatever it is compared with.
+struct AlignedBoardImage {
+    cv::Mat gray_aligned;
+    cv::Mat warp;
+    double correlation = 0.0;
+};
+
 struct TrackedYoloFrameState {
     int frame_index = 0;
     cv::Mat frame_bgr;
@@ -68,6 +77,11 @@ struct TrackedYoloFrameState {
     std::vector<YoloDetectionBox> low_score_dart_boxes;
     cv::Mat overlay_bgr;
     std::string yolo_status;
+    // The board crop's alignment, made the first time a comparison needs it. Copies of the frame
+    // (recent frames, the clean frame, the pending candidate) share it, so each frame is aligned
+    // once however many comparisons it takes part in.
+    std::shared_ptr<std::optional<AlignedBoardImage>> board_alignment =
+        std::make_shared<std::optional<AlignedBoardImage>>();
 };
 
 // Part of the round's board crop that dart alignment matches on: the board's bounding box, and

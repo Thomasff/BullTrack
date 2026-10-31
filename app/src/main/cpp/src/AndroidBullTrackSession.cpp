@@ -1067,6 +1067,12 @@ constexpr const char* kDartAlignmentMotion = "homography";
 // Below this ECC score an alignment is not trusted (hand in view, motion blur, board partly out
 // of frame): the frame is not used to confirm a dart. Normal frames score 0.99 or more.
 constexpr double kMinAlignmentCorrelation = 0.97;
+// One iteration on the full-size level instead of three: each full-size iteration costs about as
+// much as both coarser levels together, and starting from the half-size result the first one does
+// nearly all the correcting. On 974 recorded frames (2026-10-31) it left about the same edge
+// residue as three; skipping the level (0.2-0.6 px off) left ring-edge strips the board scan
+// could take for a dart.
+constexpr int kDartAlignmentFinestLevelIterations = 1;
 
 // Aligns target to the template on the alignment area only, then warps the whole target: the
 // crop's warp is moved to whole-image points (W = T W_crop T^-1, T the shift by the crop corner).
@@ -1077,7 +1083,13 @@ PyramidECCResult AlignOnBoardArea(
     const auto start = std::chrono::steady_clock::now();
     g_frame_stage_times.ecc_runs += 1;
     if (area.rect.area() <= 0) {
-        PyramidECCResult result = AlignPyramidEcc(template_gray, target_gray, 3, kDartAlignmentMotion);
+        PyramidECCResult result = AlignPyramidEcc(
+            template_gray,
+            target_gray,
+            3,
+            kDartAlignmentMotion,
+            cv::Mat(),
+            kDartAlignmentFinestLevelIterations);
         g_frame_stage_times.ecc_ms += MsSince(start);
         return result;
     }
@@ -1086,7 +1098,8 @@ PyramidECCResult AlignOnBoardArea(
         target_gray(area.rect),
         3,
         kDartAlignmentMotion,
-        area.mask);
+        area.mask,
+        kDartAlignmentFinestLevelIterations);
     cv::Mat shift = cv::Mat::eye(3, 3, CV_32F);
     shift.at<float>(0, 2) = static_cast<float>(area.rect.x);
     shift.at<float>(1, 2) = static_cast<float>(area.rect.y);
@@ -1111,59 +1124,104 @@ struct AlignedBoardPair {
     double after_correlation = 0.0;
 };
 
+cv::Mat EnhancedBoardView(const cv::Mat& board_crop_bgr, const cv::Size& round_board_size, const PipelineConfig& config) {
+    return EnhanceWarpedImage(
+        ResizeToTargetSize(board_crop_bgr, round_board_size),
+        config.enhancement.saturation_scale,
+        config.enhancement.contrast_scale);
+}
+
+AlignedBoardImage AlignBoardImage(
+    const cv::Mat& first_preprocessed_gray,
+    const BoardAlignmentArea& alignment_area,
+    const cv::Mat& board_crop_bgr,
+    const PipelineConfig& config) {
+    cv::Mat gray = PreprocessImage(
+        EnhancedBoardView(board_crop_bgr, first_preprocessed_gray.size(), config),
+        config.dart.preprocess_blur_kernel);
+    // Full perspective model: a hand-held or wobbling phone changes distance and angle, not only
+    // position and turn. Measured 2026-10-21: scores never below the rotation+shift model on the
+    // stand (0.992-0.999) and back above 0.99 for most hand-held frames (0.96-0.98 before).
+    PyramidECCResult alignment = AlignOnBoardArea(first_preprocessed_gray, gray, alignment_area);
+    return AlignedBoardImage{alignment.aligned_target, alignment.warp_matrix.clone(), alignment.correlation};
+}
+
+// The frame's alignment, made on first use and kept with the frame.
+const AlignedBoardImage& FrameBoardAlignment(
+    const TrackedYoloFrameState& frame,
+    const cv::Mat& first_preprocessed_gray,
+    const BoardAlignmentArea& alignment_area,
+    const PipelineConfig& config) {
+    if (!frame.board_alignment->has_value()) {
+        *frame.board_alignment = AlignBoardImage(first_preprocessed_gray, alignment_area, frame.dart_search_crop_bgr, config);
+    }
+    return frame.board_alignment->value();
+}
+
+AlignedBoardPair PairAlignedBoardImages(
+    const cv::Size& round_board_size,
+    const AlignedBoardImage& before,
+    const AlignedBoardImage& after,
+    const cv::Mat& after_board_crop_bgr,
+    const PipelineConfig& config) {
+    AlignedBoardPair pair;
+    pair.round_board_size = round_board_size;
+    pair.before_gray_aligned = before.gray_aligned;
+    pair.after_gray_aligned = after.gray_aligned;
+    pair.before_warp = before.warp;
+    pair.after_warp = after.warp;
+    pair.before_correlation = before.correlation;
+    pair.after_correlation = after.correlation;
+#if BT_ENABLE_DEBUG_IMAGES
+    if (DebugImagesActive()) {
+        pair.after_view_aligned = WarpImageWithMatrix(
+            EnhancedBoardView(after_board_crop_bgr, round_board_size, config),
+            after.warp,
+            kDartAlignmentMotion,
+            round_board_size);
+    }
+#endif
+    return pair;
+}
+
+void CheckRoundBoardSize(const cv::Mat& first_preprocessed_gray) {
+    if (first_preprocessed_gray.cols <= 0 || first_preprocessed_gray.rows <= 0) {
+        throw std::runtime_error("首帧预处理图为空");
+    }
+}
+
 std::optional<AlignedBoardPair> PrepareAlignedBoardPair(
     const cv::Mat& first_preprocessed_gray,
     const BoardAlignmentArea& alignment_area,
     const cv::Mat& before_board_crop_bgr,
     const cv::Mat& after_board_crop_bgr,
     const PipelineConfig& config) {
-    const cv::Size round_board_size = first_preprocessed_gray.size();
-    if (round_board_size.width <= 0 || round_board_size.height <= 0) {
-        throw std::runtime_error("首帧预处理图为空");
-    }
+    CheckRoundBoardSize(first_preprocessed_gray);
     if (before_board_crop_bgr.empty() || after_board_crop_bgr.empty()) {
         return std::nullopt;
     }
+    return PairAlignedBoardImages(
+        first_preprocessed_gray.size(),
+        AlignBoardImage(first_preprocessed_gray, alignment_area, before_board_crop_bgr, config),
+        AlignBoardImage(first_preprocessed_gray, alignment_area, after_board_crop_bgr, config),
+        after_board_crop_bgr,
+        config);
+}
 
-    cv::Mat before_resized = ResizeToTargetSize(before_board_crop_bgr, round_board_size);
-    cv::Mat after_resized = ResizeToTargetSize(after_board_crop_bgr, round_board_size);
-
-    cv::Mat before_view = EnhanceWarpedImage(
-        before_resized,
-        config.enhancement.saturation_scale,
-        config.enhancement.contrast_scale);
-    cv::Mat after_view = EnhanceWarpedImage(
-        after_resized,
-        config.enhancement.saturation_scale,
-        config.enhancement.contrast_scale);
-
-    cv::Mat before_gray = PreprocessImage(before_view, config.dart.preprocess_blur_kernel);
-    cv::Mat after_gray = PreprocessImage(after_view, config.dart.preprocess_blur_kernel);
-
-    // Full perspective model: a hand-held or wobbling phone changes distance and angle, not only
-    // position and turn. Measured 2026-10-21: scores never below the rotation+shift model on the
-    // stand (0.992-0.999) and back above 0.99 for most hand-held frames (0.96-0.98 before).
-    PyramidECCResult before_alignment = AlignOnBoardArea(first_preprocessed_gray, before_gray, alignment_area);
-    PyramidECCResult after_alignment = AlignOnBoardArea(first_preprocessed_gray, after_gray, alignment_area);
-
-    AlignedBoardPair pair;
-    pair.round_board_size = round_board_size;
-    pair.before_gray_aligned = before_alignment.aligned_target;
-    pair.after_gray_aligned = after_alignment.aligned_target;
-    pair.before_warp = before_alignment.warp_matrix.clone();
-    pair.after_warp = after_alignment.warp_matrix.clone();
-    pair.before_correlation = before_alignment.correlation;
-    pair.after_correlation = after_alignment.correlation;
-#if BT_ENABLE_DEBUG_IMAGES
-    if (DebugImagesActive()) {
-        pair.after_view_aligned = WarpImageWithMatrix(
-            after_view,
-            after_alignment.warp_matrix,
-            kDartAlignmentMotion,
-            round_board_size);
+// Same for two tracked frames, reusing (and keeping) each frame's alignment.
+std::optional<AlignedBoardPair> PrepareAlignedBoardPair(
+    const cv::Mat& first_preprocessed_gray,
+    const BoardAlignmentArea& alignment_area,
+    const TrackedYoloFrameState& before_frame,
+    const TrackedYoloFrameState& after_frame,
+    const PipelineConfig& config) {
+    CheckRoundBoardSize(first_preprocessed_gray);
+    if (before_frame.dart_search_crop_bgr.empty() || after_frame.dart_search_crop_bgr.empty()) {
+        return std::nullopt;
     }
-#endif
-    return pair;
+    const AlignedBoardImage& before = FrameBoardAlignment(before_frame, first_preprocessed_gray, alignment_area, config);
+    const AlignedBoardImage& after = FrameBoardAlignment(after_frame, first_preprocessed_gray, alignment_area, config);
+    return PairAlignedBoardImages(first_preprocessed_gray.size(), before, after, after_frame.dart_search_crop_bgr, config);
 }
 
 // YOLO found the dart box in the after image as captured, but the comparison runs on the
@@ -1753,8 +1811,8 @@ std::vector<ChangeRegion> FindStillMissedDartRegions(
         still_pair = PrepareAlignedBoardPair(
             template_gray,
             alignment_area,
-            previous_frame.dart_search_crop_bgr,
-            current_frame.dart_search_crop_bgr,
+            previous_frame,
+            current_frame,
             config);
     } catch (const std::exception&) {
     }
@@ -1797,8 +1855,8 @@ bool CanRefreshCleanFrame(
         pair = PrepareAlignedBoardPair(
             template_gray,
             alignment_area,
-            clean_frame.dart_search_crop_bgr,
-            current_frame.dart_search_crop_bgr,
+            clean_frame,
+            current_frame,
             config);
     } catch (const std::exception&) {
         return false;
@@ -1924,8 +1982,8 @@ void AndroidBullTrackSession::ConfirmNewDarts(
         pair = PrepareAlignedBoardPair(
             first_frame_preprocessed_for_alignment_,
             alignment_area_,
-            base_frame.dart_search_crop_bgr,
-            stable_frame.dart_search_crop_bgr,
+            base_frame,
+            stable_frame,
             pipeline_config_);
     } catch (const std::exception& error) {
         result.gate_reason = std::string("precise_detection_failed: ") + error.what();
@@ -1993,8 +2051,8 @@ void AndroidBullTrackSession::ConfirmNewDarts(
             still_pair = PrepareAlignedBoardPair(
                 first_frame_preprocessed_for_alignment_,
                 alignment_area_,
-                candidate_frame.dart_search_crop_bgr,
-                stable_frame.dart_search_crop_bgr,
+                candidate_frame,
+                stable_frame,
                 pipeline_config_);
         } catch (const std::exception&) {
         }
@@ -2453,8 +2511,8 @@ AndroidRedetectResult AndroidBullTrackSession::FindMissedDartsAtEnd() {
         pair = PrepareAlignedBoardPair(
             first_frame_preprocessed_for_alignment_,
             alignment_area_,
-            last_clean_frame_->dart_search_crop_bgr,
-            current.dart_search_crop_bgr,
+            last_clean_frame_.value(),
+            current,
             pipeline_config_);
     } catch (const std::exception&) {
         return result;

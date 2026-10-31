@@ -147,7 +147,9 @@ cv::Mat WarpImageWithMatrix(const cv::Mat& image, const cv::Mat& warp_matrix, co
 }
 
 // target_mask (optional, target size): only these pixels of the target count in the match.
-PyramidECCResult AlignPyramidEcc(const cv::Mat& templ, const cv::Mat& target, int levels, const std::string& motion_type, const cv::Mat& target_mask) {
+// finest_level_iterations (above 0): iterations on the full-size level, the costliest one, in
+// place of the default count.
+PyramidECCResult AlignPyramidEcc(const cv::Mat& templ, const cv::Mat& target, int levels, const std::string& motion_type, const cv::Mat& target_mask, int finest_level_iterations) {
     if (templ.size() != target.size()) throw std::runtime_error("ECC 对齐失败：template/target 尺寸不一致");
     if (levels < 1) throw std::runtime_error("levels 必须 >= 1");
 
@@ -161,6 +163,7 @@ PyramidECCResult AlignPyramidEcc(const cv::Mat& templ, const cv::Mat& target, in
     template_pyramid.resize(actual_levels);
     target_pyramid.resize(actual_levels);
     std::vector<int> level_iterations = AllocateLevelIterations(actual_levels);
+    if (finest_level_iterations > 0) level_iterations.back() = finest_level_iterations;
 
     cv::Mat warp_matrix = InitialWarpMatrix(motion_mode);
     std::vector<double> level_correlations;

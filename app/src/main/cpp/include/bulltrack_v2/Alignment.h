@@ -24,7 +24,8 @@ PyramidECCResult AlignPyramidEcc(
     const cv::Mat& target,
     int levels = 3,
     const std::string& motion_type = "affine",
-    const cv::Mat& target_mask = cv::Mat());
+    const cv::Mat& target_mask = cv::Mat(),
+    int finest_level_iterations = 0);
 cv::Mat ComposeInverseMapWarps(const cv::Mat& first_warp, const cv::Mat& second_warp);
 TwoStageAlignmentResult AlignAfterImageTwoStage(
     const cv::Mat& img_before,
