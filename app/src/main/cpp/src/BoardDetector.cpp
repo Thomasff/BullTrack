@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <numeric>
 #include <optional>
@@ -527,84 +528,147 @@ cv::Mat DrawFinalCenterRadiusDebugImage(
 #endif
 
 // Ring edges of this board from the red beds, measured after the seat fit so the double search
-// is untouched. A bed is a ring piece 18 degrees wide: the far long edge of its rotated box
-// touches the outer arc at its middle, the near long edge is the chord through the inner arc's
-// ends, so its distance to the centre is the inner radius * cos(9 deg). Doubles reuse the seat
-// boxes; the triple of each seat is the red piece, among those cut away with the inner ellipse,
-// nearest to where the middle of a triple ring lies on that seat's line.
-constexpr double kExpectedTripleMiddleRadius = 0.6;
-constexpr double kMaxTripleOffsetScale = 0.15;
-// Weak red (far or dim board) breaks beds into thin pieces that would read too narrow; such a
-// board loses more triples, so require most of them before trusting the measurement.
-constexpr int kMinMeasuredTripleCount = 8;
-
-double RectifiedRadius(const cv::Mat& homography, const cv::Point2f& point) {
-    std::vector<cv::Point2f> mapped;
-    cv::perspectiveTransform(std::vector<cv::Point2f>{point}, mapped, homography);
-    return cv::norm(mapped.front());
-}
+// is untouched. A few rays through the middle of each red bed (clear of its wires) sample the
+// redness R - max(G, B) from the rectified board back in the image; black, white, cream and the
+// other bed colour all read about 0, so per radius the rays' median is a profile that is high on
+// the bed only. An edge is where the profile falls to half its peak: blur widens the ramp around
+// that point but does not move it, unlike a fixed red threshold, which kept only the middle of
+// the beds and read the rings about 3 mm too narrow. Each edge is the median over the beds.
+// Offline (2026-11-01): 27 App rounds on the soft board, and 19 labelled steel boards whose edges
+// land 0.3-0.8 mm inside the wires; 7 rays and a 0.002 step match 21 rays and 0.001 within 0.1 mm.
+constexpr int kRingRaysPerBed = 7;
+constexpr double kRingRayHalfSpreadRad = 5.0 * CV_PI / 180.0;
+constexpr double kRingRadiusStep = 0.002;
+constexpr double kTripleSearchInner = 0.52;
+constexpr double kTripleSearchOuter = 0.69;
+constexpr double kDoubleSearchInner = 0.90;
+constexpr double kDoubleSearchOuter = 1.06;
+// The half-height threshold uses this percentile of the profile as its peak, so one bright
+// sample cannot raise it.
+constexpr double kRingProfilePeakPercentile = 0.95;
+// Beds whose profile gave both edges; a dart or glare may spoil one or two.
+constexpr int kMinMeasuredBedCount = 8;
 
 float MedianOf(std::vector<double> values) {
     std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
     return static_cast<float>(values[values.size() / 2]);
 }
 
-std::optional<MeasuredRingEdges> MeasureRingEdges(
-    const cv::Mat& inner_red_mask,
-    const DoubleSeatFit& seat_fit,
-    int min_area,
-    const cv::Point2f& rough_center,
-    float rough_radius) {
-    const double chord_scale = std::cos(9.0 * CV_PI / 180.0);
-    const cv::Mat inverse_h = seat_fit.homography.inv();
-    const std::vector<ComponentCandidate> red_pieces = ExtractComponentCandidates(inner_red_mask, min_area, rough_center);
+// Inner and outer half-height crossings around the profile's peak, interpolated between samples;
+// nothing when the band is missing or runs off either end of the search range.
+std::optional<std::pair<double, double>> BandEdges(const std::vector<float>& profile, double first_radius) {
+    std::vector<float> sorted = profile;
+    const size_t peak_rank = static_cast<size_t>(kRingProfilePeakPercentile * static_cast<double>(sorted.size() - 1));
+    std::nth_element(sorted.begin(), sorted.begin() + peak_rank, sorted.end());
+    const float half = sorted[peak_rank] * 0.5f;
+    if (half <= 1.0f) {
+        return std::nullopt;
+    }
+    const size_t peak = static_cast<size_t>(std::max_element(profile.begin(), profile.end()) - profile.begin());
+    size_t inner = peak;
+    while (inner > 0 && profile[inner - 1] > half) {
+        --inner;
+    }
+    size_t outer = peak;
+    while (outer + 1 < profile.size() && profile[outer + 1] > half) {
+        ++outer;
+    }
+    if (inner == 0 || outer + 1 == profile.size()) {
+        return std::nullopt;
+    }
+    const double inner_index = static_cast<double>(inner - 1) +
+        (half - profile[inner - 1]) / (profile[inner] - profile[inner - 1]);
+    const double outer_index = static_cast<double>(outer) +
+        (half - profile[outer]) / (profile[outer + 1] - profile[outer]);
+    return std::make_pair(first_radius + inner_index * kRingRadiusStep, first_radius + outer_index * kRingRadiusStep);
+}
 
-    std::vector<double> double_inner;
-    std::vector<double> double_outer;
-    std::vector<double> triple_inner;
-    std::vector<double> triple_outer;
-    for (size_t seat = 0; seat < seat_fit.seat_rects.size(); ++seat) {
-        const cv::RotatedRect& double_rect = seat_fit.seat_rects[seat];
-        double_outer.push_back(RectifiedRadius(seat_fit.homography, seat_fit.src_points[seat]));
-        double_inner.push_back(
-            RectifiedRadius(seat_fit.homography, SelectLongEdgeMidpoint(double_rect, rough_center, false)) / chord_scale);
-
-        std::vector<cv::Point2f> expected;
-        cv::perspectiveTransform(
-            std::vector<cv::Point2f>{seat_fit.dst_points[seat] * static_cast<float>(kExpectedTripleMiddleRadius)},
-            expected,
-            inverse_h);
-        const ComponentCandidate* nearest = nullptr;
-        double nearest_distance = rough_radius * kMaxTripleOffsetScale;
-        for (const auto& piece : red_pieces) {
-            const double distance = cv::norm(piece.rect.center - expected.front());
-            if (distance < nearest_distance) {
-                nearest_distance = distance;
-                nearest = &piece;
+// Edges of one ring on every red bed: the rays of all beds are mapped into the image at once and
+// sampled with one remap (rows = radii, columns = bed rays).
+std::vector<std::pair<double, double>> MeasureRingOnRedBeds(
+    const cv::Mat& image_bgr,
+    const cv::Mat& image_from_board_h,
+    double first_radius,
+    double last_radius) {
+    const int radius_count = static_cast<int>(std::floor((last_radius - first_radius) / kRingRadiusStep)) + 1;
+    const int column_count = kExpectedDoubleRegionCount * kRingRaysPerBed;
+    std::vector<cv::Point2f> board_points;
+    board_points.reserve(static_cast<size_t>(radius_count * column_count));
+    for (int row = 0; row < radius_count; ++row) {
+        const double radius = first_radius + row * kRingRadiusStep;
+        for (int bed = 0; bed < kExpectedDoubleRegionCount; ++bed) {
+            for (int ray = 0; ray < kRingRaysPerBed; ++ray) {
+                // Seat angles: bed 0 is the top one, then every 36 degrees clockwise; y points up.
+                const double angle = bed * 2.0 * CV_PI / kExpectedDoubleRegionCount +
+                    kRingRayHalfSpreadRad * (2.0 * ray / (kRingRaysPerBed - 1) - 1.0);
+                board_points.emplace_back(
+                    static_cast<float>(radius * std::sin(angle)),
+                    static_cast<float>(radius * std::cos(angle)));
             }
         }
-        if (nearest == nullptr) {
-            continue;
-        }
-        triple_outer.push_back(RectifiedRadius(seat_fit.homography, SelectLongEdgeMidpoint(nearest->rect, rough_center, true)));
-        triple_inner.push_back(
-            RectifiedRadius(seat_fit.homography, SelectLongEdgeMidpoint(nearest->rect, rough_center, false)) / chord_scale);
     }
-    if (static_cast<int>(triple_inner.size()) < kMinMeasuredTripleCount) {
+    std::vector<cv::Point2f> image_points;
+    cv::perspectiveTransform(board_points, image_points, image_from_board_h);
+    cv::Mat map_x(radius_count, column_count, CV_32F);
+    cv::Mat map_y(radius_count, column_count, CV_32F);
+    for (int row = 0; row < radius_count; ++row) {
+        for (int column = 0; column < column_count; ++column) {
+            const cv::Point2f& point = image_points[static_cast<size_t>(row * column_count + column)];
+            map_x.at<float>(row, column) = point.x;
+            map_y.at<float>(row, column) = point.y;
+        }
+    }
+    cv::Mat samples;
+    cv::remap(image_bgr, samples, map_x, map_y, cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
+
+    std::vector<std::pair<double, double>> edges;
+    std::vector<float> profile(static_cast<size_t>(radius_count));
+    std::array<float, kRingRaysPerBed> rays{};
+    for (int bed = 0; bed < kExpectedDoubleRegionCount; ++bed) {
+        for (int row = 0; row < radius_count; ++row) {
+            const cv::Vec3b* pixels = samples.ptr<cv::Vec3b>(row) + bed * kRingRaysPerBed;
+            for (int ray = 0; ray < kRingRaysPerBed; ++ray) {
+                const cv::Vec3b& bgr = pixels[ray];
+                rays[ray] = static_cast<float>(std::max(0, static_cast<int>(bgr[2]) - std::max<int>(bgr[0], bgr[1])));
+            }
+            std::nth_element(rays.begin(), rays.begin() + kRingRaysPerBed / 2, rays.end());
+            profile[static_cast<size_t>(row)] = rays[kRingRaysPerBed / 2];
+        }
+        if (const auto bed_edges = BandEdges(profile, first_radius)) {
+            edges.push_back(bed_edges.value());
+        }
+    }
+    return edges;
+}
+
+std::optional<MeasuredRingEdges> MeasureRingEdges(const cv::Mat& image_bgr, const DoubleSeatFit& seat_fit) {
+    const cv::Mat image_from_board_h = seat_fit.homography.inv();
+    const auto triple = MeasureRingOnRedBeds(image_bgr, image_from_board_h, kTripleSearchInner, kTripleSearchOuter);
+    const auto doubles = MeasureRingOnRedBeds(image_bgr, image_from_board_h, kDoubleSearchInner, kDoubleSearchOuter);
+    if (static_cast<int>(triple.size()) < kMinMeasuredBedCount || static_cast<int>(doubles.size()) < kMinMeasuredBedCount) {
         __android_log_print(
             ANDROID_LOG_WARN,
             "BullTrackNativeV2",
-            "ring edges: only %d triple beds found",
-            static_cast<int>(triple_inner.size()));
+            "ring edges: only %d triple and %d double beds measured",
+            static_cast<int>(triple.size()),
+            static_cast<int>(doubles.size()));
         return std::nullopt;
     }
+    const auto median_of = [](const std::vector<std::pair<double, double>>& beds, bool outer) {
+        std::vector<double> values;
+        values.reserve(beds.size());
+        for (const auto& bed : beds) {
+            values.push_back(outer ? bed.second : bed.first);
+        }
+        return MedianOf(std::move(values));
+    };
 
     MeasuredRingEdges edges;
-    edges.triple_inner = MedianOf(triple_inner);
-    edges.triple_outer = MedianOf(triple_outer);
-    edges.double_inner = MedianOf(double_inner);
-    edges.double_outer = MedianOf(double_outer);
-    edges.triple_count = static_cast<int>(triple_inner.size());
+    edges.triple_inner = median_of(triple, false);
+    edges.triple_outer = median_of(triple, true);
+    edges.double_inner = median_of(doubles, false);
+    edges.double_outer = median_of(doubles, true);
+    edges.triple_count = static_cast<int>(std::min(triple.size(), doubles.size()));
     // Loose bounds around every common board, so a dart or a stray red blob in a few seats cannot
     // produce an impossible table.
     const float triple_width = edges.triple_outer - edges.triple_inner;
@@ -727,14 +791,13 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     }
     const cv::Mat& point_rectification_h = seat_fit->homography;
     const float rectified_radius = 1.0f;
-    // The red cut away with the inner ellipse holds the triples (and the bull), without the doubles.
-    const cv::Mat inner_red_mask = red_only_mask - red_binary_pre;
-    const std::optional<MeasuredRingEdges> ring_edges = MeasureRingEdges(
-        inner_red_mask,
-        seat_fit.value(),
-        circle_config.red_region_min_area,
-        rough_center,
-        rough_radius);
+    const auto ring_start = std::chrono::steady_clock::now();
+    const std::optional<MeasuredRingEdges> ring_edges = MeasureRingEdges(img_before, seat_fit.value());
+    __android_log_print(
+        ANDROID_LOG_INFO,
+        "BullTrackNativeV2",
+        "ring edges: %.2f ms",
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - ring_start).count());
 
     std::vector<ComponentCandidate> seat_candidates;
     std::vector<cv::Mat> selected_masks;
@@ -780,7 +843,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         cv::circle(perspective_corrected_preview_debug, preview_center, static_cast<int>(std::lround(rough_radius)), cv::Scalar(0, 255, 255), 3);
         cv::circle(perspective_corrected_preview_debug, preview_center, 8, cv::Scalar(0, 0, 255), -1);
         if (ring_edges.has_value()) {
-            for (const float edge : {ring_edges->triple_inner, ring_edges->triple_outer, ring_edges->double_inner}) {
+            for (const float edge : {ring_edges->triple_inner, ring_edges->triple_outer, ring_edges->double_inner, ring_edges->double_outer}) {
                 cv::circle(
                     perspective_corrected_preview_debug,
                     preview_center,
