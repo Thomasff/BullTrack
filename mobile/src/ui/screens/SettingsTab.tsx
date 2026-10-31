@@ -8,7 +8,7 @@ import {
   exportHistory,
   importHistory,
 } from '../../application/services/historyRepository';
-import { playSoundCue } from '../../application/services/liveRoundService';
+import { playHapticTick, playSoundCue } from '../../application/services/liveRoundService';
 import { bullTrackNativeBridge } from '../../native-bridge/bulltrack/bullTrackNative';
 
 type BackupResult = { text: string; failed: boolean };
@@ -29,6 +29,8 @@ export const SettingsTab = () => {
   const setYoloOnCpu = useSettingsStore(state => state.setYoloOnCpu);
   const soundCues = useSettingsStore(state => state.soundCues);
   const setSoundCues = useSettingsStore(state => state.setSoundCues);
+  const vibration = useSettingsStore(state => state.vibration);
+  const setVibration = useSettingsStore(state => state.setVibration);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [clearResult, setClearResult] = useState<'done' | 'failed' | null>(null);
 
@@ -137,6 +139,24 @@ export const SettingsTab = () => {
               if (value) {
                 // Let the player hear what the cue sounds like.
                 playSoundCue('dart');
+              }
+            }}
+            trackColor={{ true: colors.accent, false: colors.border }}
+            thumbColor={colors.panel}
+          />
+        </View>
+        <View style={[styles.row, styles.rowDivider]}>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>震动</Text>
+            <Text style={styles.description}>拖动飞镖标记时，每进入一个新区域轻震一下</Text>
+          </View>
+          <Switch
+            value={vibration}
+            onValueChange={value => {
+              setVibration(value).catch(() => undefined);
+              if (value) {
+                // Let the player feel what the tick is like.
+                playHapticTick();
               }
             }}
             trackColor={{ true: colors.accent, false: colors.border }}

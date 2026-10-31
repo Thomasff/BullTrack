@@ -37,6 +37,12 @@ export const playSoundCue = (cue: SoundCue) => {
   }
 };
 
+export const playHapticTick = () => {
+  if (useSettingsStore.getState().vibration) {
+    bullTrackNativeBridge.hapticTick();
+  }
+};
+
 // Doubles, triples and the bull have their own cue. Darts confirmed together play only the
 // highest-scoring one's cue, so cues never run into each other.
 const cueForNewThrows = (newThrows: ThrowResult[]): SoundCue => {

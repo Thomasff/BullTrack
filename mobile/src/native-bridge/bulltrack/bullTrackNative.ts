@@ -45,6 +45,7 @@ const nativeBridge: BullTrackNativeBridge | null = bullTrackNativeModule
         bullTrackNativeModule.detectPrepBoard(yoloOnCpu) as Promise<PrepBoardDetection>,
       preloadSoundCues: () => bullTrackNativeModule.preloadSoundCues(),
       playSoundCue: (cue: SoundCue) => bullTrackNativeModule.playSoundCue(cue),
+      hapticTick: () => bullTrackNativeModule.hapticTick(),
     }
   : null;
 

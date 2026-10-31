@@ -94,4 +94,5 @@ export interface BullTrackNativeBridge {
   detectPrepBoard(yoloOnCpu: boolean): Promise<PrepBoardDetection>;
   preloadSoundCues(): void;
   playSoundCue(cue: SoundCue): void;
+  hapticTick(): void;
 }

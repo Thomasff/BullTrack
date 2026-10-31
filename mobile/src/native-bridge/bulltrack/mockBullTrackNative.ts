@@ -78,4 +78,5 @@ export const mockBullTrackNativeBridge: BullTrackNativeBridge = {
   detectPrepBoard: async () => ({ available: false }),
   preloadSoundCues: () => undefined,
   playSoundCue: () => undefined,
+  hapticTick: () => undefined,
 };

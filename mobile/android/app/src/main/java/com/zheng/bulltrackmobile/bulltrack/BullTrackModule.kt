@@ -26,6 +26,7 @@ class BullTrackModule(
     private val controller = BullTrackRuntime.get(reactContext)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val soundCues = BullTrackSoundCues(reactContext)
+    private val haptics = BullTrackHaptics(reactContext)
     private var pendingPick: Promise? = null
 
     private val pickResultListener = object : BaseActivityEventListener() {
@@ -186,6 +187,10 @@ class BullTrackModule(
 
     override fun playSoundCue(cue: String) {
         soundCues.play(cue)
+    }
+
+    override fun hapticTick() {
+        haptics.tick()
     }
 
     override fun addListener(eventName: String) = Unit

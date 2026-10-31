@@ -16,6 +16,7 @@ export interface Spec extends TurboModule {
   detectPrepBoard(yoloOnCpu: boolean): Promise<Object>;
   preloadSoundCues(): void;
   playSoundCue(cue: string): void;
+  hapticTick(): void;
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }

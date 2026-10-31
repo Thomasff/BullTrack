@@ -18,6 +18,7 @@ import {
   type BoardPoint,
 } from '../../domain/game/boardGeometry';
 import type { ThrowResult } from '../../domain/game/types';
+import { playHapticTick } from '../../application/services/liveRoundService';
 
 export const DART_MARKER_COLORS = ['#F2C14E', '#4FB3BF', '#E8775A'];
 
@@ -89,6 +90,17 @@ const regionPath = (scale: number, point: BoardPoint) => {
   const index = SECTOR_ORDER.indexOf(parseInt(scored.label.replace(/^[DST]/, ''), 10));
   const start = index * SECTOR_SWEEP - SECTOR_SWEEP / 2;
   return wedgePath(scale, inner, outer, start, start + SECTOR_SWEEP);
+};
+
+// Identifies the highlighted region, so a drag can tell when it enters a new one.
+// Inner and outer singles of a sector are separate regions, as in the highlight.
+const regionKey = (point: BoardPoint) => {
+  const scored = throwAt(point);
+  if (scored.ring !== 'single') {
+    return `${scored.ring}:${scored.label}`;
+  }
+  const inner = Math.hypot(point.x, point.y) < INNER_SINGLE_END;
+  return `${inner ? 'innerSingle' : 'outerSingle'}:${scored.label}`;
 };
 
 // Static board drawing; memoized so dragging a marker never redraws it.
@@ -231,6 +243,7 @@ const Marker = ({
 
 export const DartBoard = ({ size, throws, editable, onThrowChange }: DartBoardProps) => {
   const [drag, setDrag] = useState<{ index: number; point: BoardPoint } | null>(null);
+  const dragRegion = useRef<string | null>(null);
   const scale = size / 2 / VIEW_RADIUS;
   const center = size / 2;
   const hovered = drag ? throwAt(drag.point) : null;
@@ -256,11 +269,21 @@ export const DartBoard = ({ size, throws, editable, onThrowChange }: DartBoardPr
           center={center}
           editable={editable}
           dragging={drag?.index === index}
-          onDragStart={dragIndex =>
-            setDrag({ index: dragIndex, point: markerPoint(throws[dragIndex], dragIndex) })
-          }
-          onDragMove={(dragIndex, point) => setDrag({ index: dragIndex, point })}
+          onDragStart={dragIndex => {
+            const start = markerPoint(throws[dragIndex], dragIndex);
+            dragRegion.current = regionKey(start);
+            setDrag({ index: dragIndex, point: start });
+          }}
+          onDragMove={(dragIndex, point) => {
+            const region = regionKey(point);
+            if (region !== dragRegion.current) {
+              dragRegion.current = region;
+              playHapticTick();
+            }
+            setDrag({ index: dragIndex, point });
+          }}
           onDragEnd={(dragIndex, point) => {
+            dragRegion.current = null;
             setDrag(null);
             const snapped = snapToRegionCenter(point);
             onThrowChange?.(dragIndex, {
