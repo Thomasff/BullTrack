@@ -75,6 +75,7 @@ export const mockBullTrackNativeBridge: BullTrackNativeBridge = {
   shareTextFile: async (fileName: string) => fileName,
   pickTextFile: async () => '',
   setZoomRatio: async () => readyState,
+  detectPrepBoard: async () => ({ available: false }),
   preloadSoundCues: () => undefined,
   playSoundCue: () => undefined,
 };

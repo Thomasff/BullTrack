@@ -323,6 +323,18 @@ class CameraXManager : CameraManager {
         return capturedFrame.copy(cameraConfig = roundConfig)
     }
 
+    // A still of the whole frame while the idle preview runs, for the board guide before a round
+    // (the preview shows only the middle of the frame). Null while a round holds the camera or
+    // nothing is bound. The camera state is left alone, so the screen shows no capture.
+    suspend fun capturePrepFrame(): CapturedFrame? {
+        if (currentRoundConfig != null || lockPhase != CameraLockPhase.IDLE ||
+            previewUseCase == null || imageCapture == null
+        ) {
+            return null
+        }
+        return takePicture(reportState = false)
+    }
+
     override suspend fun captureNextFrameForRound(): CapturedFrame {
         lockPhase = CameraLockPhase.LOCKED
         lockReason = "沿用首帧已稳定的 zoom 与自动对焦/测光状态直接快拍"
@@ -784,7 +796,9 @@ class CameraXManager : CameraManager {
             afState == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED
     }
 
-    private suspend fun takePicture(): CapturedFrame = suspendCancellableCoroutine { continuation ->
+    private suspend fun takePicture(
+        reportState: Boolean = true
+    ): CapturedFrame = suspendCancellableCoroutine { continuation ->
         val capture = imageCapture
         val executor = cameraExecutor
         if (capture == null || executor == null) {
@@ -792,16 +806,18 @@ class CameraXManager : CameraManager {
             return@suspendCancellableCoroutine
         }
 
-        _cameraState.value = CameraState.Capturing(
-            zoomRatio = currentZoomRatio,
-            lockPhase = lockPhase,
-            statusMessage = when (lockPhase) {
-                CameraLockPhase.METERING -> "正在等待 zoom、生效后的自动对焦和测光"
-                CameraLockPhase.LOCKED -> lockReason ?: "沿用当前稳定状态直接拍摄"
-                CameraLockPhase.FALLBACK -> lockReason ?: "自动对焦/测光未完全稳定，按当前状态拍摄"
-                CameraLockPhase.IDLE -> "相机拍摄中"
-            }
-        )
+        if (reportState) {
+            _cameraState.value = CameraState.Capturing(
+                zoomRatio = currentZoomRatio,
+                lockPhase = lockPhase,
+                statusMessage = when (lockPhase) {
+                    CameraLockPhase.METERING -> "正在等待 zoom、生效后的自动对焦和测光"
+                    CameraLockPhase.LOCKED -> lockReason ?: "沿用当前稳定状态直接拍摄"
+                    CameraLockPhase.FALLBACK -> lockReason ?: "自动对焦/测光未完全稳定，按当前状态拍摄"
+                    CameraLockPhase.IDLE -> "相机拍摄中"
+                }
+            )
+        }
 
         capture.takePicture(
             executor,
@@ -825,19 +841,23 @@ class CameraXManager : CameraManager {
                         image.close()
                         continuation.resumeWithException(error)
                     } finally {
-                        _cameraState.value = readyState(
-                            isPreviewBound = previewUseCase != null,
-                            statusMessage = currentRoundConfig?.statusMessage
-                                ?: "相机就绪"
-                        )
+                        if (reportState) {
+                            _cameraState.value = readyState(
+                                isPreviewBound = previewUseCase != null,
+                                statusMessage = currentRoundConfig?.statusMessage
+                                    ?: "相机就绪"
+                            )
+                        }
                     }
                 }
 
                 override fun onError(exception: ImageCaptureException) {
                     Log.e(TAG, "Image capture failed", exception)
-                    _cameraState.value = CameraState.Error(
-                        exception.message ?: "拍摄失败"
-                    )
+                    if (reportState) {
+                        _cameraState.value = CameraState.Error(
+                            exception.message ?: "拍摄失败"
+                        )
+                    }
                     continuation.resumeWithException(exception)
                 }
             }

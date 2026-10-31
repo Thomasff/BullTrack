@@ -64,7 +64,8 @@ class BullTrackModule(
         resolvePromise(promise) {
             val debugImages = request.hasKey("debugImages") && request.getBoolean("debugImages")
             val recordFrames = request.hasKey("recordFrames") && request.getBoolean("recordFrames")
-            controller.startLiveRound(debugImages, recordFrames)
+            val yoloOnCpu = request.hasKey("yoloOnCpu") && request.getBoolean("yoloOnCpu")
+            controller.startLiveRound(debugImages, recordFrames, yoloOnCpu)
         }
     }
 
@@ -170,6 +171,12 @@ class BullTrackModule(
     override fun setZoomRatio(zoomRatio: Double, promise: Promise) {
         resolveSuspendPromise(promise) {
             controller.setZoomRatio(zoomRatio)
+        }
+    }
+
+    override fun detectPrepBoard(yoloOnCpu: Boolean, promise: Promise) {
+        resolveSuspendPromise(promise) {
+            controller.detectPrepBoard(yoloOnCpu)
         }
     }
 

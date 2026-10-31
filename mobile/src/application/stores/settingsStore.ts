@@ -15,9 +15,13 @@ interface SettingsStoreState {
   // Developer recording of raw round frames. Not stored, so it is off after a restart and
   // cannot be left on by mistake; it also goes off with the debug info it sits under.
   recordFrames: boolean;
+  // Developer switch: run YOLO on the CPU instead of the GPU, to compare speed and power. Not
+  // stored, and off with the debug info, like recordFrames.
+  yoloOnCpu: boolean;
   loadSettings: () => Promise<void>;
   setShowDebugInfo: (value: boolean) => Promise<void>;
   setRecordFrames: (value: boolean) => void;
+  setYoloOnCpu: (value: boolean) => void;
   setZoomRatio: (value: number) => Promise<void>;
   setSoundCues: (value: boolean) => Promise<void>;
 }
@@ -28,6 +32,7 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   zoomRatio: 1,
   soundCues: true,
   recordFrames: false,
+  yoloOnCpu: false,
   loadSettings: async () => {
     if (get().loaded) {
       return;
@@ -47,10 +52,11 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
     }
   },
   setShowDebugInfo: async value => {
-    set(value ? { showDebugInfo: value } : { showDebugInfo: value, recordFrames: false });
+    set(value ? { showDebugInfo: value } : { showDebugInfo: value, recordFrames: false, yoloOnCpu: false });
     await setSetting(SHOW_DEBUG_KEY, value ? '1' : '0');
   },
   setRecordFrames: value => set({ recordFrames: value }),
+  setYoloOnCpu: value => set({ yoloOnCpu: value }),
   setZoomRatio: async value => {
     set({ zoomRatio: value });
     await setSetting(ZOOM_RATIO_KEY, value.toFixed(2));

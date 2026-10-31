@@ -110,7 +110,7 @@ jobject CreateNativeStartRoundResult(JNIEnv* env, const bulltrack::AndroidStartR
     jmethodID constructor = env->GetMethodID(
         result_class,
         "<init>",
-        "([Lcom/zheng/bulltrack/vision/NativeDebugImageResult;Ljava/lang/String;IF)V");
+        "([Lcom/zheng/bulltrack/vision/NativeDebugImageResult;Ljava/lang/String;IFFZI)V");
     jobjectArray debug_images = CreateNativeDebugImageArray(env, result.debug_images);
     jstring error_message = result.error_message.empty() ? nullptr : env->NewStringUTF(result.error_message.c_str());
     jobject obj = env->NewObject(
@@ -119,7 +119,10 @@ jobject CreateNativeStartRoundResult(JNIEnv* env, const bulltrack::AndroidStartR
         debug_images,
         error_message,
         static_cast<jint>(result.start_dart_count),
-        static_cast<jfloat>(result.left_right_half_ratio));
+        static_cast<jfloat>(result.left_right_half_ratio),
+        static_cast<jfloat>(result.board_height_share),
+        static_cast<jboolean>(result.board_in_square),
+        static_cast<jint>(result.model_square_top));
     env->DeleteLocalRef(debug_images);
     if (error_message != nullptr) {
         env->DeleteLocalRef(error_message);
@@ -255,6 +258,16 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeSetDebugImagesEnabled(
     bulltrack::SetDebugImagesActive(enabled == JNI_TRUE);
 }
 
+JNIEXPORT void JNICALL
+Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeSetYoloForceCpu(
+    JNIEnv* env,
+    jobject thiz,
+    jboolean force_cpu) {
+    (void)env;
+    (void)thiz;
+    bulltrack::SetYoloForceCpu(force_cpu == JNI_TRUE);
+}
+
 JNIEXPORT jlong JNICALL
 Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeCreateSession(
     JNIEnv* env,
@@ -363,6 +376,40 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeFindMissedDarts(
         return CreateNativeRedetectResult(env, session->FindMissedDartsAtEnd());
     } catch (const std::exception& error) {
         LOGE("nativeFindMissedDarts failed: %s", error.what());
+        ThrowJavaRuntimeException(env, error.what());
+        return nullptr;
+    }
+}
+
+// Returns frame width and height, band top and height, then 1 and the board box (x, y, width,
+// height) when a board was found, or 0 and four zeros.
+JNIEXPORT jintArray JNICALL
+Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeDetectPrepBoard(
+    JNIEnv* env,
+    jobject thiz,
+    jobject frame,
+    jint rotation_degrees) {
+    (void)thiz;
+    try {
+        const cv::Mat frame_bgr = BitmapToBgrMat(env, frame, rotation_degrees);
+        const bulltrack::PrepBoardGuide guide = bulltrack::DetectPrepBoard(frame_bgr);
+        const cv::Rect box = guide.board_box.value_or(cv::Rect());
+        const jint values[9] = {
+            frame_bgr.cols,
+            frame_bgr.rows,
+            guide.band.y,
+            guide.band.height,
+            guide.board_box.has_value() ? 1 : 0,
+            box.x,
+            box.y,
+            box.width,
+            box.height,
+        };
+        jintArray array = env->NewIntArray(9);
+        env->SetIntArrayRegion(array, 0, 9, values);
+        return array;
+    } catch (const std::exception& error) {
+        LOGE("nativeDetectPrepBoard failed: %s", error.what());
         ThrowJavaRuntimeException(env, error.what());
         return nullptr;
     }

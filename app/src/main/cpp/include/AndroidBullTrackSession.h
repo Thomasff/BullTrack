@@ -27,6 +27,13 @@ struct AndroidStartRoundResult {
     // Image length of the board's left half over its right half; the half nearer the camera
     // looks longer, so above 1 means the phone is left of the board. 0 when unknown.
     float left_right_half_ratio = 0.0f;
+    // Board box (the double ring) height over the side of the square the model sees, and
+    // whether the box keeps clear of that square's edges. 0 / false when unknown.
+    float board_height_share = 0.0f;
+    bool board_in_square = false;
+    // Top of the square the model sees this round (it moves along the frame's long side to
+    // centre the board), kept with recorded frames for offline replay.
+    int model_square_top = 0;
 };
 
 struct AndroidFrameProcessResult {
@@ -57,8 +64,17 @@ struct TrackedYoloFrameState {
     cv::Rect board_box{};
     bool has_board_box = false;
     std::vector<YoloDetectionBox> dart_boxes;
+    // Dart boxes under the count threshold inside the search area; only their tips are used.
+    std::vector<YoloDetectionBox> low_score_dart_boxes;
     cv::Mat overlay_bgr;
     std::string yolo_status;
+};
+
+// Part of the round's board crop that dart alignment matches on: the board's bounding box, and
+// the board itself inside it as a mask. An empty rect means the whole crop.
+struct BoardAlignmentArea {
+    cv::Rect rect;
+    cv::Mat mask;
 };
 
 struct PendingYoloCandidateState {
@@ -83,6 +99,9 @@ private:
     cv::Mat first_frame_bgr_;
     cv::Mat first_frame_board_crop_bgr_;
     cv::Mat first_frame_preprocessed_for_alignment_;
+    BoardAlignmentArea alignment_area_;
+    // The square YOLO sees for the whole round, centred on the board at the start.
+    cv::Rect model_square_;
     cv::Mat first_frame_point_rectification_h_;
     float first_frame_rectified_radius_ = 1.0f;
     // Triple/double edges measured on this board at setup; empty means the default table.
@@ -115,5 +134,19 @@ private:
     bool started_ = false;
     int current_frame_index_ = 2;
 };
+
+// Where the board is before a round, for the auto zoom and the aiming arrow.
+struct PrepBoardGuide {
+    // The part of the frame the model saw, and the board box in it (frame coordinates).
+    cv::Rect band;
+    std::optional<cv::Rect> board_box;
+};
+
+// The model sees a band through the frame centre as wide as the frame and 1400/1080 of that
+// tall, padded grey at the sides to a square, so a board above or below the centre square is
+// still seen whole. A board zoomed to its target size then takes about 0.64 of the input, inside
+// the trained range; on the recorded start frames the boxes matched the round's within 5 px.
+// A board too small to find in the band is looked for again in a centre crop.
+PrepBoardGuide DetectPrepBoard(const cv::Mat& frame_bgr);
 
 }  // namespace bulltrack

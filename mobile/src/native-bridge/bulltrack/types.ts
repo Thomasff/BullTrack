@@ -1,5 +1,5 @@
 import type { CameraLockPhase, GameType, ThrowResult } from '../../domain/game/types';
-import type { DebugArtifact } from '../../domain/vision/types';
+import type { DebugArtifact, PrepBoardDetection } from '../../domain/vision/types';
 
 export interface CameraReadyState {
   isReady: boolean;
@@ -23,6 +23,8 @@ export interface StartLiveRoundInput {
   debugImages: boolean;
   // Developer recording mode: keep the round's raw frames for offline replay.
   recordFrames: boolean;
+  // Developer switch: run YOLO on the CPU instead of the GPU.
+  yoloOnCpu: boolean;
 }
 
 export interface StartLiveRoundResult {
@@ -89,6 +91,7 @@ export interface BullTrackNativeBridge {
   // Lets the user pick a file and resolves with its text; '' when they cancel.
   pickTextFile(): Promise<string>;
   setZoomRatio(zoomRatio: number): Promise<CameraReadyState>;
+  detectPrepBoard(yoloOnCpu: boolean): Promise<PrepBoardDetection>;
   preloadSoundCues(): void;
   playSoundCue(cue: SoundCue): void;
 }

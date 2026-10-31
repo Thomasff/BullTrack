@@ -56,13 +56,17 @@ const cueForNewThrows = (newThrows: ThrowResult[]): SoundCue => {
 // then stick out to the right, where the search area has room. Native refuses a round shot from
 // right of the board's centre (ratio below 1); up to this ratio it is close to a front view.
 const LEFT_SIDE_MIN_RATIO = 1.04;
+// Board height over the side of the square the model sees. Native refuses under 0.55 and over
+// 0.9 (the training range); up to this share the board is a little small.
+const BOARD_SHARE_HINT = 0.6;
 
 // What the first frame says about the setup; the round runs either way. leftRightHalfRatio is
 // the board's left half over its right half in the image (0 when unknown). The dart count is
-// not shown: YOLO sometimes boxes one dart twice.
+// not shown: YOLO sometimes boxes one dart twice. boardHeightShare is 0 when unknown.
 export const describeBoardSetup = (
   startDartCount: number,
   leftRightHalfRatio: number,
+  boardHeightShare = 0,
 ): string | null => {
   const hints: string[] = [];
   if (startDartCount > 0) {
@@ -70,6 +74,9 @@ export const describeBoardSetup = (
   }
   if (leftRightHalfRatio > 0 && leftRightHalfRatio < LEFT_SIDE_MIN_RATIO) {
     hints.push('手机几乎正对靶盘，建议放到靶的左前方斜拍，识别更稳');
+  }
+  if (boardHeightShare > 0 && boardHeightShare < BOARD_SHARE_HINT) {
+    hints.push('画面里的靶子偏小，靠近一点或放大画面识别更准');
   }
   return hints.length > 0 ? hints.join('；') : null;
 };
@@ -124,6 +131,7 @@ export const ensureBullTrackSubscriptions = () => {
         // Only on 'capturing'.
         startDartCount?: number;
         leftRightHalfRatio?: number;
+        boardHeightShare?: number;
       };
 
       if (event.phase === 'starting') {
@@ -133,7 +141,11 @@ export const ensureBullTrackSubscriptions = () => {
       if (event.phase === 'capturing') {
         playSoundCue('ready');
         useGameStore.setState({
-          setupHint: describeBoardSetup(event.startDartCount ?? 0, event.leftRightHalfRatio ?? 0),
+          setupHint: describeBoardSetup(
+            event.startDartCount ?? 0,
+            event.leftRightHalfRatio ?? 0,
+            event.boardHeightShare ?? 0,
+          ),
         });
       }
       if (event.phase === 'starting' || event.phase === 'capturing') {
@@ -284,6 +296,7 @@ export const startLiveRound = async () => {
     playerId: state.currentPlayerId,
     debugImages: useSettingsStore.getState().showDebugInfo,
     recordFrames: useSettingsStore.getState().recordFrames,
+    yoloOnCpu: useSettingsStore.getState().yoloOnCpu,
   });
 };
 

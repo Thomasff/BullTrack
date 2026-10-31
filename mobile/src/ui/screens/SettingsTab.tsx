@@ -25,6 +25,8 @@ export const SettingsTab = () => {
   const setShowDebugInfo = useSettingsStore(state => state.setShowDebugInfo);
   const recordFrames = useSettingsStore(state => state.recordFrames);
   const setRecordFrames = useSettingsStore(state => state.setRecordFrames);
+  const yoloOnCpu = useSettingsStore(state => state.yoloOnCpu);
+  const setYoloOnCpu = useSettingsStore(state => state.setYoloOnCpu);
   const soundCues = useSettingsStore(state => state.soundCues);
   const setSoundCues = useSettingsStore(state => state.setSoundCues);
   const [confirmingClear, setConfirmingClear] = useState(false);
@@ -102,6 +104,22 @@ export const SettingsTab = () => {
             <Switch
               value={recordFrames}
               onValueChange={setRecordFrames}
+              trackColor={{ true: colors.accent, false: colors.border }}
+              thumbColor={colors.panel}
+            />
+          </View>
+        ) : null}
+        {showDebugInfo ? (
+          <View style={[styles.row, styles.rowDivider]}>
+            <View style={styles.rowText}>
+              <Text style={styles.label}>识别用 CPU</Text>
+              <Text style={styles.description}>
+                开发用：飞镖识别改在 CPU 上跑（默认 GPU），用来比较速度和耗电。每轮的平均电流和功率记在调试日志里，重启 App 后自动关闭
+              </Text>
+            </View>
+            <Switch
+              value={yoloOnCpu}
+              onValueChange={setYoloOnCpu}
               trackColor={{ true: colors.accent, false: colors.border }}
               thumbColor={colors.panel}
             />

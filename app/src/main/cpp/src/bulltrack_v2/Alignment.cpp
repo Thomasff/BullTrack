@@ -146,7 +146,8 @@ cv::Mat WarpImageWithMatrix(const cv::Mat& image, const cv::Mat& warp_matrix, co
     return output;
 }
 
-PyramidECCResult AlignPyramidEcc(const cv::Mat& templ, const cv::Mat& target, int levels, const std::string& motion_type) {
+// target_mask (optional, target size): only these pixels of the target count in the match.
+PyramidECCResult AlignPyramidEcc(const cv::Mat& templ, const cv::Mat& target, int levels, const std::string& motion_type, const cv::Mat& target_mask) {
     if (templ.size() != target.size()) throw std::runtime_error("ECC 对齐失败：template/target 尺寸不一致");
     if (levels < 1) throw std::runtime_error("levels 必须 >= 1");
 
@@ -170,10 +171,14 @@ PyramidECCResult AlignPyramidEcc(const cv::Mat& templ, const cv::Mat& target, in
         template_pyramid[level_index].convertTo(template_f, CV_32F, 1.0 / 255.0);
         target_pyramid[level_index].convertTo(target_f, CV_32F, 1.0 / 255.0);
         cv::TermCriteria criteria(cv::TermCriteria::EPS | cv::TermCriteria::COUNT, level_iterations[level_index], 1e-6);
+        cv::Mat level_mask;
+        if (!target_mask.empty()) {
+            cv::resize(target_mask, level_mask, target_f.size(), 0.0, 0.0, cv::INTER_NEAREST);
+        }
 
         double cc = 0.0;
         try {
-            cc = cv::findTransformECC(template_f, target_f, warp_matrix, motion_mode, criteria);
+            cc = cv::findTransformECC(template_f, target_f, warp_matrix, motion_mode, criteria, level_mask);
         } catch (const cv::Exception& exc) {
             throw std::runtime_error(std::string("金字塔 ECC 对齐失败: ") + exc.what());
         }

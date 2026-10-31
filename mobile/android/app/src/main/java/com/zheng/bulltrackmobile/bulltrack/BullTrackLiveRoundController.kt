@@ -1,9 +1,13 @@
 package com.zheng.bulltrackmobile.bulltrack
 
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.os.BatteryManager
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
@@ -43,6 +47,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
 import java.util.concurrent.Executors
+import kotlin.math.abs
 
 class BullTrackLiveRoundController(
     private val reactContext: ReactApplicationContext
@@ -65,6 +70,7 @@ class BullTrackLiveRoundController(
     private var liveFrameCounter = 0L
     // Debug images of the current round also get its log lines saved next to them.
     private var roundDebugImages = false
+    private var roundYoloOnCpu = false
     private var roundStartedAtMs = 0L
 
     @Volatile
@@ -197,7 +203,55 @@ class BullTrackLiveRoundController(
         cameraManager.detachPreview(previewView)
     }
 
-    fun startLiveRound(debugImages: Boolean, recordFrames: Boolean): WritableMap {
+    // Where the board is before a round, for RN's auto zoom and aiming arrow: a still of the whole
+    // frame (the preview shows only its middle) through the model. "available" is false while a
+    // round holds the camera; "found" false when no board was seen. Coordinates are frame pixels.
+    suspend fun detectPrepBoard(yoloOnCpu: Boolean): WritableMap {
+        val result = Arguments.createMap()
+        if (isProbablyEmulator() || roundJob?.isActive == true || currentSession != null) {
+            result.putBoolean("available", false)
+            return result
+        }
+        ensureDetectorInitialized()
+        val startNs = SystemClock.elapsedRealtimeNanos()
+        val zoomAtCapture = cameraManager.getZoomRatio()
+        val frame = withContext(Dispatchers.Main.immediate) { cameraManager.capturePrepFrame() }
+        if (frame == null) {
+            result.putBoolean("available", false)
+            return result
+        }
+        val captureMs = elapsedMs(startNs)
+        val guide = try {
+            withContext(Dispatchers.Default) {
+                detector.setYoloForceCpu(yoloOnCpu)
+                detector.detectPrepBoard(frame.bitmap, frame.rotationDegrees)
+            }
+        } finally {
+            frame.bitmap.recycle()
+        }
+        val box = guide.boardBox
+        Log.d(
+            TAG,
+            "Prep board guide: capture $captureMs ms, total ${elapsedMs(startNs)} ms, " +
+                "zoom ${"%.2f".format(zoomAtCapture)}, board ${box ?: "none"}"
+        )
+        result.putBoolean("available", true)
+        result.putBoolean("found", box != null)
+        result.putDouble("zoomRatio", zoomAtCapture.toDouble())
+        result.putInt("frameWidth", guide.frameWidth)
+        result.putInt("frameHeight", guide.frameHeight)
+        result.putInt("bandTop", guide.bandTop)
+        result.putInt("bandHeight", guide.bandHeight)
+        if (box != null) {
+            result.putInt("boardLeft", box.left)
+            result.putInt("boardTop", box.top)
+            result.putInt("boardWidth", box.width())
+            result.putInt("boardHeight", box.height())
+        }
+        return result
+    }
+
+    fun startLiveRound(debugImages: Boolean, recordFrames: Boolean, yoloOnCpu: Boolean): WritableMap {
         val requestedNs = SystemClock.elapsedRealtimeNanos()
         ensureSupportedRuntime()
         ensureDetectorInitialized()
@@ -205,6 +259,8 @@ class BullTrackLiveRoundController(
             error("A live round is already running or awaiting confirmation.")
         }
         detector.setDebugImagesEnabled(debugImages)
+        detector.setYoloForceCpu(yoloOnCpu)
+        roundYoloOnCpu = yoloOnCpu
         artifactStore.pruneOldRounds()
         roundDebugImages = debugImages
         roundStartedAtMs = System.currentTimeMillis()
@@ -448,7 +504,7 @@ class BullTrackLiveRoundController(
                 attempt,
                 firstFrame.bitmap,
                 firstFrame.rotationDegrees,
-                errorMessage ?: "board setup ok",
+                errorMessage ?: "board setup ok model_square_top=${startUpdate.modelSquareTop}",
             )
             if (errorMessage == null) {
                 sessionId = attemptSessionId
@@ -472,6 +528,23 @@ class BullTrackLiveRoundController(
             detector.destroySession(sessionId)
             Log.w(TAG, "Round refused: phone right of the board (left/right half ratio $sideRatio)")
             error(PHONE_RIGHT_OF_BOARD_ERROR)
+        }
+        // The model sees only a square of the frame (centred on the board up and down) and was
+        // trained on boards taking 0.55-0.9 of its height, so a board outside that range or still
+        // running into the square's edge is not started either. Just above the lower limit RN
+        // only shows a hint.
+        val boardShare = boardSetup?.boardHeightShare ?: 0f
+        val boardRefusal = when {
+            boardSetup == null || boardShare <= 0f -> null
+            boardShare > BOARD_SHARE_MAX -> BOARD_TOO_LARGE_ERROR
+            boardSetup?.boardInSquare == false -> BOARD_OFF_CENTRE_ERROR
+            boardShare < BOARD_SHARE_MIN -> BOARD_TOO_SMALL_ERROR
+            else -> null
+        }
+        if (boardRefusal != null) {
+            detector.destroySession(sessionId)
+            Log.w(TAG, "Round refused: $boardRefusal (board height share $boardShare, in square ${boardSetup?.boardInSquare})")
+            error(boardRefusal)
         }
 
         val session = RoundSession(
@@ -500,6 +573,17 @@ class BullTrackLiveRoundController(
         // flight when the loop ends is dropped; coroutineScope waits for it after the result is
         // out, so the camera is not released under a running capture.
         coroutineScope {
+            // With debug info on, the battery is read once a second to compare power use (YOLO on
+            // the CPU or the GPU, say); only the app can read the current, adb cannot.
+            val batteryMeter = if (roundDebugImages) BatteryMeter(appContext) else null
+            val batteryJob = batteryMeter?.let { meter ->
+                launch(Dispatchers.Default) {
+                    while (true) {
+                        meter.sample()
+                        delay(BATTERY_SAMPLE_INTERVAL_MS)
+                    }
+                }
+            }
             var nextCapture = startFrameCapture(this, firstFrameCapturedNs)
             while (!stopRequested) {
                 val captured = nextCapture.await()?.getOrThrow() ?: break
@@ -532,6 +616,8 @@ class BullTrackLiveRoundController(
                 frameIndex += 1
             }
             Log.i(TAG, "Round frame timing: $frameTimings")
+            batteryJob?.cancel()
+            batteryMeter?.let { Log.i(TAG, "Round battery (YOLO on ${if (roundYoloOnCpu) "CPU" else "GPU"}): $it") }
 
             frameRecorder.finishCapture()
             finalizeRound(manualStop = stopRequested)
@@ -811,6 +897,7 @@ class BullTrackLiveRoundController(
                 boardSetup?.let { setup ->
                     putInt("startDartCount", setup.startDartCount)
                     putDouble("leftRightHalfRatio", setup.leftRightHalfRatio.toDouble())
+                    putDouble("boardHeightShare", setup.boardHeightShare.toDouble())
                 }
             },
         )
@@ -1061,6 +1148,51 @@ class BullTrackLiveRoundController(
         }
     }
 
+    // Battery current, power and temperature over a round. BATTERY_PROPERTY_CURRENT_NOW should be in
+    // microamperes (negative while discharging), but some phones report milliamperes or flip the
+    // sign, so the size decides the unit and only the magnitude is used. Rounds played while
+    // charging are marked: their current is not the phone's use.
+    private class BatteryMeter(private val context: Context) {
+        private val batteryManager = context.getSystemService(BatteryManager::class.java)
+        private var count = 0
+        private var currentSumMa = 0.0
+        private var powerSumW = 0.0
+        private var startTenthsC = Int.MIN_VALUE
+        private var endTenthsC = Int.MIN_VALUE
+        private var charging = false
+
+        @Synchronized
+        fun sample() {
+            val raw = batteryManager?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW) ?: return
+            if (raw == 0 || raw == Int.MIN_VALUE) {
+                return
+            }
+            val status = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return
+            val currentMa = abs(raw).toDouble().let { if (it > MICROAMP_READING_MIN) it / 1000.0 else it }
+            val voltageV = status.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0) / 1000.0
+            val tenthsC = status.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
+            charging = charging || status.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+            if (count == 0) {
+                startTenthsC = tenthsC
+            }
+            endTenthsC = tenthsC
+            count += 1
+            currentSumMa += currentMa
+            powerSumW += currentMa / 1000.0 * voltageV
+        }
+
+        @Synchronized
+        override fun toString(): String {
+            if (count == 0) {
+                return "no readings"
+            }
+            return "$count readings, current avg ${"%.0f".format(currentSumMa / count)} mA, " +
+                "power avg ${"%.2f".format(powerSumW / count)} W, " +
+                "battery ${startTenthsC / 10.0} -> ${endTenthsC / 10.0} °C" +
+                if (charging) " (charging, not comparable)" else ""
+        }
+    }
+
     private data class RoundSession(
         val roundId: String,
         val nativeSessionId: Long,
@@ -1089,8 +1221,18 @@ class BullTrackLiveRoundController(
         private const val RIGHT_SIDE_MAX_RATIO = 1.0f
         // Matched by RN's nativeErrorText.
         private const val PHONE_RIGHT_OF_BOARD_ERROR = "phone right of the board"
+        // Board box height over the side of the square the model sees (the model was trained
+        // on 0.55-0.9). Matched by RN's nativeErrorText.
+        private const val BOARD_SHARE_MIN = 0.55f
+        private const val BOARD_SHARE_MAX = 0.9f
+        private const val BOARD_TOO_SMALL_ERROR = "board too small in frame"
+        private const val BOARD_TOO_LARGE_ERROR = "board too large in frame"
+        private const val BOARD_OFF_CENTRE_ERROR = "board off the frame centre"
         private const val TAG = "BullTrackRound"
         private const val FRAME_WAIT_SLICE_MS = 50L
+        private const val BATTERY_SAMPLE_INTERVAL_MS = 1_000L
+        // A phone's battery current is far below 20 A, so a larger reading is in microamperes.
+        private const val MICROAMP_READING_MIN = 20_000.0
         private const val NANOS_PER_MILLISECOND = 1_000_000L
     }
 }

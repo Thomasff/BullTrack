@@ -1,4 +1,5 @@
 import NativeBullTrackModule from './specs/NativeBullTrackModule';
+import type { PrepBoardDetection } from '../../domain/vision/types';
 import { mockBullTrackNativeBridge } from './mockBullTrackNative';
 import type {
   ActionAcceptedResult,
@@ -40,6 +41,8 @@ const nativeBridge: BullTrackNativeBridge | null = bullTrackNativeModule
       pickTextFile: async () => bullTrackNativeModule.pickTextFile(),
       setZoomRatio: async (zoomRatio: number) =>
         bullTrackNativeModule.setZoomRatio(zoomRatio) as Promise<CameraReadyState>,
+      detectPrepBoard: async (yoloOnCpu: boolean) =>
+        bullTrackNativeModule.detectPrepBoard(yoloOnCpu) as Promise<PrepBoardDetection>,
       preloadSoundCues: () => bullTrackNativeModule.preloadSoundCues(),
       playSoundCue: (cue: SoundCue) => bullTrackNativeModule.playSoundCue(cue),
     }

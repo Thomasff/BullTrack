@@ -13,6 +13,7 @@ export interface Spec extends TurboModule {
   shareTextFile(fileName: string, content: string): Promise<string>;
   pickTextFile(): Promise<string>;
   setZoomRatio(zoomRatio: number): Promise<Object>;
+  detectPrepBoard(yoloOnCpu: boolean): Promise<Object>;
   preloadSoundCues(): void;
   playSoundCue(cue: string): void;
   addListener(eventName: string): void;

@@ -2,6 +2,7 @@ package com.zheng.bulltrack.vision
 
 import android.content.res.AssetManager
 import android.graphics.Bitmap
+import android.graphics.Rect
 import com.zheng.bulltrack.domain.model.DartPosition
 import com.zheng.bulltrack.domain.model.ThrowResult
 import com.zheng.bulltrack.domain.scoring.VirtualBoardScorer
@@ -18,6 +19,7 @@ class NativeDartDetector(
     private external fun nativeRelease()
     private external fun nativeWarmUp()
     private external fun nativeSetDebugImagesEnabled(enabled: Boolean)
+    private external fun nativeSetYoloForceCpu(forceCpu: Boolean)
     private external fun nativeCreateSession(): Long
     private external fun nativeDestroySession(sessionId: Long)
     private external fun nativeStartRound(
@@ -36,6 +38,7 @@ class NativeDartDetector(
         rotationDegrees: Int
     ): NativeRedetectResult
     private external fun nativeFindMissedDarts(sessionId: Long): NativeRedetectResult
+    private external fun nativeDetectPrepBoard(frame: Bitmap, rotationDegrees: Int): IntArray
 
     override fun init() {
         nativeInit(assetManager)
@@ -54,6 +57,11 @@ class NativeDartDetector(
         nativeSetDebugImagesEnabled(enabled)
     }
 
+    /** Developer setting: run YOLO on the CPU even when the GPU works. */
+    fun setYoloForceCpu(forceCpu: Boolean) {
+        nativeSetYoloForceCpu(forceCpu)
+    }
+
     override fun createSession(): Long = nativeCreateSession()
 
     override fun destroySession(sessionId: Long) {
@@ -68,7 +76,10 @@ class NativeDartDetector(
             debugImages = result.debugImages.orEmpty().map(::toDebugImageArtifact),
             errorMessage = result.errorMessage,
             startDartCount = result.startDartCount,
-            leftRightHalfRatio = result.leftRightHalfRatio
+            leftRightHalfRatio = result.leftRightHalfRatio,
+            boardHeightShare = result.boardHeightShare,
+            boardInSquare = result.boardInSquare,
+            modelSquareTop = result.modelSquareTop
         )
     }
 
@@ -114,6 +125,22 @@ class NativeDartDetector(
         )
     }
 
+    /** Where the board is before a round, for the auto zoom and the aiming arrow. */
+    fun detectPrepBoard(frame: Bitmap, rotationDegrees: Int): PrepBoardGuide {
+        val values = nativeDetectPrepBoard(argb8888(frame), rotationDegrees)
+        return PrepBoardGuide(
+            frameWidth = values[0],
+            frameHeight = values[1],
+            bandTop = values[2],
+            bandHeight = values[3],
+            boardBox = if (values[4] == 1) {
+                Rect(values[5], values[6], values[5] + values[7], values[6] + values[8])
+            } else {
+                null
+            }
+        )
+    }
+
     // The native side reads ARGB_8888 pixels in place as RGBA bytes (no per-frame Java copy).
     // Camera frames are opaque, so premultiplied alpha does not change the colors.
     private fun argb8888(bitmap: Bitmap): Bitmap {
@@ -138,3 +165,15 @@ class NativeDartDetector(
         )
     }
 }
+
+/**
+ * The upright frame's size, the band of it the model saw (as wide as the frame) and the board box
+ * in frame coordinates, null when no board was found.
+ */
+data class PrepBoardGuide(
+    val frameWidth: Int,
+    val frameHeight: Int,
+    val bandTop: Int,
+    val bandHeight: Int,
+    val boardBox: Rect?
+)

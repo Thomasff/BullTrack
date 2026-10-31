@@ -30,6 +30,7 @@ import { ThrowEditor } from '../components/ThrowEditor';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { DART_MARKER_COLORS, DartBoard } from '../components/DartBoard';
 import { LiveSnapshot } from '../components/LiveSnapshot';
+import { PrepBoardGuideOverlay, usePrepBoardGuide } from '../components/PrepBoardGuide';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { isRealBullTrackNativeBridgeAvailable } from '../../native-bridge/bulltrack/bullTrackNative';
@@ -41,8 +42,11 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Game'>;
 const ZOOM_MIN = 1;
 const ZOOM_MAX = 4;
 const ZOOM_SLIDER_HEIGHT = 220;
+// Until the frame is laid out; it is then square, as wide as the screen allows.
 const PREVIEW_HEIGHT = 320;
 const ZOOM_THUMB_SIZE = 26;
+const AUTO_ZOOM_DURATION_MS = 400;
+const AUTO_ZOOM_STEP_MS = 33;
 
 export const GameScreen = ({ navigation }: Props) => {
   const [runningAction, setRunningAction] = useState<
@@ -59,6 +63,9 @@ export const GameScreen = ({ navigation }: Props) => {
   const [leaveDialog, setLeaveDialog] = useState<'roundInProgress' | 'confirm' | null>(null);
   // Set once an in-app re-request was denied too; the next tap opens system settings.
   const [permissionDenied, setPermissionDenied] = useState(false);
+  // The player dragged the zoom slider while getting ready; auto zoom waits for the next round.
+  const [autoZoomPaused, setAutoZoomPaused] = useState(false);
+  const autoZoomTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const allowLeaveRef = useRef(false);
   const pendingLeaveRef = useRef<(() => void) | null>(null);
   const latestZoomRef = useRef(previewZoomRatio);
@@ -244,6 +251,30 @@ export const GameScreen = ({ navigation }: Props) => {
     }
   }, [shouldShowPreview]);
 
+  // Each new wait between rounds gives auto zoom another go.
+  useEffect(() => {
+    if (status === 'waitingForThrow') {
+      setAutoZoomPaused(false);
+    }
+  }, [status]);
+
+  const stopAutoZoom = () => {
+    if (autoZoomTimerRef.current) {
+      clearInterval(autoZoomTimerRef.current);
+      autoZoomTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => stopAutoZoom, []);
+
+  // A zoom still easing in when the slider locks (a round starts) stays where it got to.
+  useEffect(() => {
+    if (!canAdjustZoom && autoZoomTimerRef.current) {
+      stopAutoZoom();
+      persistZoomRatio();
+    }
+  }, [canAdjustZoom]);
+
   const commitZoomRatio = (nextZoomRatio: number) => {
     const clamped = Math.min(zoomRange.max, Math.max(zoomRange.min, nextZoomRatio));
     latestZoomRef.current = clamped;
@@ -263,6 +294,8 @@ export const GameScreen = ({ navigation }: Props) => {
     if (!canAdjustZoom) {
       return;
     }
+    stopAutoZoom();
+    setAutoZoomPaused(true);
     setScrollEnabled(false);
     zoomDragStartRef.current = { pageY, zoomRatio: latestZoomRef.current };
   };
@@ -281,6 +314,30 @@ export const GameScreen = ({ navigation }: Props) => {
     setScrollEnabled(true);
     persistZoomRatio();
   };
+
+  // Eases the zoom over a short while instead of jumping, then keeps it like a slider change.
+  const animateZoomTo = (target: number) => {
+    stopAutoZoom();
+    const from = latestZoomRef.current;
+    const startedAt = Date.now();
+    autoZoomTimerRef.current = setInterval(() => {
+      const t = Math.min(1, (Date.now() - startedAt) / AUTO_ZOOM_DURATION_MS);
+      commitZoomRatio(from + (target - from) * (1 - (1 - t) * (1 - t)));
+      if (t >= 1) {
+        stopAutoZoom();
+        persistZoomRatio();
+      }
+    }, AUTO_ZOOM_STEP_MS);
+  };
+
+  const prepGuide = usePrepBoardGuide({
+    active: isFocused && canAdjustZoom,
+    zoomMin: zoomRange.min,
+    zoomMax: zoomRange.max,
+    autoZoomPaused,
+    getZoom: () => latestZoomRef.current,
+    zoomTo: animateZoomTo,
+  });
 
   const thumbOffset = useMemo(() => {
     const usableHeight = Math.max(1, zoomTrackHeight - ZOOM_THUMB_SIZE);
@@ -318,6 +375,11 @@ export const GameScreen = ({ navigation }: Props) => {
   // The round takes over the camera the preview opened (no reopen): the preview stays mounted under
   // the board until the first frame is in, and native code takes the preview stream off after it.
   const startRound = () => {
+    if (autoZoomTimerRef.current) {
+      // The round takes the zoom an easing auto zoom got to; keep it as a finished one would be.
+      stopAutoZoom();
+      useSettingsStore.getState().setZoomRatio(latestZoomRef.current).catch(() => undefined);
+    }
     setRunningAction('start');
     setHandoffInProgress(true);
     Promise.resolve()
@@ -402,9 +464,10 @@ export const GameScreen = ({ navigation }: Props) => {
   const showBoard = status !== 'waitingForThrow';
   // During a round the frame is split: near-live snapshot left, board right.
   const splitView = status === 'roundInProgress';
+  const previewSize = frameWidth > 0 ? frameWidth : PREVIEW_HEIGHT;
   const boardSize = Math.max(
     0,
-    Math.min(splitView ? frameWidth / 2 : frameWidth, PREVIEW_HEIGHT) - 12,
+    Math.min(splitView ? frameWidth / 2 : frameWidth, previewSize) - 12,
   );
   const boardBadge =
     status === 'roundInProgress'
@@ -471,18 +534,18 @@ export const GameScreen = ({ navigation }: Props) => {
       />
 
       <View
-        style={styles.previewFrame}
+        style={[styles.previewFrame, { height: previewSize }]}
         collapsable={false}
         onLayout={event => setFrameWidth(Math.round(event.nativeEvent.layout.width))}>
         {cameraPermissionGranted && !backCameraMissing ? (
           shouldShowPreview ? (
             <BullTrackPreview
-              style={styles.preview}
+              style={[styles.preview, { height: previewSize }]}
               zoomRatio={previewZoomRatio}
               onPreviewStateChange={event => setPreviewReady(event.nativeEvent.streaming)}
             />
           ) : (
-            <View style={styles.preview} />
+            <View style={[styles.preview, { height: previewSize }]} />
           )
         ) : (
           <View style={styles.previewFallback}>
@@ -502,6 +565,9 @@ export const GameScreen = ({ navigation }: Props) => {
             ) : null}
           </View>
         )}
+        {!showBoard && shouldShowPreview ? (
+          <PrepBoardGuideOverlay size={previewSize} view={prepGuide} />
+        ) : null}
         {showBoard ? (
           <View style={[styles.boardLayer, splitView && styles.boardLayerSplit]}>
             {splitView ? <LiveSnapshot /> : null}
@@ -761,11 +827,9 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     overflow: 'hidden',
     backgroundColor: '#000',
-    height: PREVIEW_HEIGHT,
   },
   preview: {
     width: '100%',
-    height: PREVIEW_HEIGHT,
   },
   boardLayer: {
     ...StyleSheet.absoluteFillObject,

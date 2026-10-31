@@ -7,6 +7,7 @@
 #include <ncnn/net.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -20,18 +21,25 @@
 namespace bulltrack {
 namespace {
 
+// Developer switch: run YOLO on the CPU even when the GPU works, to compare speed and power
+// (2026-10-31: on a Snapdragon 8 Gen 3 the CPU took 66-103 ms a frame, the GPU 169-180 ms).
+std::atomic<bool> g_force_cpu{false};
+
 constexpr const char* kModelParamAssetPath = "ncnn/model.ncnn.param";
 constexpr const char* kModelBinAssetPath = "ncnn/model.ncnn.bin";
 constexpr const char* kClassesAssetPath = "ncnn/classes.txt";
 constexpr const char* kInputBlobName = "in0";
 constexpr const char* kOutputBlobName = "out0";
 constexpr int kInputSize = 640;
+// Pose model: after the class scores each candidate carries
+// one keypoint, the dart tip (x, y, score).
+constexpr int kTipValueCount = 3;
 constexpr float kScoreThreshold = 0.25f;
-// Matches the bundled model: on 30 App frames real darts
-// scored 0.81 and up, false boxes on an empty board 0.10-0.18. The earlier phone model scored
-// real darts 0.12-0.17 on a dark or red bed and needed 0.12; set it back with that model.
+// Matches the bundled model: on the 44 App test frames (2026-10-29) real darts scored 0.90 and
+// up and no other box reached 0.10 (the previous model: darts 0.81 and up, false boxes on an
+// empty board 0.10-0.18).
 constexpr float kDartScoreThreshold = 0.25f;
-// With debug images on, dart candidates down to this score are kept apart for the log.
+// Dart candidates down to this score are kept apart (low_score_dart_boxes).
 constexpr float kLowDartScoreThreshold = 0.10f;
 
 float CountedScoreThreshold(const std::string& label) {
@@ -94,36 +102,32 @@ std::vector<std::string> ReadAssetLines(AAssetManager* asset_manager, const char
     return lines;
 }
 
-struct LetterboxResult {
+struct ModelInput {
     cv::Mat image;
+    // Model pixel p maps back to image pixel p / scale + square.tl().
     float scale = 1.0f;
-    int pad_x = 0;
-    int pad_y = 0;
+    cv::Rect square;
 };
 
-LetterboxResult LetterboxResize(const cv::Mat& image_bgr, int target_size) {
+// The square scaled to the model input with INTER_AREA, as the training crops were made; a
+// linear resize leaves moire on a soft board's holes.
+ModelInput SquareResize(const cv::Mat& image_bgr, const cv::Rect& requested_square, int target_size) {
     if (image_bgr.empty()) {
         throw std::runtime_error("YOLO 输入图为空");
     }
-
-    const int src_w = image_bgr.cols;
-    const int src_h = image_bgr.rows;
-    const float scale = std::min(
-        static_cast<float>(target_size) / static_cast<float>(src_w),
-        static_cast<float>(target_size) / static_cast<float>(src_h));
-
-    const int resized_w = std::max(1, static_cast<int>(std::round(src_w * scale)));
-    const int resized_h = std::max(1, static_cast<int>(std::round(src_h * scale)));
-
+    const cv::Rect square = requested_square.empty() ? ModelInputSquare(image_bgr.size()) : requested_square;
+    if ((square & cv::Rect(0, 0, image_bgr.cols, image_bgr.rows)) != square) {
+        throw std::runtime_error("YOLO 输入正方形超出画面");
+    }
     cv::Mat resized;
-    cv::resize(image_bgr, resized, cv::Size(resized_w, resized_h), 0.0, 0.0, cv::INTER_LINEAR);
-
-    cv::Mat output(target_size, target_size, CV_8UC3, cv::Scalar(114, 114, 114));
-    const int pad_x = (target_size - resized_w) / 2;
-    const int pad_y = (target_size - resized_h) / 2;
-    resized.copyTo(output(cv::Rect(pad_x, pad_y, resized_w, resized_h)));
-
-    return {output, scale, pad_x, pad_y};
+    cv::resize(
+        image_bgr(square),
+        resized,
+        cv::Size(target_size, target_size),
+        0.0,
+        0.0,
+        square.width > target_size ? cv::INTER_AREA : cv::INTER_LINEAR);
+    return {resized, static_cast<float>(target_size) / static_cast<float>(square.width), square};
 }
 
 float IoU(const cv::Rect2f& a, const cv::Rect2f& b) {
@@ -166,10 +170,15 @@ std::vector<YoloDetectionBox> ApplyNms(std::vector<YoloDetectionBox> boxes) {
 cv::Mat DrawOverlay(
     const cv::Mat& image_bgr,
     const std::vector<YoloDetectionBox>& boxes,
+    const cv::Rect& square,
     const std::string& backend,
     const std::string& status_detail) {
     cv::Mat overlay = image_bgr.clone();
+    cv::rectangle(overlay, square, cv::Scalar(255, 255, 255), 1);
     for (const YoloDetectionBox& box : boxes) {
+        if (box.label == "dart") {
+            cv::circle(overlay, box.tip, 6, cv::Scalar(255, 0, 255), -1);
+        }
         const bool below_threshold = box.score < CountedScoreThreshold(box.label);
         const cv::Scalar color = box.label == "board"
             ? cv::Scalar(0, 255, 255)
@@ -240,16 +249,18 @@ cv::Mat DrawOverlay(
 
 class YoloNcnnRuntime {
 public:
-    YoloDetectionResult Detect(const cv::Mat& image_bgr) {
+    YoloDetectionResult Detect(const cv::Mat& image_bgr, const cv::Rect& square) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (g_asset_manager == nullptr) {
             throw std::runtime_error("NCNN AssetManager 未设置，无法加载模型");
         }
 
         std::string gpu_failure_detail;
-        if (TryPrepareGpu()) {
+        if (g_force_cpu.load()) {
+            // Chosen in the settings, not a failure: no detail on the overlay.
+        } else if (TryPrepareGpu()) {
             try {
-                return DetectWithBackend(image_bgr, gpu_runtime_, "GPU", "");
+                return DetectWithBackend(image_bgr, square, gpu_runtime_, "GPU", "");
             } catch (const std::exception& error) {
                 gpu_failure_detail = std::string("GPU fallback: ") + error.what();
                 // A model that failed to load on the GPU would be reloaded (~20 MB) on every
@@ -267,7 +278,7 @@ public:
         }
 
         try {
-            return DetectWithBackend(image_bgr, cpu_runtime_, "CPU", gpu_failure_detail);
+            return DetectWithBackend(image_bgr, square, cpu_runtime_, "CPU", gpu_failure_detail);
         } catch (const std::exception& cpu_error) {
             if (!gpu_failure_detail.empty()) {
                 throw std::runtime_error(gpu_failure_detail + "; CPU failed: " + cpu_error.what());
@@ -341,17 +352,20 @@ private:
 
     YoloDetectionResult DetectWithBackend(
         const cv::Mat& image_bgr,
+        const cv::Rect& square,
         BackendRuntime& runtime,
         const std::string& backend,
         const std::string& status_detail) {
         EnsureInitialized(runtime);
 
-        LetterboxResult letterbox = LetterboxResize(image_bgr, kInputSize);
+        ModelInput model_input = SquareResize(image_bgr, square, kInputSize);
+        // The model was trained on RGB images; fed BGR it scored the same darts but put tips
+        // 1.5 px further off (median, 44 App test frames) with tip scores all over the place.
         ncnn::Mat input = ncnn::Mat::from_pixels(
-            letterbox.image.data,
-            ncnn::Mat::PIXEL_BGR,
-            letterbox.image.cols,
-            letterbox.image.rows);
+            model_input.image.data,
+            ncnn::Mat::PIXEL_BGR2RGB,
+            model_input.image.cols,
+            model_input.image.rows);
         const float norm_vals[3] = {1.0f / 255.0f, 1.0f / 255.0f, 1.0f / 255.0f};
         input.substract_mean_normalize(nullptr, norm_vals);
 
@@ -366,11 +380,13 @@ private:
             throw std::runtime_error("YOLO 输出提取失败: out0");
         }
 
-        std::vector<YoloDetectionBox> boxes = DecodeOutput(output, letterbox, image_bgr.size());
+        std::vector<YoloDetectionBox> boxes = DecodeOutput(output, model_input, image_bgr.size());
         // Sorted by score, so a low candidate never suppresses a counted box.
         std::vector<YoloDetectionBox> kept_boxes = ApplyNms(std::move(boxes));
         // The overlay is only a debug image; skip the full-frame copy and drawing otherwise.
-        cv::Mat overlay = DebugImagesActive() ? DrawOverlay(image_bgr, kept_boxes, backend, status_detail) : cv::Mat();
+        cv::Mat overlay = DebugImagesActive()
+            ? DrawOverlay(image_bgr, kept_boxes, model_input.square, backend, status_detail)
+            : cv::Mat();
         YoloDetectionResult result{{}, overlay, backend, status_detail, {}};
         for (YoloDetectionBox& box : kept_boxes) {
             (box.score >= CountedScoreThreshold(box.label) ? result.boxes : result.low_score_dart_boxes).push_back(std::move(box));
@@ -380,9 +396,10 @@ private:
 
     std::vector<YoloDetectionBox> DecodeOutput(
         const ncnn::Mat& output,
-        const LetterboxResult& letterbox,
+        const ModelInput& model_input,
         const cv::Size& original_size) const {
-        const int value_count = 4 + static_cast<int>(class_names_.size());
+        const int class_count = static_cast<int>(class_names_.size());
+        const int value_count = 4 + class_count + kTipValueCount;
         if (output.total() % value_count != 0) {
             throw std::runtime_error("YOLO 输出尺寸与类别数不匹配");
         }
@@ -407,12 +424,13 @@ private:
 
         std::vector<YoloDetectionBox> boxes;
         boxes.reserve(rows);
-        const float min_dart_score = DebugImagesActive() ? kLowDartScoreThreshold : kDartScoreThreshold;
+        const float offset_x = static_cast<float>(model_input.square.x);
+        const float offset_y = static_cast<float>(model_input.square.y);
 
         for (int i = 0; i < rows; ++i) {
             int best_class = -1;
             float best_score = 0.0f;
-            for (int c = 0; c < static_cast<int>(class_names_.size()); ++c) {
+            for (int c = 0; c < class_count; ++c) {
                 const float score = get_value(i, 4 + c);
                 if (score > best_score) {
                     best_score = score;
@@ -420,7 +438,7 @@ private:
                 }
             }
             if (best_class < 0 ||
-                best_score < (class_names_[best_class] == "dart" ? min_dart_score : kScoreThreshold)) {
+                best_score < (class_names_[best_class] == "dart" ? kLowDartScoreThreshold : kScoreThreshold)) {
                 continue;
             }
 
@@ -428,10 +446,14 @@ private:
             const float cy = get_value(i, 1);
             const float w = get_value(i, 2);
             const float h = get_value(i, 3);
-            const float x0 = (cx - w * 0.5f - static_cast<float>(letterbox.pad_x)) / letterbox.scale;
-            const float y0 = (cy - h * 0.5f - static_cast<float>(letterbox.pad_y)) / letterbox.scale;
-            const float x1 = (cx + w * 0.5f - static_cast<float>(letterbox.pad_x)) / letterbox.scale;
-            const float y1 = (cy + h * 0.5f - static_cast<float>(letterbox.pad_y)) / letterbox.scale;
+            const float x0 = (cx - w * 0.5f) / model_input.scale + offset_x;
+            const float y0 = (cy - h * 0.5f) / model_input.scale + offset_y;
+            const float x1 = (cx + w * 0.5f) / model_input.scale + offset_x;
+            const float y1 = (cy + h * 0.5f) / model_input.scale + offset_y;
+            const cv::Point2f tip(
+                get_value(i, 4 + class_count) / model_input.scale + offset_x,
+                get_value(i, 4 + class_count + 1) / model_input.scale + offset_y);
+            const float tip_score = get_value(i, 4 + class_count + 2);
 
             const float clipped_x0 = std::clamp(x0, 0.0f, static_cast<float>(original_size.width - 1));
             const float clipped_y0 = std::clamp(y0, 0.0f, static_cast<float>(original_size.height - 1));
@@ -446,7 +468,9 @@ private:
             boxes.push_back(YoloDetectionBox{
                 class_names_[best_class],
                 best_score,
-                cv::Rect2f(clipped_x0, clipped_y0, rect_w, rect_h)
+                cv::Rect2f(clipped_x0, clipped_y0, rect_w, rect_h),
+                tip,
+                tip_score
             });
         }
 
@@ -470,17 +494,38 @@ YoloNcnnRuntime& GetRuntime() {
 
 }  // namespace
 
+cv::Rect ModelInputSquare(const cv::Size& image_size) {
+    const int side = std::min(image_size.width, image_size.height);
+    return cv::Rect((image_size.width - side) / 2, (image_size.height - side) / 2, side, side);
+}
+
+cv::Rect BoardCentredSquare(const cv::Size& image_size, const cv::Rect& board_box) {
+    cv::Rect square = ModelInputSquare(image_size);
+    if (image_size.height > image_size.width) {
+        const int top = board_box.y + board_box.height / 2 - square.height / 2;
+        square.y = std::clamp(top, 0, image_size.height - square.height);
+    } else {
+        const int left = board_box.x + board_box.width / 2 - square.width / 2;
+        square.x = std::clamp(left, 0, image_size.width - square.width);
+    }
+    return square;
+}
+
 void SetNcnnAssetManager(AAssetManager* asset_manager) {
     g_asset_manager = asset_manager;
 }
 
-void WarmUpYoloObjects() {
-    cv::Mat warmup_image(kInputSize, kInputSize, CV_8UC3, cv::Scalar(114, 114, 114));
-    GetRuntime().Detect(warmup_image);
+void SetYoloForceCpu(bool force_cpu) {
+    g_force_cpu.store(force_cpu);
 }
 
-YoloDetectionResult DetectYoloObjects(const cv::Mat& image_bgr) {
-    return GetRuntime().Detect(image_bgr);
+void WarmUpYoloObjects() {
+    cv::Mat warmup_image(kInputSize, kInputSize, CV_8UC3, cv::Scalar(114, 114, 114));
+    GetRuntime().Detect(warmup_image, cv::Rect());
+}
+
+YoloDetectionResult DetectYoloObjects(const cv::Mat& image_bgr, const cv::Rect& square) {
+    return GetRuntime().Detect(image_bgr, square);
 }
 
 }  // namespace bulltrack
