@@ -616,9 +616,13 @@ class BullTrackLiveRoundController(
                 frameIndex += 1
             }
             val stageTimes = currentSession?.let { detector.describeFrameStageTimes(it.nativeSessionId) } ?: "?"
-            Log.i(TAG, "Round frame timing: $frameTimings; $stageTimes")
             batteryJob?.cancel()
-            batteryMeter?.let { Log.i(TAG, "Round battery (YOLO on ${if (roundYoloOnCpu) "CPU" else "GPU"}): $it") }
+            val roundSummary = listOfNotNull(
+                "Round frame timing: $frameTimings; $stageTimes",
+                batteryMeter?.let { "Round battery (YOLO on ${if (roundYoloOnCpu) "CPU" else "GPU"}): $it" },
+            )
+            roundSummary.forEach { Log.i(TAG, it) }
+            frameRecorder.recordSummary(roundSummary)
 
             frameRecorder.finishCapture()
             finalizeRound(manualStop = stopRequested)

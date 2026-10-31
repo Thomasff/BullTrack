@@ -18,7 +18,8 @@ import java.util.concurrent.Executors
  * offline after an algorithm change. To save storage only frames that matter are written:
  * board-setup frames, frames where the gate saw something (with up to two unsaved frames before
  * them), one idle frame per second, the last frame and redetect frames. frames.csv lists every
- * frame with its gate reason, saved or not; result.json holds the player-confirmed darts.
+ * frame with its gate reason, saved or not; result.json holds the player-confirmed darts;
+ * summary.txt the round's timing and battery log lines.
  */
 class BullTrackFrameRecorder(
     context: Context
@@ -99,6 +100,18 @@ class BullTrackFrameRecorder(
 
     fun recordRedetectFrame(index: Int, bitmap: Bitmap, rotationDegrees: Int) {
         save("redetect_$index", bitmap, rotationDegrees, SystemClock.elapsedRealtimeNanos(), "redetect")
+    }
+
+    /**
+     * The round's timing and battery log lines; the debug logs keep only the newest rounds, so
+     * the recording keeps its own copy for comparing rounds later.
+     */
+    fun recordSummary(lines: List<String>) {
+        val dir = roundDir ?: return
+        writer.execute {
+            runCatching { File(dir, SUMMARY_NAME).appendText(lines.joinToString("\n", postfix = "\n")) }
+                .onFailure { Log.w(TAG, "Recording summary failed", it) }
+        }
     }
 
     fun recordFailure(message: String) {
@@ -183,6 +196,7 @@ class BullTrackFrameRecorder(
         const val TAG = "BullTrackRound"
         const val CSV_NAME = "frames.csv"
         const val RESULT_NAME = "result.json"
+        const val SUMMARY_NAME = "summary.txt"
         // The gate's "nothing new" answers (YOLO ran, or was skipped on an unchanged frame); any
         // other reason means the frame is worth keeping.
         val IDLE_GATE_REASONS = setOf("yolo_count_not_increased", "yolo_skipped_unchanged")
