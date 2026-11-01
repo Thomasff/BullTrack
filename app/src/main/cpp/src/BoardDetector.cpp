@@ -154,14 +154,21 @@ double GetRotatedRectLongEdge(const cv::RotatedRect& rect) {
         static_cast<double>(rect.size.height));
 }
 
+// A ring bed runs along the board's outline, so its long edge is checked against the normal of
+// the board ellipse at the bed (half axes from the board box): seen at an angle the outline is a
+// narrow ellipse, whose diagonal beds lean up to about 20 degrees off the line to the centre.
+// For a round board the normal is that line. The normal (dx / a^2, dy / b^2) is scaled by a * b
+// here to stay in pixels.
 bool IsComponentPerpendicularToCenterVector(
     const cv::RotatedRect& rect,
     const cv::Point2f& rough_center,
+    const cv::Size2d& ellipse_half_axes,
     double min_angle_deg,
     double max_angle_deg) {
+    const double axis_ratio = ellipse_half_axes.height / ellipse_half_axes.width;
     const cv::Point2d vector_to_component(
-        static_cast<double>(rect.center.x) - static_cast<double>(rough_center.x),
-        static_cast<double>(rect.center.y) - static_cast<double>(rough_center.y));
+        (static_cast<double>(rect.center.x) - static_cast<double>(rough_center.x)) * axis_ratio,
+        (static_cast<double>(rect.center.y) - static_cast<double>(rough_center.y)) / axis_ratio);
     const double vector_norm = std::hypot(vector_to_component.x, vector_to_component.y);
     if (vector_norm <= 1e-6) {
         return false;
@@ -738,10 +745,12 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     }
 
     std::vector<ComponentCandidate> perpendicular_components;
+    const cv::Size2d board_half_axes(img_before.cols * 0.5, img_before.rows * 0.5);
     for (const auto& component : elongated_components) {
         if (IsComponentPerpendicularToCenterVector(
                 component.rect,
                 rough_center,
+                board_half_axes,
                 circle_config.red_region_perpendicular_min_angle_deg,
                 circle_config.red_region_perpendicular_max_angle_deg)) {
             perpendicular_components.push_back(component);
