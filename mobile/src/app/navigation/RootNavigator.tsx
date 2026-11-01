@@ -9,7 +9,9 @@ import { MatchDetailScreen } from '../../ui/screens/MatchDetailScreen';
 import { PlayerDetailScreen } from '../../ui/screens/PlayerDetailScreen';
 import { HeadToHeadScreen } from '../../ui/screens/HeadToHeadScreen';
 import { MatchListScreen } from '../../ui/screens/MatchListScreen';
+import { SharePreviewScreen } from '../../ui/screens/SharePreviewScreen';
 import { CurrentModeRulesButton, ModeRulesButton } from '../../ui/components/ModeRulesButton';
+import { MatchShareHeaderButton } from '../../ui/components/ShareButton';
 import { colors } from '../../ui/theme/colors';
 import type { RootStackParamList } from './types';
 import { getModeCategory, getModeOption } from '../../domain/game/modeCatalog';
@@ -24,6 +26,8 @@ const renderOptionRules = (modeOptionId: ModeOptionId) => () => {
 };
 
 const renderCurrentModeRules = () => <CurrentModeRulesButton />;
+
+const renderMatchShare = (matchId: number) => () => <MatchShareHeaderButton matchId={matchId} />;
 
 export const RootNavigator = () => (
   <Stack.Navigator
@@ -66,7 +70,10 @@ export const RootNavigator = () => (
     <Stack.Screen
       name="MatchDetail"
       component={MatchDetailScreen}
-      options={{ title: '比赛详情' }}
+      options={({ route }) => ({
+        title: '比赛详情',
+        headerRight: renderMatchShare(route.params.matchId),
+      })}
     />
     <Stack.Screen
       name="PlayerDetail"
@@ -75,5 +82,6 @@ export const RootNavigator = () => (
     />
     <Stack.Screen name="HeadToHead" component={HeadToHeadScreen} options={{ title: '对战' }} />
     <Stack.Screen name="MatchList" component={MatchListScreen} options={{ title: '全部比赛' }} />
+    <Stack.Screen name="SharePreview" component={SharePreviewScreen} options={{ title: '分享' }} />
   </Stack.Navigator>
 );

@@ -45,6 +45,8 @@ interface DartBoardProps {
   throws: ThrowResult[];
   editable: boolean;
   onThrowChange?: (index: number, throwResult: ThrowResult) => void;
+  // Told when a marker drag starts and ends (the corner value badge is up meanwhile).
+  onDragChange?: (dragging: boolean) => void;
 }
 
 // Annular wedge between two radii (normalized) and two clockwise-from-top angles.
@@ -251,7 +253,7 @@ const Marker = ({
   );
 };
 
-export const DartBoard = ({ size, throws, editable, onThrowChange }: DartBoardProps) => {
+export const DartBoard = ({ size, throws, editable, onThrowChange, onDragChange }: DartBoardProps) => {
   const boardKind = useSettingsStore(state => state.boardKind);
   const [drag, setDrag] = useState<{ index: number; point: BoardPoint } | null>(null);
   const dragRegion = useRef<string | null>(null);
@@ -284,6 +286,7 @@ export const DartBoard = ({ size, throws, editable, onThrowChange }: DartBoardPr
             const start = markerPoint(throws[dragIndex], dragIndex);
             dragRegion.current = regionKey(start);
             setDrag({ index: dragIndex, point: start });
+            onDragChange?.(true);
           }}
           onDragMove={(dragIndex, point) => {
             const region = regionKey(point);
@@ -296,6 +299,7 @@ export const DartBoard = ({ size, throws, editable, onThrowChange }: DartBoardPr
           onDragEnd={(dragIndex, point) => {
             dragRegion.current = null;
             setDrag(null);
+            onDragChange?.(false);
             const snapped = snapToRegionCenter(point);
             onThrowChange?.(dragIndex, {
               ...throwAt(snapped, throws[dragIndex]?.id),

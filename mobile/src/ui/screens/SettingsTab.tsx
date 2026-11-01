@@ -12,6 +12,7 @@ import {
 } from '../../application/services/historyRepository';
 import { playHapticTick, playSoundCue } from '../../application/services/liveRoundService';
 import { bullTrackNativeBridge } from '../../native-bridge/bulltrack/bullTrackNative';
+import { deleteMatchPhotos } from '../../application/services/shareService';
 
 type BackupResult = { text: string; failed: boolean };
 
@@ -33,6 +34,10 @@ export const SettingsTab = () => {
   const setSoundCues = useSettingsStore(state => state.setSoundCues);
   const vibration = useSettingsStore(state => state.vibration);
   const setVibration = useSettingsStore(state => state.setVibration);
+  const shareShowUrl = useSettingsStore(state => state.shareShowUrl);
+  const setShareShowUrl = useSettingsStore(state => state.setShareShowUrl);
+  const highlightSelfMocking = useSettingsStore(state => state.highlightSelfMocking);
+  const setHighlightSelfMocking = useSettingsStore(state => state.setHighlightSelfMocking);
   const boardKind = useSettingsStore(state => state.boardKind);
   const setBoardKind = useSettingsStore(state => state.setBoardKind);
   const [pickingBoard, setPickingBoard] = useState(false);
@@ -79,7 +84,10 @@ export const SettingsTab = () => {
   const clearAllHistory = () => {
     setConfirmingClear(false);
     clearHistory()
-      .then(() => setClearResult('done'))
+      .then(() => {
+        deleteMatchPhotos().catch(() => undefined);
+        setClearResult('done');
+      })
       .catch(() => setClearResult('failed'));
   };
 
@@ -176,6 +184,34 @@ export const SettingsTab = () => {
                 // Let the player feel what the tick is like.
                 playHapticTick();
               }
+            }}
+            trackColor={{ true: colors.accent, false: colors.border }}
+            thumbColor={colors.panel}
+          />
+        </View>
+        <View style={[styles.row, styles.rowDivider]}>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>分享图显示网址</Text>
+            <Text style={styles.description}>分享图底部 BullTrack 名字下面加一行项目网址</Text>
+          </View>
+          <Switch
+            value={shareShowUrl}
+            onValueChange={value => {
+              setShareShowUrl(value).catch(() => undefined);
+            }}
+            trackColor={{ true: colors.accent, false: colors.border }}
+            thumbColor={colors.panel}
+          />
+        </View>
+        <View style={[styles.row, styles.rowDivider]}>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>自嘲类高光</Text>
+            <Text style={styles.description}>26 分（20、5、1）这种也给红色高光标签</Text>
+          </View>
+          <Switch
+            value={highlightSelfMocking}
+            onValueChange={value => {
+              setHighlightSelfMocking(value).catch(() => undefined);
             }}
             trackColor={{ true: colors.accent, false: colors.border }}
             thumbColor={colors.panel}

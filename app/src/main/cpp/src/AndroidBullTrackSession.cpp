@@ -1921,6 +1921,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     last_frame_idle_ = false;
     first_frame_bgr_ = first_frame_bgr.clone();
     latest_frame_bgr_ = first_frame_bgr.clone();
+    photo_frame_override_.reset();
 
     FirstFrameBoardBaseline baseline = BuildFirstFrameBoardBaseline(first_frame_bgr_, pipeline_config_);
     AppendBoardDetectionDebugImages(result.debug_images, 1, baseline.board_detection, baseline.board_crop_bgr);
@@ -2604,6 +2605,11 @@ AndroidRedetectResult AndroidBullTrackSession::FindMissedDartsAtEnd() {
     if (!tip_text.empty()) {
         __android_log_print(ANDROID_LOG_INFO, "BullTrackNativeV2", "end board scan:%s", tip_text.c_str());
     }
+    if (found_count > 0) {
+        // YOLO never boxed the darts found here, so the photo has no close-up.
+        photo_frame_override_ = current;
+        photo_frame_override_->dart_boxes.clear();
+    }
     last_confirmed_dart_count_ += found_count;
     return result;
 }
@@ -2713,6 +2719,10 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
         if (!tip_text.empty()) {
             __android_log_print(ANDROID_LOG_INFO, "BullTrackNativeV2", "redetect:%s", tip_text.c_str());
         }
+        TrackedYoloFrameState photo_frame;
+        photo_frame.frame_bgr = latest_frame_bgr_;
+        photo_frame.dart_boxes = top_dart_boxes;
+        photo_frame_override_ = std::move(photo_frame);
 
 #if BT_ENABLE_DEBUG_IMAGES
         cv::Mat after_board_resized = ResizeToTargetSize(after_board_crop_bgr, first_frame_preprocessed_for_alignment_.size());
@@ -2745,6 +2755,27 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
     }
 
     return result;
+}
+
+RoundPhotoSource AndroidBullTrackSession::TakePhotoSource() const {
+    if (!started_) {
+        throw std::runtime_error("round session 尚未开始");
+    }
+    const TrackedYoloFrameState* frame = photo_frame_override_.has_value() ? &photo_frame_override_.value()
+        : last_clean_frame_.has_value()                                    ? &last_clean_frame_.value()
+                                                                           : nullptr;
+    std::vector<cv::Rect2f> dart_boxes;
+    if (frame != nullptr) {
+        for (const YoloDetectionBox& box : frame->dart_boxes) {
+            dart_boxes.push_back(box.rect);
+        }
+    }
+    return MakeRoundPhotoSource(
+        frame != nullptr ? frame->frame_bgr : first_frame_bgr_,
+        first_frame_board_box_,
+        first_frame_point_rectification_h_,
+        first_frame_rectified_radius_,
+        std::move(dart_boxes));
 }
 
 PrepBoardGuide DetectPrepBoard(const cv::Mat& frame_bgr) {

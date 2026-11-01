@@ -3,6 +3,7 @@
 #include "BoardDetectorAndroid.h"
 #include "bulltrack_v2/Config.h"
 #include "DebugImageConfig.h"
+#include "RoundPhoto.h"
 #include "YoloNcnnDetector.h"
 
 #include <opencv2/opencv.hpp>
@@ -129,6 +130,9 @@ public:
     // Average and slowest per-frame time of ProcessFrame and its YOLO, ECC and debug JPEG parts
     // this round, for the round's timing log.
     std::string DescribeFrameStageTimes() const;
+    // The share photo material of the round so far: its last settled frame with every confirmed
+    // dart, or the frame a redetect or the end scan found darts on.
+    RoundPhotoSource TakePhotoSource() const;
 
 private:
     FrameStageTotals frame_stage_totals_;
@@ -160,6 +164,8 @@ private:
     std::optional<PendingYoloCandidateState> pending_candidate_;
     // Frame of the last confirmed dart (or the empty board): the "before" image of the next dart.
     std::optional<TrackedYoloFrameState> last_clean_frame_;
+    // Set when a redetect or the end scan found darts on a later frame: that frame is the photo.
+    std::optional<TrackedYoloFrameState> photo_frame_override_;
     int last_confirmed_dart_count_ = 0;
     // Darts YOLO already saw on the empty-board frame; the round still allows three more.
     int round_start_dart_count_ = 0;

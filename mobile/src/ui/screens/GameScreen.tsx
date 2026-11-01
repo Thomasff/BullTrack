@@ -31,6 +31,20 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { DART_MARKER_COLORS, DartBoard } from '../components/DartBoard';
 import { LiveSnapshot } from '../components/LiveSnapshot';
 import { PrepBoardGuideOverlay, usePrepBoardGuide } from '../components/PrepBoardGuide';
+import { ShareButton } from '../components/ShareButton';
+import {
+  buildCurrentRoundShare,
+  keepConfirmedRoundPhoto,
+  listGameHighlights,
+  loadRoundBests,
+  pruneRoundPhotos,
+  roundKey,
+  roundPhotoName,
+  saveCurrentRoundPhotos,
+  type HighlightContext,
+} from '../../application/services/shareService';
+import type { RoundBest } from '../../domain/share/highlights';
+import { highlightName } from '../../domain/share/highlights';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { isRealBullTrackNativeBridgeAvailable } from '../../native-bridge/bulltrack/bullTrackNative';
@@ -59,6 +73,10 @@ export const GameScreen = ({ navigation }: Props) => {
   const [zoomTrackHeight, setZoomTrackHeight] = useState(ZOOM_SLIDER_HEIGHT);
   const [previewZoomRatio, setPreviewZoomRatio] = useState(() => useSettingsStore.getState().zoomRatio);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  // A marker is being dragged; the board's share button gives its corner to the value badge.
+  const [markerDragging, setMarkerDragging] = useState(false);
+  // Per player name: earlier matches of this mode and their best round, for personal bests.
+  const [roundBests, setRoundBests] = useState<Map<string, RoundBest>>(new Map());
   const [frameWidth, setFrameWidth] = useState(0);
   const [leaveDialog, setLeaveDialog] = useState<'roundInProgress' | 'confirm' | null>(null);
   // Set once an in-app re-request was denied too; the next tap opens system settings.
@@ -96,6 +114,7 @@ export const GameScreen = ({ navigation }: Props) => {
     setupHint,
     reopenedRound,
     completedRounds,
+    savedMatchId,
   } = useGameStore();
   // backCamera stays null until the camera has been prepared; only a known miss shows the message.
   const hasBackCamera = backCamera?.hasBackCamera === true;
@@ -104,9 +123,61 @@ export const GameScreen = ({ navigation }: Props) => {
   const previousStatusRef = useRef(status);
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
   const recordFrames = useSettingsStore(state => state.recordFrames);
+  const selfMocking = useSettingsStore(state => state.highlightSelfMocking);
+  const gameStartedAt = useGameStore(state => state.gameStartedAt);
   const artifactCount = useVisionDebugStore(state => state.artifacts.length);
   const lastNativeError = useVisionDebugStore(state => state.lastNativeError);
 
+  const playerNames = players.map(player => player.name).join('\n');
+  // Personal bests compare with the matches started before this game, loaded once per game.
+  useEffect(() => {
+    if (!selectedMode || gameStartedAt === null) {
+      setRoundBests(new Map());
+      return;
+    }
+    let active = true;
+    loadRoundBests(selectedMode, playerNames.split('\n'), gameStartedAt).then(bests => {
+      if (active) {
+        setRoundBests(bests);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [selectedMode, playerNames, gameStartedAt]);
+
+  const highlightContext = useMemo<HighlightContext>(
+    () => ({ bests: roundBests, selfMocking }),
+    [roundBests, selfMocking],
+  );
+  // completedRounds drives the replay; the service reads the rest of the game from the store.
+  const gameHighlights = useMemo(
+    () => (completedRounds.length > 0 ? listGameHighlights(highlightContext) : []),
+    [completedRounds, highlightContext],
+  );
+  // A newly confirmed round keeps its photo when it was a highlight (native holds the round's
+  // photo until the next round starts); an undo changes nothing.
+  const confirmedCountRef = useRef(completedRounds.length);
+  useEffect(() => {
+    const confirmedBefore = confirmedCountRef.current;
+    confirmedCountRef.current = completedRounds.length;
+    const round = completedRounds[completedRounds.length - 1];
+    if (completedRounds.length <= confirmedBefore || !round || gameStartedAt === null) {
+      return;
+    }
+    const seat = players.findIndex(player => player.id === round.playerId);
+    const key = roundKey(round.roundIndex, players[seat]?.name ?? '');
+    keepConfirmedRoundPhoto(
+      roundPhotoName(gameStartedAt, round.roundIndex, seat),
+      gameHighlights.some(item => item.key === key),
+    ).catch(() => undefined);
+  }, [completedRounds, gameHighlights, players, gameStartedAt]);
+  // Once the game is saved, only the newest matches keep their photos.
+  useEffect(() => {
+    if (savedMatchId !== null) {
+      pruneRoundPhotos().catch(() => undefined);
+    }
+  }, [savedMatchId]);
   useEffect(() => {
     ensureBullTrackSubscriptions();
     setRunningAction('permission');
@@ -422,6 +493,23 @@ export const GameScreen = ({ navigation }: Props) => {
 
   const exitGame = () => leaveGame(goHome);
 
+  // The result on the board as it stands (edited or not); after the game, the match too,
+  // opened on its highlights when a key is given.
+  const openShare = async (highlight?: string) => {
+    const share = buildCurrentRoundShare(highlightContext);
+    const matchId = status === 'gameOver' ? savedMatchId ?? undefined : undefined;
+    if (!share && matchId === undefined) {
+      return;
+    }
+    // The photo of the round on screen (still in native memory) goes along with its card.
+    const photos = share ? await saveCurrentRoundPhotos().catch(() => null) : null;
+    navigation.navigate('SharePreview', {
+      round: share ? { ...share, photos } : undefined,
+      matchId,
+      highlight: matchId !== undefined ? highlight : undefined,
+    });
+  };
+
   const confirmLeave = (leave: () => void) => {
     if (useGameStore.getState().status === 'roundInProgress') {
       setLeaveDialog('roundInProgress');
@@ -578,6 +666,7 @@ export const GameScreen = ({ navigation }: Props) => {
                   throws={currentThrows}
                   editable={canEditThrows}
                   onThrowChange={replaceThrow}
+                  onDragChange={setMarkerDragging}
                 />
               ) : null}
             </View>
@@ -585,6 +674,9 @@ export const GameScreen = ({ navigation }: Props) => {
               <View style={styles.boardBadge} pointerEvents="none">
                 <Text style={styles.boardBadgeLabel}>{boardBadge}</Text>
               </View>
+            ) : null}
+            {status === 'showingResult' && currentThrows.length > 0 && !markerDragging ? (
+              <ShareButton variant="overlay" onPress={() => openShare()} style={styles.boardShare} />
             ) : null}
           </View>
         ) : null}
@@ -638,8 +730,26 @@ export const GameScreen = ({ navigation }: Props) => {
       <View style={styles.turnBlock}>
         <View style={styles.rowBetween}>
           <Text style={styles.turnHeadline}>{turnHeadline}</Text>
-          <Text style={styles.totalScore}>{totalScore}</Text>
+          {status === 'gameOver' ? (
+            <Pressable
+              onPress={() => openShare()}
+              style={({ pressed }) => [styles.shareResultButton, pressed && styles.dartSlotPressed]}>
+              <Text style={styles.shareResultLabel}>分享战绩</Text>
+            </Pressable>
+          ) : (
+            <Text style={styles.totalScore}>{totalScore}</Text>
+          )}
         </View>
+        {status === 'gameOver' && gameHighlights.length > 0 ? (
+          <Pressable disabled={savedMatchId === null} onPress={() => openShare(gameHighlights[0].key)}>
+            <Text numberOfLines={2} style={styles.gameHighlights}>
+              ★ 本场高光：
+              {gameHighlights
+                .map(item => `${item.share.playerName} ${item.share.highlight ? highlightName(item.share.highlight) : ''}`)
+                .join(' · ')}
+            </Text>
+          </Pressable>
+        ) : null}
         {turnHint ? <Text style={styles.hint}>{turnHint}</Text> : null}
         {setupHint ? <Text style={styles.setupHint}>{setupHint}</Text> : null}
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
@@ -860,6 +970,17 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#1E1A16',
   },
+  boardShare: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+  },
+  gameHighlights: {
+    marginTop: 4,
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.accent,
+  },
   hidden: {
     opacity: 0,
   },
@@ -971,6 +1092,18 @@ const styles = StyleSheet.create({
   },
   totalScore: {
     fontSize: 26,
+    fontWeight: '800',
+    color: colors.accent,
+  },
+  shareResultButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1.5,
+    borderColor: colors.accent,
+  },
+  shareResultLabel: {
+    fontSize: 14,
     fontWeight: '800',
     color: colors.accent,
   },

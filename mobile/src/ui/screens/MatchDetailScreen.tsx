@@ -8,6 +8,8 @@ import { deleteMatch, getMatchDetail } from '../../application/services/historyR
 import type { MatchDetail } from '../../domain/history/types';
 import { formatMatchTime } from './MatchListScreen';
 import { getTeamName } from '../../domain/game/teams';
+import { deleteMatchPhotos, replayMatchDetail, roundKey } from '../../application/services/shareService';
+import { useSettingsStore } from '../../application/stores/settingsStore';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MatchDetail'>;
 
@@ -29,11 +31,19 @@ export const MatchDetailScreen = ({ navigation, route }: Props) => {
   const [loaded, setLoaded] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleteFailed, setDeleteFailed] = useState(false);
+  // Keys (roundKey) of the rounds that were highlights.
+  const [highlightKeys, setHighlightKeys] = useState<Set<string>>(new Set());
+  const selfMocking = useSettingsStore(state => state.highlightSelfMocking);
 
   const removeMatch = () => {
     setConfirmingDelete(false);
     deleteMatch(route.params.matchId)
-      .then(() => navigation.goBack())
+      .then(() => {
+        if (detail) {
+          deleteMatchPhotos(detail.createdAt).catch(() => undefined);
+        }
+        navigation.goBack();
+      })
       .catch(() => setDeleteFailed(true));
   };
 
@@ -43,6 +53,23 @@ export const MatchDetailScreen = ({ navigation, route }: Props) => {
       .catch(() => setDetail(null))
       .finally(() => setLoaded(true));
   }, [route.params.matchId]);
+
+  useEffect(() => {
+    if (!detail) {
+      return;
+    }
+    let active = true;
+    replayMatchDetail(detail, selfMocking)
+      .then(rounds => {
+        if (active) {
+          setHighlightKeys(new Set(rounds.filter(item => item.share.highlight !== null).map(item => item.key)));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [detail, selfMocking]);
 
   const nameById = useMemo(
     () => new Map(detail?.players.map(player => [player.playerId, player.name]) ?? []),
@@ -93,18 +120,34 @@ export const MatchDetailScreen = ({ navigation, route }: Props) => {
       </View>
 
       <View style={styles.card}>
-        {detail.rounds.map(round => (
-          <View key={`${round.roundIndex}-${round.playerId}`} style={styles.roundRow}>
-            <Text style={styles.roundIndex}>{round.roundIndex}</Text>
-            <Text numberOfLines={1} style={styles.roundPlayer}>
-              {nameById.get(round.playerId) ?? '—'}
-            </Text>
-            <Text style={styles.roundDarts}>{round.throws.map(formatDart).join('  ')}</Text>
-            <Text style={styles.roundTotal}>
-              {round.throws.reduce((sum, dart) => sum + dart.score, 0)}
-            </Text>
-          </View>
-        ))}
+        {detail.rounds.map(round => {
+          const key = roundKey(round.roundIndex, nameById.get(round.playerId) ?? '');
+          return (
+            <View key={`${round.roundIndex}-${round.playerId}`} style={styles.roundRow}>
+              <Text style={styles.roundIndex}>{round.roundIndex}</Text>
+              <Text numberOfLines={1} style={styles.roundPlayer}>
+                {nameById.get(round.playerId) ?? '—'}
+              </Text>
+              <Text style={styles.roundDarts}>{round.throws.map(formatDart).join('  ')}</Text>
+              <Text style={styles.roundTotal}>
+                {round.throws.reduce((sum, dart) => sum + dart.score, 0)}
+              </Text>
+              {highlightKeys.has(key) ? (
+                <Pressable
+                  accessibilityLabel="分享这一轮"
+                  hitSlop={10}
+                  onPress={() =>
+                    navigation.navigate('SharePreview', { matchId: route.params.matchId, highlight: key })
+                  }
+                  style={styles.star}>
+                  <Text style={styles.starLabel}>★</Text>
+                </Pressable>
+              ) : (
+                <View style={styles.star} />
+              )}
+            </View>
+          );
+        })}
       </View>
 
       <Pressable
@@ -198,6 +241,14 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     fontSize: 15,
     fontWeight: '800',
+    color: colors.accent,
+  },
+  star: {
+    width: 18,
+    alignItems: 'center',
+  },
+  starLabel: {
+    fontSize: 16,
     color: colors.accent,
   },
   deleteLink: {

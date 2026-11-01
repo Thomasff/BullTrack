@@ -490,7 +490,7 @@ export const getMatchDetail = async (matchId: number): Promise<MatchDetail | nul
   const playerResult = await execute(
     database,
     `SELECT match_players.player_id, match_players.seat_index, match_players.is_winner,
-      match_players.team_index, players.name
+      match_players.team_index, match_players.final_score, players.name
     FROM match_players
     JOIN players ON players.id = match_players.player_id
     WHERE match_players.match_id = ?
@@ -499,7 +499,7 @@ export const getMatchDetail = async (matchId: number): Promise<MatchDetail | nul
   );
   const throwResult = await execute(
     database,
-    `SELECT player_id, round_index, dart_index, score, multiplier, target
+    `SELECT player_id, round_index, dart_index, score, multiplier, target, point_x, point_y
     FROM throws
     WHERE match_id = ?
     ORDER BY round_index, player_id, dart_index`,
@@ -521,6 +521,10 @@ export const getMatchDetail = async (matchId: number): Promise<MatchDetail | nul
       score: Number(row.score ?? 0),
       multiplier: Number(row.multiplier ?? 0),
       target: String(row.target ?? 'miss'),
+      point:
+        row.point_x === null || row.point_x === undefined
+          ? null
+          : { x: Number(row.point_x), y: Number(row.point_y) },
     });
   }
 
@@ -537,10 +541,44 @@ export const getMatchDetail = async (matchId: number): Promise<MatchDetail | nul
         seatIndex: Number(row.seat_index),
         isWinner: Number(row.is_winner) === 1,
         teamIndex: row.team_index === null || row.team_index === undefined ? null : Number(row.team_index),
+        finalScore: toNullableNumber(row.final_score),
       };
     }),
     rounds,
   };
+};
+
+// Per player name: matches of the mode started before `before` that the player threw in, and
+// their highest round total (busts included, like the stats pages).
+export const getRoundBests = async (
+  mode: string,
+  names: string[],
+  before: number,
+): Promise<Map<string, { matches: number; best: number }>> => {
+  const bests = new Map<string, { matches: number; best: number }>();
+  if (names.length === 0) {
+    return bests;
+  }
+  const database = await getDatabase();
+  const result = await execute(
+    database,
+    `SELECT players.name, COUNT(DISTINCT round_totals.match_id) AS matches, MAX(round_totals.total) AS best
+    FROM (
+      SELECT throws.match_id, throws.player_id, SUM(throws.score) AS total
+      FROM throws
+      GROUP BY throws.match_id, throws.player_id, throws.round_index
+    ) AS round_totals
+    JOIN matches ON matches.id = round_totals.match_id
+    JOIN players ON players.id = round_totals.player_id
+    WHERE matches.mode = ? AND matches.created_at < ?
+      AND players.name IN (${names.map(() => '?').join(', ')})
+    GROUP BY players.name`,
+    [mode, before, ...names],
+  );
+  rowsOf(result).forEach(row =>
+    bests.set(String(row.name), { matches: Number(row.matches), best: Number(row.best ?? 0) }),
+  );
+  return bests;
 };
 
 export const listPlayerStats = async (): Promise<PlayerStats[]> => {
@@ -1213,6 +1251,12 @@ export const setSetting = async (key: string, value: string) => {
     'INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)',
     [key, value],
   );
+};
+
+// Start times of all saved matches (a match's id for its share photos).
+export const listMatchStarts = async (): Promise<number[]> => {
+  const database = await getDatabase();
+  return rowsOf(await execute(database, 'SELECT created_at FROM matches')).map(row => Number(row.created_at));
 };
 
 // Deletes all saved matches and players; settings are kept.

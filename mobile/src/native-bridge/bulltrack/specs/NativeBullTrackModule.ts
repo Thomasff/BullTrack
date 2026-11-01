@@ -12,6 +12,11 @@ export interface Spec extends TurboModule {
   shareDebugRound(roundId: string): Promise<string>;
   shareTextFile(fileName: string, content: string): Promise<string>;
   pickTextFile(): Promise<string>;
+  shareImage(uri: string, fileName: string, text: string): Promise<string>;
+  saveImageToGallery(uri: string, fileName: string): Promise<string>;
+  saveRoundPhotos(target: string, name: string): Promise<Object>;
+  listRoundPhotos(): Promise<Object>;
+  deleteRoundPhotos(names: Array<string>): Promise<number>;
   setZoomRatio(zoomRatio: number): Promise<Object>;
   detectPrepBoard(yoloOnCpu: boolean): Promise<Object>;
   preloadSoundCues(): void;

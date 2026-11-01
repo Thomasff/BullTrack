@@ -31,6 +31,8 @@ export interface MatchDetailPlayer {
   seatIndex: number;
   isWinner: boolean;
   teamIndex: number | null;
+  // The side's score on the final score board; null for matches saved without it.
+  finalScore: number | null;
 }
 
 export interface MatchDetailRound {
@@ -41,6 +43,8 @@ export interface MatchDetailRound {
     score: number;
     multiplier: number;
     target: string;
+    // Where a detected dart landed; missing or null when unknown.
+    point?: BoardPoint | null;
   }>;
 }
 

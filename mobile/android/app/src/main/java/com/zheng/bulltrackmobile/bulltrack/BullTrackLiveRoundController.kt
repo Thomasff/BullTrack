@@ -63,6 +63,10 @@ class BullTrackLiveRoundController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var roundJob: Job? = null
     private var currentSession: RoundSession? = null
+    // Share photo material of the last confirmed round (native handle, 0 when none), kept until
+    // the next round starts so a highlight found after confirming still gets its photo.
+    private var photoSourceId = 0L
+    private val photoLock = Any()
     private var zoomRatio: Float = 1f
     private val liveFrameDir: File by lazy {
         File(reactContext.cacheDir, "BullTrackLive").apply { mkdirs() }
@@ -260,6 +264,7 @@ class BullTrackLiveRoundController(
         if (roundJob?.isActive == true || currentSession != null) {
             error("A live round is already running or awaiting confirmation.")
         }
+        replacePhotoSource(0L)
         detector.setDebugImagesEnabled(debugImages)
         detector.setYoloForceCpu(yoloOnCpu)
         roundYoloOnCpu = yoloOnCpu
@@ -386,6 +391,9 @@ class BullTrackLiveRoundController(
             )
         }
         currentSession = null
+        if (confirmed) {
+            replacePhotoSource(runCatching { detector.takePhotoSource(session.nativeSessionId) }.getOrDefault(0L))
+        }
         detector.destroySession(session.nativeSessionId)
         releaseRoundOwnershipOnMain()
         saveRoundLog(roundId)
@@ -403,6 +411,46 @@ class BullTrackLiveRoundController(
             putString("statusMessage", "Native round finished.")
             putArray("throws", session.throws.toWritableThrows(roundId))
             putArray("debugArtifacts", artifacts.toWritableArray())
+        }
+    }
+
+    // Writes the share photos of the round on screen as <prefix>-full.jpg and <prefix>-close.jpg (no
+    // close-up without dart boxes): the live session's while its result is shown, otherwise the last
+    // confirmed round's. The map has the file URIs, and is empty when there is no photo.
+    suspend fun saveRoundPhotos(directory: File, prefix: String): WritableMap = withContext(Dispatchers.Default) {
+        val photos = synchronized(photoLock) {
+            val liveSourceId = currentSession?.let { session ->
+                runCatching { detector.takePhotoSource(session.nativeSessionId) }.getOrDefault(0L)
+            } ?: 0L
+            // A live session never falls back to the previous round's photo.
+            val sourceId = if (currentSession != null) liveSourceId else photoSourceId
+            try {
+                if (sourceId == 0L) null else detector.renderPhotos(sourceId)
+            } finally {
+                detector.releasePhotoSource(liveSourceId)
+            }
+        }
+        val result = Arguments.createMap()
+        if (photos != null) {
+            directory.mkdirs()
+            val full = File(directory, "$prefix-full.jpg").apply { writeBytes(photos.first) }
+            result.putString("full", "file://${full.absolutePath}")
+            val close = File(directory, "$prefix-close.jpg")
+            val closeBytes = photos.second
+            if (closeBytes != null) {
+                close.writeBytes(closeBytes)
+                result.putString("close", "file://${close.absolutePath}")
+            } else {
+                close.delete()
+            }
+        }
+        result
+    }
+
+    private fun replacePhotoSource(sourceId: Long) {
+        synchronized(photoLock) {
+            detector.releasePhotoSource(photoSourceId)
+            photoSourceId = sourceId
         }
     }
 
@@ -433,6 +481,7 @@ class BullTrackLiveRoundController(
     fun invalidate() {
         roundJob?.cancel()
         cleanupCurrentSession(destroySession = true)
+        runCatching { replacePhotoSource(0L) }
         runCatching { cameraManager.release() }
         runCatching {
             if (detectorInitialized) {

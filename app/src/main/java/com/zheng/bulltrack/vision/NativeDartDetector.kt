@@ -41,6 +41,9 @@ class NativeDartDetector(
     private external fun nativeFindMissedDarts(sessionId: Long): NativeRedetectResult
     private external fun nativeDescribeFrameStageTimes(sessionId: Long): String
     private external fun nativeDetectPrepBoard(frame: Bitmap, rotationDegrees: Int): IntArray
+    private external fun nativeTakePhotoSource(sessionId: Long): Long
+    private external fun nativeReleasePhotoSource(sourceId: Long)
+    private external fun nativeRenderPhotos(sourceId: Long): Array<ByteArray>
 
     override fun init() {
         nativeInit(assetManager)
@@ -123,6 +126,21 @@ class NativeDartDetector(
 
     /** Average and slowest per-frame time of the round's YOLO, alignment and debug JPEG stages. */
     fun describeFrameStageTimes(sessionId: Long): String = nativeDescribeFrameStageTimes(sessionId)
+
+    /** Copies the round's share photo material out of the session; release it when done. */
+    fun takePhotoSource(sessionId: Long): Long = nativeTakePhotoSource(sessionId)
+
+    fun releasePhotoSource(sourceId: Long) {
+        if (sourceId != 0L) {
+            nativeReleasePhotoSource(sourceId)
+        }
+    }
+
+    /** Share card photos as JPEGs: the round board, and the close-up around the darts (null when none). */
+    fun renderPhotos(sourceId: Long): Pair<ByteArray, ByteArray?> {
+        val parts = nativeRenderPhotos(sourceId)
+        return parts[0] to parts[1].takeIf { it.isNotEmpty() }
+    }
 
     override fun findMissedDarts(sessionId: Long): RedetectDetectionUpdate {
         val result = nativeFindMissedDarts(sessionId)

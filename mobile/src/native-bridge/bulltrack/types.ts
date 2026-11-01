@@ -77,6 +77,12 @@ export type SoundCue =
   | 'outerBull'
   | 'innerBull';
 
+// Share photo files of a round as file URIs; full is missing when there is no photo.
+export interface RoundPhotoFiles {
+  full?: string;
+  close?: string;
+}
+
 export interface BullTrackNativeBridge {
   prepareRoundCamera(): Promise<CameraReadyState & BackCameraInfo>;
   startLiveRound(input: StartLiveRoundInput): Promise<StartLiveRoundResult>;
@@ -92,6 +98,19 @@ export interface BullTrackNativeBridge {
   shareTextFile(fileName: string, content: string): Promise<string>;
   // Lets the user pick a file and resolves with its text; '' when they cancel.
   pickTextFile(): Promise<string>;
+  // Shares a captured image file under the given name, with an optional caption ('' for none);
+  // resolves with the shared file name.
+  shareImage(uri: string, fileName: string, text: string): Promise<string>;
+  // Saves a captured image to Pictures/BullTrack (Android 10+); resolves with the file name.
+  saveImageToGallery(uri: string, fileName: string): Promise<string>;
+  // Writes the share photos of the round on screen (the live result, else the last confirmed
+  // round): 'current' to the cache (only the newest kept), 'highlight' to the app's files as
+  // <name>-full.jpg / <name>-close.jpg.
+  saveRoundPhotos(target: 'current' | 'highlight', name: string): Promise<RoundPhotoFiles>;
+  // The kept highlight photo files.
+  listRoundPhotos(): Promise<{ directory: string; names: string[] }>;
+  // Resolves with the number of files removed.
+  deleteRoundPhotos(names: string[]): Promise<number>;
   setZoomRatio(zoomRatio: number): Promise<CameraReadyState>;
   detectPrepBoard(yoloOnCpu: boolean): Promise<PrepBoardDetection>;
   preloadSoundCues(): void;

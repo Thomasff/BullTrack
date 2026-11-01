@@ -395,6 +395,74 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeDescribeFrameStageTimes
     return env->NewStringUTF(session->DescribeFrameStageTimes().c_str());
 }
 
+// Copies the round's photo material out of the session, so it outlives it; release it with
+// nativeReleasePhotoSource.
+JNIEXPORT jlong JNICALL
+Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeTakePhotoSource(
+    JNIEnv* env,
+    jobject thiz,
+    jlong session_id) {
+    (void)thiz;
+    auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
+    if (session == nullptr) {
+        ThrowJavaRuntimeException(env, "native session 无效");
+        return 0;
+    }
+    try {
+        return reinterpret_cast<jlong>(new bulltrack::RoundPhotoSource(session->TakePhotoSource()));
+    } catch (const std::exception& error) {
+        LOGE("nativeTakePhotoSource failed: %s", error.what());
+        ThrowJavaRuntimeException(env, error.what());
+        return 0;
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeReleasePhotoSource(
+    JNIEnv* env,
+    jobject thiz,
+    jlong source_id) {
+    (void)env;
+    (void)thiz;
+    delete reinterpret_cast<bulltrack::RoundPhotoSource*>(source_id);
+}
+
+// Returns two JPEGs: the round board photo and the close-up (empty when there is none).
+JNIEXPORT jobjectArray JNICALL
+Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRenderPhotos(
+    JNIEnv* env,
+    jobject thiz,
+    jlong source_id) {
+    (void)thiz;
+    auto* source = reinterpret_cast<bulltrack::RoundPhotoSource*>(source_id);
+    if (source == nullptr) {
+        ThrowJavaRuntimeException(env, "没有可用的本轮照片");
+        return nullptr;
+    }
+    try {
+        const bulltrack::RoundPhotoJpegs photos = bulltrack::RenderRoundPhotos(*source);
+        jclass byte_array_class = env->FindClass("[B");
+        jobjectArray parts = env->NewObjectArray(2, byte_array_class, nullptr);
+        const std::vector<std::uint8_t>* jpegs[] = {&photos.full, &photos.close};
+        for (jsize i = 0; i < 2; ++i) {
+            jbyteArray bytes = env->NewByteArray(static_cast<jsize>(jpegs[i]->size()));
+            env->SetByteArrayRegion(
+                bytes,
+                0,
+                static_cast<jsize>(jpegs[i]->size()),
+                reinterpret_cast<const jbyte*>(jpegs[i]->data()));
+            env->SetObjectArrayElement(parts, i, bytes);
+            env->DeleteLocalRef(bytes);
+        }
+        env->DeleteLocalRef(byte_array_class);
+        return parts;
+    } catch (const std::exception& error) {
+        LOGE("nativeRenderPhotos failed: %s", error.what());
+        ThrowJavaRuntimeException(env, error.what());
+        return nullptr;
+    }
+}
+
 // Returns frame width and height, band top and height, then 1 and the board box (x, y, width,
 // height) when a board was found, or 0 and four zeros.
 JNIEXPORT jintArray JNICALL

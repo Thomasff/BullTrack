@@ -31,6 +31,8 @@ jest.mock('@react-navigation/native-stack', () => ({
   }),
 }));
 
+jest.mock('react-native-view-shot', () => ({ captureRef: jest.fn() }));
+
 test('renders correctly', async () => {
   await ReactTestRenderer.act(() => {
     ReactTestRenderer.create(<App />);

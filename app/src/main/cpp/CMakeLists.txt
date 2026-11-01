@@ -31,6 +31,7 @@ add_library(bulltrack_core_v2 STATIC
     src/bulltrack_v2/DartDetector.cpp
     src/bulltrack_v2/Pipeline.cpp
     src/AndroidBullTrackSession.cpp
+    src/RoundPhoto.cpp
     src/YoloNcnnDetector.cpp
 )
 

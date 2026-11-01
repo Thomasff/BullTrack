@@ -2,11 +2,18 @@ package com.zheng.bulltrackmobile.bulltrack
 
 import android.app.Activity
 import android.content.ClipData
+import android.content.ContentValues
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import com.facebook.react.bridge.BaseActivityEventListener
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.module.annotations.ReactModule
 import com.zheng.bulltrackmobile.specs.NativeBullTrackModuleSpec
@@ -138,6 +145,58 @@ class BullTrackModule(
         }
     }
 
+    // Copies a captured share card (a file uri from react-native-view-shot) to the export cache
+    // under its share name and opens the share sheet; the text goes along for apps that take one.
+    override fun shareImage(uri: String, fileName: String, text: String, promise: Promise) {
+        resolveSuspendPromise(promise) {
+            val activity = reactApplicationContext.currentActivity ?: error("No activity to share from")
+            val file = withContext(Dispatchers.IO) {
+                val exportDir = File(reactApplicationContext.cacheDir, BullTrackArtifactStore.EXPORT_DIR_NAME)
+                exportDir.mkdirs()
+                capturedFile(uri).copyTo(File(exportDir, File(fileName).name), overwrite = true)
+            }
+            shareFile(activity, file, "image/png", "分享图片", text.ifEmpty { null })
+            file.name
+        }
+    }
+
+    // Saves a captured share card to Pictures/BullTrack. MediaStore needs no permission from
+    // Android 10 on, and the UI only offers saving there.
+    override fun saveImageToGallery(uri: String, fileName: String, promise: Promise) {
+        resolveSuspendPromise(promise) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                error("Saving to the gallery needs Android 10 or later")
+            }
+            withContext(Dispatchers.IO) {
+                val resolver = reactApplicationContext.contentResolver
+                val values = ContentValues().apply {
+                    put(MediaStore.Images.Media.DISPLAY_NAME, File(fileName).name)
+                    put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                    put(MediaStore.Images.Media.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/BullTrack")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+                val target = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: error("Could not create the gallery entry")
+                try {
+                    val output = resolver.openOutputStream(target) ?: error("Could not open the gallery entry")
+                    output.use { stream -> capturedFile(uri).inputStream().use { it.copyTo(stream) } }
+                } catch (error: Exception) {
+                    resolver.delete(target, null, null)
+                    throw error
+                }
+                values.clear()
+                values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                resolver.update(target, values, null, null)
+            }
+            File(fileName).name
+        }
+    }
+
+    private fun capturedFile(uri: String): File {
+        val path = Uri.parse(uri).path ?: error("Bad image uri: $uri")
+        return File(path).takeIf { it.isFile } ?: error("Image not found: $path")
+    }
+
     // Opens the system file picker; resolves with the picked file's text, or "" when cancelled.
     override fun pickTextFile(promise: Promise) {
         val activity = reactApplicationContext.currentActivity
@@ -155,7 +214,13 @@ class BullTrackModule(
         activity.startActivityForResult(pick, PICK_TEXT_FILE_REQUEST)
     }
 
-    private fun shareFile(activity: Activity, file: File, mimeType: String, title: String) {
+    private fun shareFile(
+        activity: Activity,
+        file: File,
+        mimeType: String,
+        title: String,
+        text: String? = null,
+    ) {
         val uri = FileProvider.getUriForFile(
             reactApplicationContext,
             "${reactApplicationContext.packageName}.debugexport",
@@ -164,6 +229,7 @@ class BullTrackModule(
         val send = Intent(Intent.ACTION_SEND).apply {
             type = mimeType
             putExtra(Intent.EXTRA_STREAM, uri)
+            text?.let { putExtra(Intent.EXTRA_TEXT, it) }
             clipData = ClipData.newRawUri(file.name, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
@@ -208,6 +274,56 @@ class BullTrackModule(
     }
 
     override fun getName(): String = NAME
+
+    // Share photos of the round on screen. 'current' goes to the cache, where only the newest set
+    // is kept; 'highlight' to the app's files as RoundPhotos/<name>-full.jpg and -close.jpg, until
+    // deleteRoundPhotos removes them.
+    override fun saveRoundPhotos(target: String, name: String, promise: Promise) {
+        resolveSuspendPromise(promise) {
+            val directory = roundPhotoDir(target)
+            if (target == "current") {
+                withContext(Dispatchers.IO) { directory.listFiles()?.forEach { it.delete() } }
+            }
+            controller.saveRoundPhotos(directory, File(name).name)
+        }
+    }
+
+    // The kept highlight photos: their folder as a file URI and the file names.
+    override fun listRoundPhotos(promise: Promise) {
+        resolveSuspendPromise(promise) {
+            withContext(Dispatchers.IO) {
+                val directory = roundPhotoDir("highlight")
+                Arguments.createMap().apply {
+                    putString("directory", "file://${directory.absolutePath}/")
+                    putArray(
+                        "names",
+                        Arguments.createArray().apply {
+                            directory.listFiles()?.map { it.name }?.sorted()?.forEach(::pushString)
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    // Resolves with the number of highlight photo files removed.
+    override fun deleteRoundPhotos(names: ReadableArray, promise: Promise) {
+        resolveSuspendPromise(promise) {
+            withContext(Dispatchers.IO) {
+                val directory = roundPhotoDir("highlight")
+                (0 until names.size()).count { index ->
+                    names.getString(index)?.let { File(directory, File(it).name).delete() } == true
+                }
+            }
+        }
+    }
+
+    private fun roundPhotoDir(target: String) =
+        if (target == "current") {
+            File(reactApplicationContext.cacheDir, "BullTrackSharePhoto")
+        } else {
+            File(reactApplicationContext.filesDir, "RoundPhotos")
+        }
 
     private fun resolvePromise(promise: Promise, work: () -> Any) {
         scope.launch {
