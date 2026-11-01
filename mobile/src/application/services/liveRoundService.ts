@@ -303,6 +303,7 @@ export const startLiveRound = async () => {
     debugImages: useSettingsStore.getState().showDebugInfo,
     recordFrames: useSettingsStore.getState().recordFrames,
     yoloOnCpu: useSettingsStore.getState().yoloOnCpu,
+    softBoard: useSettingsStore.getState().boardKind === 'soft',
   });
 };
 

@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { colors } from '../theme/colors';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { BoardKindDialog } from '../components/BoardKindDialog';
+import { BoardFace } from '../components/DartBoard';
 import { useSettingsStore } from '../../application/stores/settingsStore';
 import {
   clearHistory,
@@ -31,6 +33,9 @@ export const SettingsTab = () => {
   const setSoundCues = useSettingsStore(state => state.setSoundCues);
   const vibration = useSettingsStore(state => state.vibration);
   const setVibration = useSettingsStore(state => state.setVibration);
+  const boardKind = useSettingsStore(state => state.boardKind);
+  const setBoardKind = useSettingsStore(state => state.setBoardKind);
+  const [pickingBoard, setPickingBoard] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [clearResult, setClearResult] = useState<'done' | 'failed' | null>(null);
 
@@ -81,7 +86,20 @@ export const SettingsTab = () => {
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <View style={styles.card}>
-        <View style={styles.row}>
+        <Pressable
+          onPress={() => setPickingBoard(true)}
+          style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>靶子类型</Text>
+            <Text style={styles.description}>按你的靶子选，影响圈线判定和对局里的靶图</Text>
+          </View>
+          <View style={styles.rowValue}>
+            <BoardFace size={26} kind={boardKind} showNumbers={false} />
+            <Text style={styles.valueText}>{boardKind === 'soft' ? '软靶' : '硬靶'}</Text>
+            <Text style={styles.chevron}>›</Text>
+          </View>
+        </Pressable>
+        <View style={[styles.row, styles.rowDivider]}>
           <View style={styles.rowText}>
             <Text style={styles.label}>显示调试信息</Text>
             <Text style={styles.description}>对局页显示识别状态与调试图入口</Text>
@@ -223,6 +241,16 @@ export const SettingsTab = () => {
         onConfirm={clearAllHistory}
         onCancel={() => setConfirmingClear(false)}
       />
+      <BoardKindDialog
+        visible={pickingBoard}
+        selected={boardKind}
+        cancelable
+        onPick={kind => {
+          setPickingBoard(false);
+          setBoardKind(kind).catch(() => undefined);
+        }}
+        onCancel={() => setPickingBoard(false)}
+      />
     </ScrollView>
   );
 };
@@ -256,6 +284,19 @@ const styles = StyleSheet.create({
   rowText: {
     flex: 1,
     gap: 2,
+  },
+  rowValue: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  valueText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  chevron: {
+    fontSize: 20,
+    color: colors.textSecondary,
   },
   label: {
     fontSize: 16,

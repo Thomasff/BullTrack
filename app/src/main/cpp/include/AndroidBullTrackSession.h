@@ -119,7 +119,8 @@ class AndroidBullTrackSession {
 public:
     AndroidBullTrackSession();
 
-    AndroidStartRoundResult StartRound(const cv::Mat& first_frame_bgr);
+    // soft_board: the player's board is a soft-tip (red-blue) one, which widens the scoring rings.
+    AndroidStartRoundResult StartRound(const cv::Mat& first_frame_bgr, bool soft_board);
     AndroidFrameProcessResult ProcessFrame(const cv::Mat& frame_bgr);
     AndroidRedetectResult RedetectRound(const cv::Mat& frame_bgr);
     // On a manual end: darts never confirmed (YOLO never saw them), found by comparing the last
@@ -148,7 +149,8 @@ private:
     cv::Rect model_square_;
     cv::Mat first_frame_point_rectification_h_;
     float first_frame_rectified_radius_ = 1.0f;
-    // Triple/double edges measured on this board at setup; empty means the default table.
+    // Triple/double scoring edges of this board (measured colour edges moved out for the board
+    // type) from setup; empty means the default table.
     std::optional<MeasuredRingEdges> ring_edges_;
     cv::Rect first_frame_dart_search_rect_{};
     // Board box corner inside the dart search crop, to map tips back to board-crop coordinates.

@@ -25,6 +25,8 @@ export interface StartLiveRoundInput {
   recordFrames: boolean;
   // Developer switch: run YOLO on the CPU instead of the GPU.
   yoloOnCpu: boolean;
+  // The player's board is a soft-tip (red-blue) one, which widens the scoring rings.
+  softBoard: boolean;
 }
 
 export interface StartLiveRoundResult {

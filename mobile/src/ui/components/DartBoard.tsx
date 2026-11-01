@@ -19,6 +19,7 @@ import {
 } from '../../domain/game/boardGeometry';
 import type { ThrowResult } from '../../domain/game/types';
 import { playHapticTick } from '../../application/services/liveRoundService';
+import { useSettingsStore, type BoardKind } from '../../application/stores/settingsStore';
 
 export const DART_MARKER_COLORS = ['#F2C14E', '#4FB3BF', '#E8775A'];
 
@@ -29,6 +30,7 @@ const BOARD_COLORS = {
   lightSingle: '#EFE3C8',
   red: '#C2402F',
   green: '#2E7D4F',
+  blue: '#2F5DA8',
   wire: 'rgba(255, 255, 255, 0.18)',
   number: '#F4F1E8',
   highlight: 'rgba(255, 255, 255, 0.45)',
@@ -103,9 +105,17 @@ const regionKey = (point: BoardPoint) => {
   return `${inner ? 'innerSingle' : 'outerSingle'}:${scored.label}`;
 };
 
+interface BoardFaceProps {
+  size: number;
+  // A soft-tip board draws its green beds and outer bull blue.
+  kind: BoardKind;
+  showNumbers?: boolean;
+}
+
 // Static board drawing; memoized so dragging a marker never redraws it.
-const BoardFace = memo(({ size }: { size: number }) => {
+export const BoardFace = memo(({ size, kind, showNumbers = true }: BoardFaceProps) => {
   const scale = size / 2 / VIEW_RADIUS;
+  const otherColor = kind === 'soft' ? BOARD_COLORS.blue : BOARD_COLORS.green;
   const wedges = useMemo(() => {
     const paths: Array<{ key: string; d: string; fill: string }> = [];
     SECTOR_ORDER.forEach((_, index) => {
@@ -113,7 +123,7 @@ const BoardFace = memo(({ size }: { size: number }) => {
       const end = start + SECTOR_SWEEP;
       const even = index % 2 === 0;
       const single = even ? BOARD_COLORS.darkSingle : BOARD_COLORS.lightSingle;
-      const multiplier = even ? BOARD_COLORS.red : BOARD_COLORS.green;
+      const multiplier = even ? BOARD_COLORS.red : otherColor;
       paths.push(
         { key: `d${index}`, d: wedgePath(scale, OUTER_SINGLE_END, DOUBLE_END, start, end), fill: multiplier },
         { key: `o${index}`, d: wedgePath(scale, TRIPLE_END, OUTER_SINGLE_END, start, end), fill: single },
@@ -122,7 +132,7 @@ const BoardFace = memo(({ size }: { size: number }) => {
       );
     });
     return paths;
-  }, [scale]);
+  }, [scale, otherColor]);
 
   const numberRadius = ((DOUBLE_END + BOARD_OUTER_END) / 2) * scale;
   const fontSize = Math.max(9, (BOARD_OUTER_END - DOUBLE_END) * scale * 0.95);
@@ -140,9 +150,9 @@ const BoardFace = memo(({ size }: { size: number }) => {
             strokeWidth={0.6}
           />
         ))}
-        <Circle r={OUTER_BULL_END * scale} fill={BOARD_COLORS.green} stroke={BOARD_COLORS.wire} strokeWidth={0.6} />
+        <Circle r={OUTER_BULL_END * scale} fill={otherColor} stroke={BOARD_COLORS.wire} strokeWidth={0.6} />
         <Circle r={INNER_BULL_END * scale} fill={BOARD_COLORS.red} stroke={BOARD_COLORS.wire} strokeWidth={0.6} />
-        {SECTOR_ORDER.map((sector, index) => {
+        {showNumbers && SECTOR_ORDER.map((sector, index) => {
           const angle = index * SECTOR_SWEEP;
           return (
             <SvgText
@@ -242,6 +252,7 @@ const Marker = ({
 };
 
 export const DartBoard = ({ size, throws, editable, onThrowChange }: DartBoardProps) => {
+  const boardKind = useSettingsStore(state => state.boardKind);
   const [drag, setDrag] = useState<{ index: number; point: BoardPoint } | null>(null);
   const dragRegion = useRef<string | null>(null);
   const scale = size / 2 / VIEW_RADIUS;
@@ -251,7 +262,7 @@ export const DartBoard = ({ size, throws, editable, onThrowChange }: DartBoardPr
 
   return (
     <View style={{ width: size, height: size }}>
-      <BoardFace size={size} />
+      <BoardFace size={size} kind={boardKind} />
       {highlight ? (
         <Svg width={size} height={size} style={StyleSheet.absoluteFill} pointerEvents="none">
           <G x={center} y={center}>

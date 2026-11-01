@@ -32,13 +32,18 @@ class MockDartDetector(
         delegate.destroySession(sessionId)
     }
 
-    override fun startRound(sessionId: Long, firstFrame: Bitmap, rotationDegrees: Int): StartRoundDetectionUpdate {
+    override fun startRound(
+        sessionId: Long,
+        firstFrame: Bitmap,
+        rotationDegrees: Int,
+        softBoard: Boolean
+    ): StartRoundDetectionUpdate {
         loadDebugBitmapsIfNeeded()
         val debugBefore = debugBeforeBitmap
         return if (debugBefore != null) {
-            delegate.startRound(sessionId, debugBefore)
+            delegate.startRound(sessionId, debugBefore, softBoard = softBoard)
         } else {
-            delegate.startRound(sessionId, firstFrame, rotationDegrees)
+            delegate.startRound(sessionId, firstFrame, rotationDegrees, softBoard)
         }
     }
 

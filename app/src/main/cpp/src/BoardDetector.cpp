@@ -671,6 +671,7 @@ std::optional<MeasuredRingEdges> MeasureRingEdges(const cv::Mat& image_bgr, cons
     };
 
     MeasuredRingEdges edges;
+    // Colour edges; the session moves them out to the scoring edges for the board type.
     edges.triple_inner = median_of(triple, false);
     edges.triple_outer = median_of(triple, true);
     edges.double_inner = median_of(doubles, false);

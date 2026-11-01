@@ -9,6 +9,7 @@ import { modeCategories } from '../../domain/game/modeCatalog';
 import { useSettingsStore } from '../../application/stores/settingsStore';
 import { StatsTab } from './StatsTab';
 import { SettingsTab } from './SettingsTab';
+import { BoardKindDialog } from '../components/BoardKindDialog';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
@@ -25,6 +26,10 @@ export const HomeScreen = ({ navigation }: Props) => {
   const isFocused = useIsFocused();
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
   const loadSettings = useSettingsStore(state => state.loadSettings);
+  const settingsLoaded = useSettingsStore(state => state.loaded);
+  const boardKind = useSettingsStore(state => state.boardKind);
+  const boardKindChosen = useSettingsStore(state => state.boardKindChosen);
+  const setBoardKind = useSettingsStore(state => state.setBoardKind);
 
   React.useEffect(() => {
     loadSettings().catch(() => undefined);
@@ -86,6 +91,16 @@ export const HomeScreen = ({ navigation }: Props) => {
           })}
         </View>
       </View>
+      {/* First launch: the player picks the board before anything else. */}
+      <BoardKindDialog
+        visible={settingsLoaded && !boardKindChosen}
+        selected={boardKind}
+        cancelable={false}
+        onPick={kind => {
+          setBoardKind(kind).catch(() => undefined);
+        }}
+        onCancel={() => undefined}
+      />
     </SafeAreaView>
   );
 };

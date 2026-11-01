@@ -71,6 +71,8 @@ class BullTrackLiveRoundController(
     // Debug images of the current round also get its log lines saved next to them.
     private var roundDebugImages = false
     private var roundYoloOnCpu = false
+    // The player's board is a soft-tip (red-blue) one; set from the settings each round.
+    private var roundSoftBoard = false
     private var roundStartedAtMs = 0L
 
     @Volatile
@@ -251,7 +253,7 @@ class BullTrackLiveRoundController(
         return result
     }
 
-    fun startLiveRound(debugImages: Boolean, recordFrames: Boolean, yoloOnCpu: Boolean): WritableMap {
+    fun startLiveRound(debugImages: Boolean, recordFrames: Boolean, yoloOnCpu: Boolean, softBoard: Boolean): WritableMap {
         val requestedNs = SystemClock.elapsedRealtimeNanos()
         ensureSupportedRuntime()
         ensureDetectorInitialized()
@@ -261,6 +263,7 @@ class BullTrackLiveRoundController(
         detector.setDebugImagesEnabled(debugImages)
         detector.setYoloForceCpu(yoloOnCpu)
         roundYoloOnCpu = yoloOnCpu
+        roundSoftBoard = softBoard
         artifactStore.pruneOldRounds()
         roundDebugImages = debugImages
         roundStartedAtMs = System.currentTimeMillis()
@@ -477,7 +480,7 @@ class BullTrackLiveRoundController(
             val startUpdate = runCatching {
                 withTimeout(NATIVE_CALL_TIMEOUT_MS) {
                     withContext(Dispatchers.Default) {
-                        detector.startRound(attemptSessionId, firstFrame.bitmap, firstFrame.rotationDegrees)
+                        detector.startRound(attemptSessionId, firstFrame.bitmap, firstFrame.rotationDegrees, roundSoftBoard)
                     }
                 }
             }.also {
@@ -504,7 +507,7 @@ class BullTrackLiveRoundController(
                 attempt,
                 firstFrame.bitmap,
                 firstFrame.rotationDegrees,
-                errorMessage ?: "board setup ok model_square_top=${startUpdate.modelSquareTop}",
+                errorMessage ?: "board setup ok model_square_top=${startUpdate.modelSquareTop} board=${if (roundSoftBoard) "soft" else "steel"}",
             )
             if (errorMessage == null) {
                 sessionId = attemptSessionId

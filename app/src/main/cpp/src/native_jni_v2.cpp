@@ -295,7 +295,8 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeStartRound(
     jobject thiz,
     jlong session_id,
     jobject frame,
-    jint rotation_degrees) {
+    jint rotation_degrees,
+    jboolean soft_board) {
     (void)thiz;
     auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
     if (session == nullptr) {
@@ -304,7 +305,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeStartRound(
     }
     try {
         cv::Mat frame_bgr = BitmapToBgrMat(env, frame, rotation_degrees);
-        bulltrack::AndroidStartRoundResult result = session->StartRound(frame_bgr);
+        bulltrack::AndroidStartRoundResult result = session->StartRound(frame_bgr, soft_board == JNI_TRUE);
         return CreateNativeStartRoundResult(env, result);
     } catch (const std::exception& error) {
         LOGE("nativeStartRound failed: %s", error.what());

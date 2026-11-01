@@ -869,6 +869,37 @@ std::optional<cv::Point> SelectTipPointFromLocalMask(
     return std::nullopt;
 }
 
+// Scoring edges sit outside the measured colour edges by a margin set by the player's board type
+// (r = 1 is the 170 mm double edge). Steel boards score on the wire's centre, about half a wire
+// beyond the colour edge, and darts land right up to it: on 1729 labelled steel-board darts a
+// 1 mm margin scored 25 wrong against 7 at 0.5 mm. On the soft board a tip in a bed often reads
+// up to 2.5 mm outside it while no dart outside a bed lands within 3 mm of it (the hole layout),
+// so the wider margin puts more of those back: 3 wrong against 5 on 31 recorded darts near edges.
+constexpr float kSteelRingEdgeOutwardShift = 0.5f / 170.0f;
+constexpr float kSoftRingEdgeOutwardShift = 1.0f / 170.0f;
+
+std::optional<MeasuredRingEdges> ScoringRingEdges(const std::optional<MeasuredRingEdges>& colour_edges, bool soft_board) {
+    if (!colour_edges.has_value()) {
+        return std::nullopt;
+    }
+    const float shift = soft_board ? kSoftRingEdgeOutwardShift : kSteelRingEdgeOutwardShift;
+    MeasuredRingEdges edges = colour_edges.value();
+    edges.triple_inner -= shift;
+    edges.triple_outer += shift;
+    edges.double_inner -= shift;
+    edges.double_outer += shift;
+    __android_log_print(
+        ANDROID_LOG_INFO,
+        "BullTrackNativeV2",
+        "scoring rings (%s board): triple=%.3f-%.3f double=%.3f-%.3f",
+        soft_board ? "soft" : "steel",
+        edges.triple_inner,
+        edges.triple_outer,
+        edges.double_inner,
+        edges.double_outer);
+    return edges;
+}
+
 // Ring edges the Kotlin scorer expects (VirtualBoardScorer.REAL_RING_EDGES from the outer bull
 // on). A board measured at setup has its own edges moved onto these ring by ring, keeping the
 // angle, so the scorer needs no per-board table. The bull is not measured and stays as it is.
@@ -1877,7 +1908,7 @@ bool CanRefreshCleanFrame(
 
 AndroidBullTrackSession::AndroidBullTrackSession() = default;
 
-AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first_frame_bgr) {
+AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first_frame_bgr, bool soft_board) {
     if (first_frame_bgr.empty()) {
         throw std::runtime_error("首帧为空");
     }
@@ -1912,7 +1943,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     alignment_area_ = BuildBoardAlignmentArea(
         ComputeBoardArea(first_frame_point_rectification_h_, first_frame_rectified_radius_, board_offset_in_search_),
         first_frame_preprocessed_for_alignment_.size());
-    ring_edges_ = baseline.board_detection.measured_ring_edges;
+    ring_edges_ = ScoringRingEdges(baseline.board_detection.measured_ring_edges, soft_board);
     recent_frames_.clear();
     pending_candidate_.reset();
     phantom_boxes_.clear();

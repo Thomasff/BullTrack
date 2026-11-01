@@ -25,7 +25,8 @@ class NativeDartDetector(
     private external fun nativeStartRound(
         sessionId: Long,
         frame: Bitmap,
-        rotationDegrees: Int
+        rotationDegrees: Int,
+        softBoard: Boolean
     ): NativeStartRoundResult
     private external fun nativeProcessFrame(
         sessionId: Long,
@@ -71,8 +72,13 @@ class NativeDartDetector(
         }
     }
 
-    override fun startRound(sessionId: Long, firstFrame: Bitmap, rotationDegrees: Int): StartRoundDetectionUpdate {
-        val result = nativeStartRound(sessionId, argb8888(firstFrame), rotationDegrees)
+    override fun startRound(
+        sessionId: Long,
+        firstFrame: Bitmap,
+        rotationDegrees: Int,
+        softBoard: Boolean
+    ): StartRoundDetectionUpdate {
+        val result = nativeStartRound(sessionId, argb8888(firstFrame), rotationDegrees, softBoard)
         return StartRoundDetectionUpdate(
             debugImages = result.debugImages.orEmpty().map(::toDebugImageArtifact),
             errorMessage = result.errorMessage,

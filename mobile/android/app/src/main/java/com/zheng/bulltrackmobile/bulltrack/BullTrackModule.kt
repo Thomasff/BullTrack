@@ -66,7 +66,8 @@ class BullTrackModule(
             val debugImages = request.hasKey("debugImages") && request.getBoolean("debugImages")
             val recordFrames = request.hasKey("recordFrames") && request.getBoolean("recordFrames")
             val yoloOnCpu = request.hasKey("yoloOnCpu") && request.getBoolean("yoloOnCpu")
-            controller.startLiveRound(debugImages, recordFrames, yoloOnCpu)
+            val softBoard = request.hasKey("softBoard") && request.getBoolean("softBoard")
+            controller.startLiveRound(debugImages, recordFrames, yoloOnCpu, softBoard)
         }
     }
 

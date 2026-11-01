@@ -5,6 +5,10 @@ const SHOW_DEBUG_KEY = 'showDebugInfo';
 const ZOOM_RATIO_KEY = 'zoomRatio';
 const SOUND_CUES_KEY = 'soundCues';
 const VIBRATION_KEY = 'vibration';
+const BOARD_KIND_KEY = 'boardKind';
+
+// Steel-tip boards have red and green beds, soft-tip boards red and blue ones.
+export type BoardKind = 'steel' | 'soft';
 
 interface SettingsStoreState {
   loaded: boolean;
@@ -15,6 +19,11 @@ interface SettingsStoreState {
   soundCues: boolean;
   // Light tick while dragging a dart marker into a new region; on unless turned off.
   vibration: boolean;
+  // The player's board: the virtual board's colours and how far past the measured colour edges
+  // the scoring rings reach. Steel until chosen.
+  boardKind: BoardKind;
+  // Whether the player has chosen the board yet; the first launch asks.
+  boardKindChosen: boolean;
   // Developer recording of raw round frames. Not stored, so it is off after a restart and
   // cannot be left on by mistake; it also goes off with the debug info it sits under.
   recordFrames: boolean;
@@ -28,6 +37,7 @@ interface SettingsStoreState {
   setZoomRatio: (value: number) => Promise<void>;
   setSoundCues: (value: boolean) => Promise<void>;
   setVibration: (value: boolean) => Promise<void>;
+  setBoardKind: (value: BoardKind) => Promise<void>;
 }
 
 export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
@@ -36,6 +46,8 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   zoomRatio: 1,
   soundCues: true,
   vibration: true,
+  boardKind: 'steel',
+  boardKindChosen: false,
   recordFrames: false,
   yoloOnCpu: false,
   loadSettings: async () => {
@@ -47,12 +59,15 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
       const storedZoom = Number(await getSetting(ZOOM_RATIO_KEY));
       const soundCues = (await getSetting(SOUND_CUES_KEY)) !== '0';
       const vibration = (await getSetting(VIBRATION_KEY)) !== '0';
+      const boardKind = await getSetting(BOARD_KIND_KEY);
       set({
         loaded: true,
         showDebugInfo,
         zoomRatio: Number.isFinite(storedZoom) && storedZoom >= 1 ? storedZoom : 1,
         soundCues,
         vibration,
+        boardKind: boardKind === 'soft' ? 'soft' : 'steel',
+        boardKindChosen: boardKind === 'soft' || boardKind === 'steel',
       });
     } catch {
       set({ loaded: true });
@@ -75,5 +90,9 @@ export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   setVibration: async value => {
     set({ vibration: value });
     await setSetting(VIBRATION_KEY, value ? '1' : '0');
+  },
+  setBoardKind: async value => {
+    set({ boardKind: value, boardKindChosen: true });
+    await setSetting(BOARD_KIND_KEY, value);
   },
 }));
