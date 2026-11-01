@@ -16,8 +16,14 @@ import { colors } from '../theme/colors';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { SecondaryButton } from '../components/SecondaryButton';
 import { CARD_PIXEL_WIDTH, MatchCard, RoundCard, cardPixelHeight } from '../components/ShareCards';
+import { PlayerStatsCard, VersusCard } from '../components/StatsCards';
+import { previousRange, rangeStart } from './PlayerDetailScreen';
 import { useSettingsStore, type ShareOptions } from '../../application/stores/settingsStore';
-import { getMatchDetail } from '../../application/services/historyRepository';
+import {
+  getHeadToHead,
+  getMatchDetail,
+  getPlayerDetail,
+} from '../../application/services/historyRepository';
 import {
   captureCard,
   loadRoundPhotos,
@@ -34,7 +40,8 @@ import {
   summarizeMatch,
   type RoundPhotos,
 } from '../../domain/share/shareCards';
-import type { MatchDetail } from '../../domain/history/types';
+import type { HeadToHead, MatchDetail, PlayerDetail } from '../../domain/history/types';
+import { summarizePlayerStats, summarizeVersus } from '../../domain/share/statsCards';
 import { highlightName } from '../../domain/share/highlights';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SharePreview'>;
@@ -68,7 +75,7 @@ const Choice = <T extends string>({ value, choices, onChange }: ChoiceProps<T>) 
 );
 
 export const SharePreviewScreen = ({ route }: Props) => {
-  const { round, matchId, highlight } = route.params;
+  const { round, matchId, highlight, player, versus } = route.params;
   // From the finished game both a round and the match are given; the match summary comes
   // first there.
   const [tab, setTab] = useState<Tab>(
@@ -80,6 +87,12 @@ export const SharePreviewScreen = ({ route }: Props) => {
   const [highlightKey, setHighlightKey] = useState<string | undefined>(highlight);
   // Kept highlight photos by name; a live round brings its own.
   const [storedPhotos, setStoredPhotos] = useState<Map<string, RoundPhotos>>(new Map());
+  // The stats cards' data; previous is the 30 days before the recent range.
+  const [playerStats, setPlayerStats] = useState<{ detail: PlayerDetail; previous: PlayerDetail | null } | null>(
+    null,
+  );
+  const [versusRecord, setVersusRecord] = useState<HeadToHead | null>(null);
+  const [statsLoaded, setStatsLoaded] = useState(false);
   const [busy, setBusy] = useState<'share' | 'save' | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const options = useSettingsStore(state => state.shareOptions);
@@ -97,6 +110,30 @@ export const SharePreviewScreen = ({ route }: Props) => {
       .then(setDetail)
       .catch(() => setDetail(null));
   }, [matchId]);
+
+  useEffect(() => {
+    if (!player) {
+      return;
+    }
+    const previous = player.range === 'recent' ? previousRange() : null;
+    Promise.all([
+      getPlayerDetail(player.playerId, rangeStart(player.range)),
+      previous ? getPlayerDetail(player.playerId, previous.since, null, previous.until) : null,
+    ])
+      .then(([current, before]) => setPlayerStats(current ? { detail: current, previous: before } : null))
+      .catch(() => setPlayerStats(null))
+      .finally(() => setStatsLoaded(true));
+  }, [player]);
+
+  useEffect(() => {
+    if (!versus) {
+      return;
+    }
+    getHeadToHead(versus.playerId, versus.opponentId, rangeStart(versus.range))
+      .then(setVersusRecord)
+      .catch(() => setVersusRecord(null))
+      .finally(() => setStatsLoaded(true));
+  }, [versus]);
 
   useEffect(() => {
     loadRoundPhotos()
@@ -137,6 +174,17 @@ export const SharePreviewScreen = ({ route }: Props) => {
     () => (detail ? summarizeMatch(detail, options) : null),
     [detail, options],
   );
+  const playerShare = useMemo(
+    () =>
+      player && playerStats
+        ? summarizePlayerStats(playerStats.detail, playerStats.previous, player.mode, player.range, options)
+        : null,
+    [player, playerStats, options],
+  );
+  const versusShare = useMemo(
+    () => (versus && versusRecord ? summarizeVersus(versusRecord, versus.mode, versus.range, options) : null),
+    [versus, versusRecord, options],
+  );
 
   // The card is laid out at its capture size (1080 px wide) and shown scaled down.
   const cardWidth = CARD_PIXEL_WIDTH / PixelRatio.get();
@@ -161,19 +209,22 @@ export const SharePreviewScreen = ({ route }: Props) => {
   const photo = roundShare ? pickRoundPhoto(photos, options.photo, roundShare.throws) : null;
   // A close-up choice without a close-up shows as the round board it falls back to.
   const photoChoice = options.photo === 'close' && !photos?.close ? 'full' : options.photo;
-  const card =
-    roundShare ? (
-      <RoundCard
-        share={roundShare}
-        boardKind={boardKind}
-        width={cardWidth}
-        options={options}
-        showUrl={showUrl}
-        photo={photo}
-      />
-    ) : tab === 'match' && matchShare ? (
-      <MatchCard share={matchShare} width={cardWidth} options={options} showUrl={showUrl} />
-    ) : null;
+  const card = playerShare ? (
+    <PlayerStatsCard share={playerShare} width={cardWidth} options={options} showUrl={showUrl} />
+  ) : versusShare ? (
+    <VersusCard share={versusShare} width={cardWidth} options={options} showUrl={showUrl} />
+  ) : roundShare ? (
+    <RoundCard
+      share={roundShare}
+      boardKind={boardKind}
+      width={cardWidth}
+      options={options}
+      showUrl={showUrl}
+      photo={photo}
+    />
+  ) : tab === 'match' && matchShare ? (
+    <MatchCard share={matchShare} width={cardWidth} options={options} showUrl={showUrl} />
+  ) : null;
 
   const run = async (action: 'share' | 'save') => {
     if (!card) {
@@ -184,7 +235,10 @@ export const SharePreviewScreen = ({ route }: Props) => {
     try {
       const uri = await captureCard(cardRef, CARD_PIXEL_WIDTH, pixelHeight);
       const createdAt = roundShare?.createdAt ?? matchShare?.createdAt ?? Date.now();
-      const fileName = shareFileName(roundShare ? 'round' : 'match', createdAt);
+      const fileName = shareFileName(
+        playerShare ? 'stats' : versusShare ? 'versus' : roundShare ? 'round' : 'match',
+        createdAt,
+      );
       if (action === 'share') {
         await shareCardImage(uri, fileName, shareCaption(options.language, showUrl));
       } else {
@@ -241,7 +295,8 @@ export const SharePreviewScreen = ({ route }: Props) => {
             </View>
           </View>
         ) : (
-          <Text style={styles.loading}>{matchId !== undefined && (!detail || (tab === 'highlights' && !highlights))
+          <Text style={styles.loading}>{((player || versus) && !statsLoaded) ||
+            (matchId !== undefined && (!detail || (tab === 'highlights' && !highlights)))
               ? '正在读取…'
               : '没有可分享的内容'}</Text>
         )}

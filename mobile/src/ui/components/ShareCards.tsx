@@ -21,12 +21,12 @@ import { highlightRibbon } from '../../domain/share/highlights';
 // Cards are captured at 1080 px wide and laid out on a 360-unit grid (u = one unit).
 export const CARD_PIXEL_WIDTH = 1080;
 export const cardPixelHeight = (size: ShareOptions['size']) => (size === 'story' ? 1920 : 1350);
-const GRID = 360;
+export const GRID = 360;
 
-const OUTFIT_BOLD = 'Outfit-Bold';
+export const OUTFIT_BOLD = 'Outfit-Bold';
 const OUTFIT_MEDIUM = 'Outfit-Medium';
 
-const CARD_COLORS = {
+export const CARD_COLORS = {
   background: '#15120F',
   text: '#F4F1E8',
   muted: '#B8AD9C',
@@ -63,7 +63,7 @@ const AppIcon = ({ size }: { size: number }) => (
   </Svg>
 );
 
-const BrandLine = ({ u, language, showUrl }: { u: number; language: ShareLanguage; showUrl: boolean }) => (
+export const BrandLine = ({ u, language, showUrl }: { u: number; language: ShareLanguage; showUrl: boolean }) => (
   <View style={[styles.brand, { gap: 7 * u, paddingTop: 11 * u, borderTopWidth: 0.7 * u }]}>
     <AppIcon size={22 * u} />
     <View>
@@ -123,7 +123,7 @@ const dartText = (item: ThrowResult, language: ShareLanguage) => {
 };
 
 // Outfit for Latin text; Chinese text keeps the system font, which Outfit has no glyphs for.
-const fontFor = (language: ShareLanguage, weight: 'bold' | 'medium') =>
+export const fontFor = (language: ShareLanguage, weight: 'bold' | 'medium') =>
   language === 'en'
     ? { fontFamily: weight === 'bold' ? OUTFIT_BOLD : OUTFIT_MEDIUM }
     : { fontWeight: weight === 'bold' ? ('800' as const) : ('600' as const) };

@@ -146,7 +146,7 @@ export const formatShareDate = (createdAt: number) => {
 };
 
 // BullTrack-<kind>-<date>.png; the gallery numbers repeats itself.
-export const shareFileName = (kind: 'round' | 'match', createdAt: number) =>
+export const shareFileName = (kind: 'round' | 'match' | 'stats' | 'versus', createdAt: number) =>
   `BullTrack-${kind}-${formatShareDate(createdAt)}.png`;
 
 export interface MatchShareStat {

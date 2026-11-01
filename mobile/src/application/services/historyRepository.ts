@@ -750,12 +750,14 @@ const hitsRoundTarget = (dart: SavedDart, target: HalfItTarget) => {
 const average = (values: number[]) =>
   values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
 
-// since limits the stats to matches started from that time on; null takes them all.
-// opponentId limits them to matches against that player (not as teammates).
+// since limits the stats to matches started from that time on, until to those started before
+// it; null takes them all. opponentId limits them to matches against that player (not as
+// teammates).
 export const getPlayerDetail = async (
   playerId: number,
   since: number | null = null,
   opponentId: number | null = null,
+  until: number | null = null,
 ): Promise<PlayerDetail | null> => {
   const database = await getDatabase();
   const playerResult = await execute(database, 'SELECT name FROM players WHERE id = ?', [playerId]);
@@ -797,6 +799,7 @@ export const getPlayerDetail = async (
     };
   })
     .filter(match => since === null || match.createdAt >= since)
+    .filter(match => until === null || match.createdAt < until)
     .filter(
       match =>
         opponentId === null ||

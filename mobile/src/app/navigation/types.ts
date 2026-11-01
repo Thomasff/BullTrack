@@ -1,5 +1,6 @@
 import type { ModeCategoryId, ModeOptionId } from '../../domain/game/modeCatalog';
 import type { RoundShare } from '../../domain/share/shareCards';
+import type { StatsRange } from '../../domain/share/statsCards';
 
 export type RootStackParamList = {
   Home: undefined;
@@ -13,5 +14,12 @@ export type RootStackParamList = {
   MatchList: undefined;
   // A round card, a match card (by history id), or both as tabs.
   // highlight opens the match's highlights on that round (key from roundKey).
-  SharePreview: { round?: RoundShare; matchId?: number; highlight?: string };
+  // player and versus are the stats cards, for the overview (mode null) or one mode.
+  SharePreview: {
+    round?: RoundShare;
+    matchId?: number;
+    highlight?: string;
+    player?: { playerId: number; range: StatsRange; mode: string | null };
+    versus?: { playerId: number; opponentId: number; range: StatsRange; mode: string | null };
+  };
 };

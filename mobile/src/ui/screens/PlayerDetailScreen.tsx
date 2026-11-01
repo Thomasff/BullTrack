@@ -36,6 +36,8 @@ import type {
   PlayerTrendPoint,
 } from '../../domain/history/types';
 import type { BoardPoint } from '../../domain/game/boardGeometry';
+import type { StatsRange } from '../../domain/share/statsCards';
+import { ShareButton } from '../components/ShareButton';
 import { formatDart } from './MatchDetailScreen';
 import { formatMatchTime } from './MatchListScreen';
 
@@ -50,7 +52,7 @@ const TREND_MAX_DOTS = 31;
 const DAY_MS = 24 * 60 * 60 * 1000;
 export const RECENT_DAYS = 30;
 
-export type StatsRange = 'all' | 'recent';
+export type { StatsRange };
 const RANGE_OPTIONS: Array<{ key: StatsRange; label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'recent', label: `近 ${RECENT_DAYS} 天` },
@@ -59,6 +61,12 @@ const RANGE_OPTIONS: Array<{ key: StatsRange; label: string }> = [
 // The since argument of the stats queries for a range.
 export const rangeStart = (range: StatsRange) =>
   range === 'recent' ? Date.now() - RECENT_DAYS * DAY_MS : null;
+
+// The 30 days before the recent range, which the share card compares with.
+export const previousRange = () => {
+  const until = Date.now() - RECENT_DAYS * DAY_MS;
+  return { since: until - RECENT_DAYS * DAY_MS, until };
+};
 
 export const RangeSwitch = ({
   range,
@@ -562,6 +570,17 @@ export const PlayerStatsView = ({
               {detail.name}
             </Text>
           )}
+          {detail.matchesPlayed > 0 ? (
+            <ShareButton
+              variant="header"
+              color={colors.textPrimary}
+              onPress={() =>
+                navigation.navigate('SharePreview', {
+                  player: { playerId: detail.playerId, range, mode: selected?.mode ?? null },
+                })
+              }
+            />
+          ) : null}
           <Pressable
             hitSlop={8}
             onPress={() => setEditing(true)}
