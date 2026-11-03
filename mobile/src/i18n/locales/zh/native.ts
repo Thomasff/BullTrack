@@ -154,7 +154,7 @@ export const native = {
     smallBoardHint: '画面里的靶子偏小，靠近一点或放大画面识别更准',
     hintSeparator: '；',
     winner: '{{name}} 获胜',
-    gameOver: '比赛结束',
+    gameOver: '平局',
     waitingPreview: '等待原生预览初始化',
     saveHistoryFailed: '保存历史失败',
     saveHistoryFailedDetail: '保存历史失败: {{error}}',

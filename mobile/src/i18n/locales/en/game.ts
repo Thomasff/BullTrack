@@ -15,7 +15,7 @@ export const game: Translation['game'] = {
   },
   headline: {
     winner: '{{name}} wins',
-    noWinner: 'Game over',
+    noWinner: 'Draw',
     throwNow: 'Throw · Darts found: {{n}}',
     preparing: 'Getting ready, hold your darts',
     confirm: 'Confirm this round',

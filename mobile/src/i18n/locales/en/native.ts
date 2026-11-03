@@ -144,7 +144,7 @@ export const native: Translation['native'] = {
     smallBoardHint: 'The board looks a little small. Move closer or zoom in for better detection.',
     hintSeparator: ' ',
     winner: '{{name}} wins',
-    gameOver: 'Game over',
+    gameOver: 'Draw',
     waitingPreview: 'Waiting for the native preview',
     saveHistoryFailed: 'Saving to history failed',
     saveHistoryFailedDetail: 'Saving to history failed: {{error}}',

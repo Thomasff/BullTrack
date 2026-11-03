@@ -39,6 +39,12 @@ const createRandom = (seed: number) => {
   };
 };
 
+// The sole top scorer wins; a tie for the top score is a draw (null).
+const getTopScorerId = (players: PlayerSummary[]) => {
+  const [first, second] = [...players].sort((left, right) => right.score - left.score);
+  return first && (!second || first.score > second.score) ? first.id : null;
+};
+
 export const HIGH_SCORE_ROUNDS = 10;
 export const DARTS_99_ROUNDS = 33;
 export const DARTS_99_TARGET = 20;
@@ -99,7 +105,7 @@ class HighScoreEngine implements GameEngine {
     if (!this.isGameOver()) {
       return null;
     }
-    return [...this.players].sort((left, right) => right.score - left.score)[0]?.id ?? null;
+    return getTopScorerId(this.players);
   }
 
   getCurrentRoundNumber() {
@@ -148,26 +154,29 @@ class X01Engine implements GameEngine {
 
   applyRound(throws: ThrowResult[]): RoundResult {
     const player = this.players[this.currentPlayerIndex];
-    const roundScore = throws.reduce((sum, item) => sum + item.score, 0);
-    const nextScore = player.score - roundScore;
-
-    if (nextScore === 0) {
-      const lastThrow = throws[throws.length - 1];
-      const hasDoubleOut =
-        lastThrow?.ring === 'double' || lastThrow?.ring === 'innerBull';
-      if (hasDoubleOut) {
-        player.score = 0;
-        player.roundScores = [...player.roundScores, roundScore];
+    // Darts after a checkout or a bust do not count.
+    let remaining = player.score;
+    let bust = false;
+    for (const throwResult of throws) {
+      remaining -= throwResult.score;
+      if (
+        remaining === 0 &&
+        (throwResult.ring === 'double' || throwResult.ring === 'innerBull')
+      ) {
         this.winnerId = player.id;
-      } else {
-        player.roundScores = [...player.roundScores, 0];
+        break;
       }
-    } else if (nextScore < 0 || nextScore === 1) {
-      player.roundScores = [...player.roundScores, 0];
-    } else {
-      player.score = nextScore;
-      player.roundScores = [...player.roundScores, roundScore];
+      if (remaining <= 1) {
+        bust = true;
+        break;
+      }
     }
+
+    const roundScore = bust ? 0 : player.score - remaining;
+    if (!bust) {
+      player.score = remaining;
+    }
+    player.roundScores = [...player.roundScores, roundScore];
 
     if (this.winnerId === null) {
       this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
@@ -479,6 +488,8 @@ class TargetRoundsEngine implements GameEngine {
   private readonly players: PlayerSummary[];
   private currentPlayerIndex = 0;
   private winnerId: string | null = null;
+  // Separate from winnerId: a game can end in a draw.
+  private gameOver = false;
   private readonly startScore: number;
   private readonly totalRounds: number;
 
@@ -522,11 +533,12 @@ class TargetRoundsEngine implements GameEngine {
       this.type === 'shanghai' && rings.has('single') && rings.has('double') && rings.has('triple');
     if (isShanghai) {
       this.winnerId = player.id;
+      this.gameOver = true;
     } else {
       this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
       if (this.players.every(candidate => candidate.roundScores.length >= this.totalRounds)) {
-        this.winnerId =
-          [...this.players].sort((left, right) => right.score - left.score)[0]?.id ?? null;
+        this.winnerId = getTopScorerId(this.players);
+        this.gameOver = true;
       }
     }
 
@@ -539,7 +551,7 @@ class TargetRoundsEngine implements GameEngine {
   }
 
   isGameOver() {
-    return this.winnerId !== null;
+    return this.gameOver;
   }
 
   getWinnerId() {
@@ -548,12 +560,13 @@ class TargetRoundsEngine implements GameEngine {
 
   getCurrentRoundNumber() {
     const roundsPlayed = this.players[this.currentPlayerIndex].roundScores.length;
-    return roundsPlayed + (this.winnerId ? 0 : 1);
+    return roundsPlayed + (this.gameOver ? 0 : 1);
   }
 
   reset() {
     this.currentPlayerIndex = 0;
     this.winnerId = null;
+    this.gameOver = false;
     this.players.forEach(player => {
       player.score = this.startScore;
       player.roundScores = [];
@@ -795,6 +808,8 @@ class HammerCricketEngine implements GameEngine {
   private readonly players: PlayerSummary[];
   private currentPlayerIndex = 0;
   private winnerId: string | null = null;
+  // Separate from winnerId: a game can end in a draw.
+  private gameOver = false;
   private readonly targets: number[];
 
   constructor(players: PlayerSummary[], seed: number) {
@@ -839,8 +854,8 @@ class HammerCricketEngine implements GameEngine {
 
     this.currentPlayerIndex = (this.currentPlayerIndex + 1) % this.players.length;
     if (this.players.every(candidate => candidate.roundScores.length >= HAMMER_ROUNDS)) {
-      this.winnerId =
-        [...this.players].sort((left, right) => right.score - left.score)[0]?.id ?? null;
+      this.winnerId = getTopScorerId(this.players);
+      this.gameOver = true;
     }
 
     return {
@@ -852,7 +867,7 @@ class HammerCricketEngine implements GameEngine {
   }
 
   isGameOver() {
-    return this.winnerId !== null;
+    return this.gameOver;
   }
 
   getWinnerId() {
@@ -861,12 +876,13 @@ class HammerCricketEngine implements GameEngine {
 
   getCurrentRoundNumber() {
     const roundsPlayed = this.players[this.currentPlayerIndex].roundScores.length;
-    return roundsPlayed + (this.winnerId ? 0 : 1);
+    return roundsPlayed + (this.gameOver ? 0 : 1);
   }
 
   reset() {
     this.currentPlayerIndex = 0;
     this.winnerId = null;
+    this.gameOver = false;
     this.players.forEach(player => {
       player.score = 0;
       player.roundScores = [];
@@ -909,6 +925,8 @@ class CheckoutDrillEngine implements GameEngine {
   private readonly players: PlayerSummary[];
   private currentPlayerIndex = 0;
   private winnerId: string | null = null;
+  // Separate from winnerId: a game can end in a draw.
+  private gameOver = false;
 
   constructor(type: CheckoutDrillType, players: PlayerSummary[]) {
     this.type = type;
@@ -964,10 +982,14 @@ class CheckoutDrillEngine implements GameEngine {
 
     const playing = this.players.filter(candidate => this.stateOf(candidate).target !== null);
     if (playing.length === 0) {
-      const winner = [...this.players].sort((left, right) => right.score - left.score)[0];
-      this.winnerId = winner?.id ?? null;
-      // The winner stays current, like the other games.
-      this.currentPlayerIndex = this.players.findIndex(candidate => candidate.id === this.winnerId);
+      this.winnerId = getTopScorerId(this.players);
+      this.gameOver = true;
+      // The winner stays current, like the other games; on a draw the last side to throw does.
+      if (this.winnerId !== null) {
+        this.currentPlayerIndex = this.players.findIndex(
+          candidate => candidate.id === this.winnerId,
+        );
+      }
     } else {
       this.advanceToNextPlaying();
     }
@@ -992,7 +1014,7 @@ class CheckoutDrillEngine implements GameEngine {
   }
 
   isGameOver() {
-    return this.winnerId !== null;
+    return this.gameOver;
   }
 
   getWinnerId() {
@@ -1001,12 +1023,13 @@ class CheckoutDrillEngine implements GameEngine {
 
   getCurrentRoundNumber() {
     const roundsPlayed = this.players[this.currentPlayerIndex].roundScores.length;
-    return roundsPlayed + (this.winnerId ? 0 : 1);
+    return roundsPlayed + (this.gameOver ? 0 : 1);
   }
 
   reset() {
     this.currentPlayerIndex = 0;
     this.winnerId = null;
+    this.gameOver = false;
     this.players.forEach(player => {
       player.score = 0;
       player.roundScores = [];

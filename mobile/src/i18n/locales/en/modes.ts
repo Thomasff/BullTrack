@@ -100,23 +100,23 @@ export const modes: Translation['modes'] = {
     clockWin: 'The first to hit the bull wins.',
     highScoreRounds: '10 rounds each.',
     highScoreScoring: 'Every dart scores its full value.',
-    highScoreWin: 'The highest total after 10 rounds wins.',
+    highScoreWin: 'The highest total after 10 rounds wins; a tie for the top is a draw.',
     darts99Rounds: '33 rounds each, 99 darts in all.',
     darts99Scoring:
       'Only darts in the 20 count: single 20, double 40, treble 60. Everything else scores nothing.',
-    darts99Win: 'The highest total after 33 rounds wins.',
+    darts99Win: 'The highest total after 33 rounds wins; a tie for the top is a draw.',
     shanghaiRounds: '7 rounds; in round N only darts in N score.',
     shanghaiShanghai: 'Hit the single, double and treble of N in one round to win at once.',
-    shanghaiWin: 'If nobody hits a Shanghai, the highest total after 7 rounds wins.',
+    shanghaiWin: 'If nobody hits a Shanghai, the highest total after 7 rounds wins; a tie for the top is a draw.',
     halfItTargets:
       'Start on 40. 9 rounds, with the targets in order: 15, 16, any double (inner bull included), 17, 18, any treble, 19, 20, bull.',
     targetScoring: "Darts that hit the round's target add their points.",
-    halfItWin: 'The highest total after 9 rounds wins.',
+    halfItWin: 'The highest total after 9 rounds wins; a tie for the top is a draw.',
     bermudaTargets:
       'Start on 0. 13 rounds, with the targets in order: 12, 13, 14, any double (inner bull included), 15, 16, 17, any treble, 18, 19, 20, bull, inner bull.',
     bermudaScoring:
       "Darts that hit the round's target add their points; in the bull round, the inner and outer bull both count 25.",
-    bermudaWin: 'The highest total after 13 rounds wins.',
+    bermudaWin: 'The highest total after 13 rounds wins; a tie for the top is a draw.',
     killerStart:
       'Each player gets a random number from 1 to 20 (the large figure on the scoreboard) and 3 lives. At least 2 players.',
     killerKiller: 'Hit the double of your own number to become a killer.',
@@ -132,13 +132,13 @@ export const modes: Translation['modes'] = {
       "Only darts on the round's target count: the 1st dart at face value, the 2nd ×2, the 3rd ×3; in the last round ×1, ×3, ×5.",
     hammerPenalty:
       "If none of a round's three darts hits the target, lose 3 times the target's value (75 for the bull); scores can go below 0.",
-    hammerWin: 'The highest total after 8 rounds wins.',
+    hammerWin: 'The highest total after 8 rounds wins; a tie for the top is a draw.',
     catch40Targets: 'Check out the 40 numbers from 61 to 100 in turn, with up to 6 darts (two rounds) each.',
     catch40Scoring:
       'A checkout in 2 darts scores 3 points, in 3 darts 2 (99 in 3 darts also scores 3), in 4 to 6 darts 1; no checkout scores 0. You move to the next number after a checkout or when the darts run out.',
-    catch40Win: 'After the last number, the highest total wins; the maximum is 120.',
+    catch40Win: 'After the last number, the highest total wins (a tie for the top is a draw); the maximum is 120.',
     checkout4160Targets: 'Check out the 20 numbers from 41 to 60 in turn, one round (3 darts) each.',
     checkout4160Scoring: 'A checkout in 1 or 2 darts scores 2 points, in 3 darts 1; no checkout scores 0.',
-    checkout4160Win: 'After the last number, the highest total wins; the maximum is 40.',
+    checkout4160Win: 'After the last number, the highest total wins (a tie for the top is a draw); the maximum is 40.',
   },
 };

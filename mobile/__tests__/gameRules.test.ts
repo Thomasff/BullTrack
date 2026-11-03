@@ -46,6 +46,16 @@ describe('X01', () => {
     expect(engine.getWinnerId()).toBe('player-1');
   });
 
+  test('darts after the checkout do not count', () => {
+    const engine = createGameEngine('game301', players(2));
+    engine.applyRound([T(20), T(20), T(20)]); // 121
+    engine.applyRound([MISS(), MISS(), MISS()]);
+    const result = engine.applyRound([T(20), T(7), D(20), S(5)]); // 121 on the third dart
+    expect(result.roundScore).toBe(121);
+    expect(engine.getScoreBoard().players[0].score).toBe(0);
+    expect(engine.getWinnerId()).toBe('player-1');
+  });
+
   test('701 starts at 701', () => {
     const engine = createGameEngine('game701', players(1));
     expect(engine.getScoreBoard().players[0].score).toBe(701);
@@ -79,6 +89,15 @@ describe('High score', () => {
     engine.applyRound([S(20), S(20), S(20)]);
     expect(engine.isGameOver()).toBe(true);
     expect(engine.getWinnerId()).toBe('player-2');
+  });
+
+  test('a tie for the top score is a draw', () => {
+    const engine = createGameEngine('highScore', players(3));
+    for (let i = 0; i < 30; i += 1) {
+      engine.applyRound(i % 3 === 2 ? [S(1), MISS(), MISS()] : [S(20), MISS(), MISS()]);
+    }
+    expect(engine.isGameOver()).toBe(true);
+    expect(engine.getWinnerId()).toBeNull();
   });
 });
 
@@ -256,6 +275,16 @@ describe('Half it', () => {
     expect(engine.isGameOver()).toBe(false);
     engine.applyRound([MISS(), MISS(), MISS()]);
     expect(engine.getWinnerId()).toBe('player-1');
+  });
+
+  test('a tie for the top score is a draw', () => {
+    const engine = createGameEngine('halfIt', players(2));
+    for (let round = 0; round < 18; round += 1) {
+      engine.applyRound([MISS(), MISS(), MISS()]);
+    }
+    expect(engine.isGameOver()).toBe(true);
+    expect(engine.getWinnerId()).toBeNull();
+    expect(engine.getCurrentRoundNumber()).toBe(9);
   });
 });
 
@@ -445,6 +474,16 @@ describe('41-60', () => {
     expect(engine.applyRound([S(2), S(10), D(15)]).roundScore).toBe(1); // 42
     expect(engine.applyRound([S(3), MISS(), MISS()]).roundScore).toBe(0); // 43
     expect(engine.getScoreBoard().players[0].checkout?.target).toBe(44);
+  });
+
+  test('a tie for the top score ends the game as a draw', () => {
+    const engine = createGameEngine('checkout4160', players(2));
+    for (let visit = 0; visit < 40; visit += 1) {
+      engine.applyRound([MISS(), MISS(), MISS()]);
+    }
+    expect(engine.isGameOver()).toBe(true);
+    expect(engine.getWinnerId()).toBeNull();
+    expect(engine.getCurrentRoundNumber()).toBe(20);
   });
 
   test('the game ends after 60', () => {

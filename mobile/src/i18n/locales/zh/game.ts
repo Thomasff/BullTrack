@@ -17,7 +17,7 @@ export const game = {
   headline: {
     winner: '{{name}} 获胜',
     // The game ended without a known winner.
-    noWinner: '比赛 获胜',
+    noWinner: '平局',
     throwNow: '请投镖 · 已识别 {{n}} 镖',
     preparing: '准备中，先别投镖',
     confirm: '确认本轮结果',
