@@ -16,6 +16,7 @@ import { SectionHeader } from '../components/SectionHeader';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { t as translate } from '../../i18n';
+import { FEEDBACK_EMAIL, openFeedbackEmail } from '../../application/services/feedback';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Debug'>;
 
@@ -168,6 +169,13 @@ export const DebugScreen = ({ navigation }: Props) => {
           }}
           disabled={!selectedRoundId || exporting}
         />
+        <Pressable
+          onPress={() => {
+            openFeedbackEmail().catch(() => undefined);
+          }}
+          style={({ pressed }) => [styles.mailLink, pressed && styles.chipPressed]}>
+          <Text style={styles.mailLinkText}>{t('debug.emailFeedback', { email: FEEDBACK_EMAIL })}</Text>
+        </Pressable>
         <SecondaryButton
           label={t('debug.reload')}
           onPress={() => {
@@ -239,5 +247,13 @@ const styles = StyleSheet.create({
   },
   actionGroup: {
     gap: 12,
+  },
+  mailLink: {
+    alignSelf: 'center',
+    paddingVertical: 4,
+  },
+  mailLinkText: {
+    fontSize: 14,
+    color: colors.info,
   },
 });

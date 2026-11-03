@@ -11,6 +11,7 @@ export const debug: Translation['debug'] = {
   noImages: 'No debug images for this round (it may have failed at the start); the debug bundle only has the log.',
   packing: 'Packing…',
   exportBundle: 'Export debug bundle',
+  emailFeedback: 'Email feedback, debug bundle attached if you like: {{email}} ›',
   exportFailed: 'Export failed: {{error}}',
   reload: 'Reload',
 };

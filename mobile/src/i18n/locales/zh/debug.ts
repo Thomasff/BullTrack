@@ -10,6 +10,8 @@ export const debug = {
   noImages: '这一轮没有调试图（比如开局就失败了），调试包里只有日志。',
   packing: '正在打包…',
   exportBundle: '导出调试包',
+  // Under the export button: opens the mail app, where the bundle can be attached.
+  emailFeedback: '发邮件反馈，可附上调试包：{{email}} ›',
   exportFailed: '导出失败：{{error}}',
   reload: '重新加载',
 };

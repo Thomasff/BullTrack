@@ -16,6 +16,15 @@ import {
 import { playHapticTick, playSoundCue } from '../../application/services/liveRoundService';
 import { bullTrackNativeBridge } from '../../native-bridge/bulltrack/bullTrackNative';
 import { deleteMatchPhotos } from '../../application/services/shareService';
+import {
+  FEEDBACK_EMAIL,
+  LICENSE_URL,
+  PROJECT_URL,
+  openFeedbackEmail,
+  openUrl,
+} from '../../application/services/feedback';
+import { SHARE_URL } from '../../domain/share/shareCards';
+import { GitHubIcon, LicenseIcon, MailIcon } from '../components/AboutIcons';
 import { version } from '../../../package.json';
 
 type BackupResult = { text: string; failed: boolean };
@@ -61,6 +70,7 @@ export const SettingsTab = () => {
 
   const [backupBusy, setBackupBusy] = useState(false);
   const [backupResult, setBackupResult] = useState<BackupResult | null>(null);
+  const [noMailApp, setNoMailApp] = useState(false);
   const versionTaps = useRef({ count: 0, at: 0 });
 
   // Seven quick taps on the version line turn developer mode on.
@@ -337,8 +347,49 @@ export const SettingsTab = () => {
         </Pressable>
       </View>
 
+      <View style={styles.card}>
+        <Pressable
+          onPress={() => {
+            openFeedbackEmail()
+              .then(opened => setNoMailApp(!opened))
+              .catch(() => undefined);
+          }}
+          style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+          <MailIcon size={22} color={colors.textSecondary} />
+          <View style={styles.rowText}>
+            <Text style={styles.label}>{t('settings.feedback')}</Text>
+            <Text style={styles.description}>{FEEDBACK_EMAIL}</Text>
+            {noMailApp ? (
+              <Text style={[styles.description, styles.result]}>{t('settings.feedbackNoMailApp')}</Text>
+            ) : null}
+          </View>
+          <Text style={styles.chevron}>›</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => openUrl(PROJECT_URL)}
+          style={({ pressed }) => [styles.row, styles.rowDivider, pressed && styles.pressed]}>
+          <GitHubIcon size={22} color={colors.textSecondary} />
+          <View style={styles.rowText}>
+            <Text style={styles.label}>GitHub</Text>
+            <Text style={styles.description}>{SHARE_URL}</Text>
+          </View>
+          <Text style={styles.chevron}>›</Text>
+        </Pressable>
+        <Pressable
+          onPress={() => openUrl(LICENSE_URL)}
+          style={({ pressed }) => [styles.row, styles.rowDivider, pressed && styles.pressed]}>
+          <LicenseIcon size={22} color={colors.textSecondary} />
+          <View style={styles.rowText}>
+            <Text style={styles.label}>{t('settings.license')}</Text>
+            <Text style={styles.description}>{t('settings.licenseDescription')}</Text>
+          </View>
+          <Text style={styles.chevron}>›</Text>
+        </Pressable>
+      </View>
+
       <Pressable onPress={tapVersion}>
         <Text style={styles.footer}>{t('settings.footer', { version })}</Text>
+        <Text style={styles.footerNote}>{t('settings.author')}</Text>
         {developerMode ? (
           <Text style={styles.footerNote}>{t('settings.developerModeOnNote')}</Text>
         ) : null}
