@@ -1,4 +1,4 @@
-// Downloads the prebuilt OpenCV and ncnn Android SDKs that app/src/main/cpp/CMakeLists.txt expects.
+// Downloads the prebuilt OpenCV and ncnn Android SDKs that bulltrack-core/src/main/cpp/CMakeLists.txt expects.
 // Usage: node scripts/fetch-native-deps.js [--force]
 const crypto = require('crypto');
 const fs = require('fs');
@@ -7,7 +7,7 @@ const { spawnSync } = require('child_process');
 const { Readable, Transform } = require('stream');
 const { pipeline } = require('stream/promises');
 
-const cppDir = path.join(__dirname, '..', 'app', 'src', 'main', 'cpp');
+const cppDir = path.join(__dirname, '..', 'bulltrack-core', 'src', 'main', 'cpp');
 const tempDir = path.join(cppDir, '.deps-download');
 
 const deps = [
@@ -15,7 +15,7 @@ const deps = [
     name: 'OpenCV Android SDK 4.12.0',
     url: 'https://github.com/opencv/opencv/releases/download/4.12.0/opencv-4.12.0-android-sdk.zip',
     sha256: 'fd7f2332331b4eb8b67e55137281cfb16823c9399d90deb9cfa3476783b99e35',
-    // Folder inside the archive -> folder in app/src/main/cpp
+    // Folder inside the archive -> folder in bulltrack-core/src/main/cpp
     from: path.join('OpenCV-android-sdk', 'sdk'),
     to: path.join('opencv-sdk', 'sdk'),
     marker: path.join('native', 'jni', 'OpenCVConfig.cmake'),

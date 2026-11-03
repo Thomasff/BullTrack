@@ -54,31 +54,8 @@ android {
 
     externalNativeBuild {
         cmake {
-            path = file("../app/src/main/cpp/CMakeLists.txt")
+            path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
-        }
-    }
-
-    sourceSets {
-        main {
-            java.srcDirs = [
-                "../app/src/main/java/com/zheng/bulltrack/application",
-                "../app/src/main/java/com/zheng/bulltrack/camera",
-                "../app/src/main/java/com/zheng/bulltrack/debug",
-                "../app/src/main/java/com/zheng/bulltrack/domain",
-                "../app/src/main/java/com/zheng/bulltrack/vision"
-            ]
-            kotlin.srcDirs = [
-                "../app/src/main/java/com/zheng/bulltrack/application",
-                "../app/src/main/java/com/zheng/bulltrack/camera",
-                "../app/src/main/java/com/zheng/bulltrack/debug",
-                "../app/src/main/java/com/zheng/bulltrack/domain",
-                "../app/src/main/java/com/zheng/bulltrack/vision"
-            ]
-            assets.srcDirs = ["../app/src/main/assets"]
-            manifest.srcFile("src/main/AndroidManifest.xml")
-            res.srcDirs = ["src/main/res"]
-            jniLibs.srcDirs = ["../app/src/main/jniLibs"]
         }
     }
 

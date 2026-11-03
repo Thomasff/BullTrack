@@ -18,7 +18,6 @@ local.properties
 *.jpg
 *.png
 !mobile/android/app/src/main/res/**/*.png
-!mobile/ios/**/*.png
 cpp_dart_detector_v2/build/
 cpp_dart_detector_v2/images/
 cpp_dart_detector_v2/result/
@@ -29,8 +28,8 @@ third_party/
 before.jpg
 
 # Local third-party SDKs and developer secrets
-/app/src/main/cpp/opencv-sdk/
-/app/src/main/cpp/.deps-download/
+/bulltrack-core/src/main/cpp/opencv-sdk/
+/bulltrack-core/src/main/cpp/.deps-download/
 /mobile/android/app/debug.keystore
 /mobile/metro-*.log
 *.log
@@ -60,6 +59,8 @@ before.jpg
 /.idea/
 /.trae/
 /.vscode/
+/tools/desktop_replay/
+/track/
 
 # Old prototypes, kept in history but not in the current tree
 /cpp_windows_DartDetector/

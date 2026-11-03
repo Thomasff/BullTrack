@@ -12,7 +12,6 @@
   },
   "scripts": {
     "android": "react-native run-android",
-    "ios": "react-native run-ios",
     "lint": "eslint .",
     "postinstall": "node ./scripts/apply-mobile-patches.js",
     "start": "react-native start",
