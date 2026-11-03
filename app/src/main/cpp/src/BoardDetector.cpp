@@ -44,6 +44,10 @@ constexpr double kTrebleReferenceShare = 0.0117;
 constexpr double kTrebleSearchMinRadius = 0.3;
 constexpr double kTrebleSearchMaxRadius = 0.76;
 constexpr double kMaxTrebleSeatResidual = 0.06;
+// A treble bed is about 0.6 as long as a double bed and as wide, so after the measurement blur a
+// small or tilted board's trebles come out shorter and stubbier than the doubles' limits allow.
+constexpr double kTrebleMinLongShortRatio = 1.5;
+constexpr double kTrebleMinAreaScale = 0.5;
 // In the treble fit's frame the treble ring's outer edge is radius 1, so steel doubles span
 // 0.953-1.0 / 0.629 = 1.515-1.590. Red is cut out to the wide outer limit, so beds stay whole even
 // where a soft board's or a lens's proportions differ, and a piece counts only when its centre is
@@ -525,6 +529,7 @@ std::optional<TrebleFrame> FitTrebleFrame(const cv::Mat& measurement_base_bgr, c
     const cv::Mat reddest_mask = ExtractRedOnlyMask(measurement_base_bgr, reddest_model);
     const std::optional<cv::RotatedRect> ellipse = FitTrebleEllipse(reddest_mask);
     if (!ellipse.has_value()) {
+        __android_log_print(ANDROID_LOG_INFO, "BullTrackNativeV2", "treble frame: no treble ellipse");
         return std::nullopt;
     }
     cv::Mat ring_red = cv::Mat::zeros(reddest_mask.size(), CV_8U);
@@ -532,8 +537,9 @@ std::optional<TrebleFrame> FitTrebleFrame(const cv::Mat& measurement_base_bgr, c
     cv::ellipse(ring_red, cv::RotatedRect(ellipse->center, ellipse->size * 0.8f, ellipse->angle), cv::Scalar(0), -1);
     cv::bitwise_and(ring_red, reddest_mask, ring_red);
     std::vector<ComponentCandidate> beds;
-    for (const auto& component : ExtractComponentCandidates(ring_red, circle_config.red_region_min_area, ellipse->center)) {
-        if (HasMinRotatedRectLongShortRatio(component.rect, kAndroidRedRegionMinLongShortRatio) &&
+    const int treble_min_area = static_cast<int>(circle_config.red_region_min_area * kTrebleMinAreaScale);
+    for (const auto& component : ExtractComponentCandidates(ring_red, treble_min_area, ellipse->center)) {
+        if (HasMinRotatedRectLongShortRatio(component.rect, kTrebleMinLongShortRatio) &&
             IsComponentAlongEllipse(
                 component.rect,
                 ellipse.value(),
@@ -544,6 +550,12 @@ std::optional<TrebleFrame> FitTrebleFrame(const cv::Mat& measurement_base_bgr, c
     }
     const std::optional<DoubleSeatFit> fit = FitDoubleSeats(beds, ellipse->center);
     if (!fit.has_value() || fit->max_residual > kMaxTrebleSeatResidual) {
+        __android_log_print(
+            ANDROID_LOG_INFO,
+            "BullTrackNativeV2",
+            "treble frame: %d treble beds, %s",
+            static_cast<int>(beds.size()),
+            fit.has_value() ? cv::format("residual %.3f", fit->max_residual).c_str() : "too few seats");
         return std::nullopt;
     }
     TrebleFrame frame;
