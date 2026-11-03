@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useTranslation } from 'react-i18next';
 import { colors, teamColors } from '../theme/colors';
 import { ModeBar, ModeMenu } from '../components/ModePicker';
 import { ShareButton } from '../components/ShareButton';
@@ -22,6 +23,8 @@ import {
   isAhead,
   type CompareRowData,
 } from '../../domain/history/headToHeadCompare';
+import { displayPlayerName } from '../../domain/game/players';
+import { modeDisplayName } from '../../i18n';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'HeadToHead'>;
 
@@ -30,7 +33,7 @@ const RIGHT_COLOR = teamColors[1];
 const RECENT_RESULTS = 10;
 const GROW_DURATION = 700;
 
-const modeTitle = (stats: PlayerModeStats) => stats.modeLabel ?? stats.mode;
+const modeTitle = (stats: PlayerModeStats) => modeDisplayName(stats.mode, stats.modeLabel);
 
 const renderShare = (onPress: () => void) => () => (
   <ShareButton variant="header" color={colors.textPrimary} onPress={onPress} />
@@ -44,6 +47,7 @@ const CompareRow = ({
   row: CompareRowData;
   grow: Animated.Value;
 }) => {
+  const { t } = useTranslation();
   const largest = Math.max(Math.abs(row.left ?? 0), Math.abs(row.right ?? 0));
   const bar = (
     value: number | null,
@@ -69,7 +73,7 @@ const CompareRow = ({
   const rightAhead = isAhead(row, row.right, row.left);
   return (
     <View style={styles.compareRow}>
-      <Text style={styles.compareLabel}>{row.label}</Text>
+      <Text style={styles.compareLabel}>{t(`stats.figures.${row.figure}`)}</Text>
       <View style={styles.compareLine}>
         <Text
           style={[
@@ -109,13 +113,14 @@ const CompareCard = ({ rows }: { rows: CompareRowData[] }) => {
   return (
     <View style={[styles.card, styles.compareCard]}>
       {rows.map(row => (
-        <CompareRow key={row.label} row={row} grow={grow} />
+        <CompareRow key={row.figure} row={row} grow={grow} />
       ))}
     </View>
   );
 };
 
 export const HeadToHeadScreen = ({ navigation, route }: Props) => {
+  const { t } = useTranslation();
   const { playerId, opponentId } = route.params;
   const [record, setRecord] = useState<HeadToHead | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -148,13 +153,15 @@ export const HeadToHeadScreen = ({ navigation, route }: Props) => {
   }, [navigation, hasResults, playerId, opponentId, range, selectedMode]);
 
   if (!loaded) {
-    return <Text style={styles.empty}>正在读取…</Text>;
+    return <Text style={styles.empty}>{t('history.loading')}</Text>;
   }
   if (!record) {
-    return <Text style={styles.empty}>找不到这两个玩家。</Text>;
+    return <Text style={styles.empty}>{t('stats.versusNotFound')}</Text>;
   }
 
   const { left, right, results } = record;
+  const leftName = displayPlayerName(left.name);
+  const rightName = displayPlayerName(right.name);
   const othersWon = results.filter(result => result.winner === 'other').length;
   const latest = results[0]?.winner;
   const streak =
@@ -174,11 +181,11 @@ export const HeadToHeadScreen = ({ navigation, route }: Props) => {
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   };
   const modeOptions = [
-    { key: null, label: '总览', detail: `${left.matchesPlayed} 场` },
+    { key: null, label: t('stats.overview'), detail: t('stats.matchCount', { n: left.matchesPlayed }) },
     ...left.modes.map(mode => ({
       key: mode.mode,
       label: modeTitle(mode),
-      detail: `${mode.matchesPlayed} 场`,
+      detail: t('stats.matchCount', { n: mode.matchesPlayed }),
     })),
   ];
 
@@ -204,22 +211,22 @@ export const HeadToHeadScreen = ({ navigation, route }: Props) => {
 
   const renderOverview = () => (
     <>
-      <Text style={styles.sectionTitle}>各玩法</Text>
+      <Text style={styles.sectionTitle}>{t('stats.sections.byMode')}</Text>
       <View style={styles.card}>
         <View style={[styles.tableRow, styles.tableHeader]}>
-          <Text style={[styles.cellName, styles.headerText]}>玩法</Text>
-          <Text style={[styles.cell, styles.headerText]}>场次</Text>
+          <Text style={[styles.cellName, styles.headerText]}>{t('stats.columns.mode')}</Text>
+          <Text style={[styles.cell, styles.headerText]}>{t('stats.columns.matches')}</Text>
           <Text
             numberOfLines={1}
             style={[styles.cell, styles.headerText, { color: LEFT_COLOR }]}
           >
-            {left.name}
+            {leftName}
           </Text>
           <Text
             numberOfLines={1}
             style={[styles.cell, styles.headerText, { color: RIGHT_COLOR }]}
           >
-            {right.name}
+            {rightName}
           </Text>
           <Text style={styles.chevron} />
         </View>
@@ -244,9 +251,7 @@ export const HeadToHeadScreen = ({ navigation, route }: Props) => {
           </Pressable>
         ))}
       </View>
-      <Text style={styles.note}>
-        表里是两人各自的胜场。点上面的玩法或表里的一行，逐项对比两人的数据。
-      </Text>
+      <Text style={styles.note}>{t('stats.notes.headToHeadOverview')}</Text>
     </>
   );
 
@@ -260,8 +265,8 @@ export const HeadToHeadScreen = ({ navigation, route }: Props) => {
         rows={compareRows(leftStats, rightStats)}
       />
       <Text style={styles.note}>
-        颜色深的一方这一项更好。用镖、被减半次数越少越好。
-        {leftStats.x01 ? '胜局用镖只算个人赛。' : ''}
+        {t('stats.notes.compare')}
+        {leftStats.x01 ? t('stats.notes.compareX01') : ''}
       </Text>
     </>
   );
@@ -270,19 +275,19 @@ export const HeadToHeadScreen = ({ navigation, route }: Props) => {
     <ScrollView ref={scrollRef} contentContainerStyle={styles.content}>
       <View style={[styles.card, styles.scoreCard]}>
         <View style={styles.scoreRow}>
-          {nameButton(left.name, left.playerId, LEFT_COLOR, 'right')}
+          {nameButton(leftName, left.playerId, LEFT_COLOR, 'right')}
           <Text style={styles.score}>
             {left.wins} : {right.wins}
           </Text>
-          {nameButton(right.name, right.playerId, RIGHT_COLOR, 'left')}
+          {nameButton(rightName, right.playerId, RIGHT_COLOR, 'left')}
         </View>
         <Text style={styles.meta}>
-          共 {results.length} 场
-          {othersWon > 0 ? ` · ${othersWon} 场别人赢` : ''}
+          {t('stats.versusPlayed', { n: results.length })}
+          {othersWon > 0 ? t('stats.othersWon', { n: othersWon }) : ''}
         </Text>
         {recentResults.length > 0 ? (
           <View style={styles.dots}>
-            <Text style={styles.meta}>最近 {recentResults.length} 场</Text>
+            <Text style={styles.meta}>{t('stats.lastResults', { n: recentResults.length })}</Text>
             {recentResults.map(result => (
               <View
                 key={result.matchId}
@@ -303,19 +308,18 @@ export const HeadToHeadScreen = ({ navigation, route }: Props) => {
         ) : null}
         {streakLength >= 2 ? (
           <Text style={styles.meta}>
-            {latest === 'left' ? left.name : right.name} 当前 {streakLength}{' '}
-            连胜
+            {t('stats.streak', { name: latest === 'left' ? leftName : rightName, n: streakLength })}
           </Text>
         ) : null}
       </View>
 
       <View style={styles.rangeRow}>
-        <Text style={styles.meta}>只算两人对战的比赛</Text>
+        <Text style={styles.meta}>{t('stats.versusOnly')}</Text>
         <RangeSwitch range={range} onChange={setRange} />
       </View>
 
       {results.length === 0 ? (
-        <Text style={styles.note}>最近 {RECENT_DAYS} 天两人没有对战。</Text>
+        <Text style={styles.note}>{t('stats.noRecentVersus', { days: RECENT_DAYS })}</Text>
       ) : (
         <>
           <View

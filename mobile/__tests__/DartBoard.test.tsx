@@ -4,6 +4,8 @@ import { Text } from 'react-native';
 import { DartBoard } from '../src/ui/components/DartBoard';
 import { createThrow } from '../src/domain/game/throws';
 
+jest.mock('react-native-view-shot', () => ({ captureRef: jest.fn(), releaseCapture: jest.fn() }));
+
 test('renders one numbered marker per throw', async () => {
   let renderer: ReactTestRenderer.ReactTestRenderer | undefined;
   await ReactTestRenderer.act(() => {

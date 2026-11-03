@@ -1,0 +1,25 @@
+import type { Translation } from '../zh';
+
+export const share: Translation['share'] = {
+  share: 'Share',
+  tabRound: 'This round',
+  tabHighlights: 'Highlights',
+  tabMatch: 'Summary',
+  highlightChip: '{{highlight}} · {{name}}, round {{round}}',
+  loading: 'Loading…',
+  nothingToShare: 'Nothing to share',
+  photo: 'Photo',
+  photoAuto: 'Auto',
+  photoFull: 'Board',
+  photoClose: 'Close',
+  photoNone: 'None',
+  size: 'Size',
+  cardLanguage: 'Language',
+  showNames: 'Show names',
+  preparing: 'Preparing…',
+  saving: 'Saving…',
+  saveToGallery: 'Save to gallery',
+  savedToGallery: 'Saved to gallery (Pictures/BullTrack)',
+  shareFailed: 'Sharing failed, please try again',
+  saveFailed: 'Saving failed, please try again',
+};

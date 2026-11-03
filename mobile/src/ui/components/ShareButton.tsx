@@ -2,6 +2,7 @@ import React from 'react';
 import { Pressable, StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { useNavigation } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../app/navigation/types';
 
@@ -28,19 +29,22 @@ interface ShareButtonProps {
   style?: StyleProp<ViewStyle>;
 }
 
-export const ShareButton = ({ onPress, variant, color, style }: ShareButtonProps) => (
-  <Pressable
-    accessibilityLabel="分享"
-    hitSlop={8}
-    onPress={onPress}
-    style={({ pressed }) => [
-      variant === 'overlay' ? styles.overlay : styles.header,
-      pressed && styles.pressed,
-      style,
-    ]}>
-    <ShareIcon size={variant === 'overlay' ? 18 : 20} color={color ?? (variant === 'overlay' ? '#F7F8FA' : '#1E1A16')} />
-  </Pressable>
-);
+export const ShareButton = ({ onPress, variant, color, style }: ShareButtonProps) => {
+  const { t } = useTranslation();
+  return (
+    <Pressable
+      accessibilityLabel={t('share.share')}
+      hitSlop={8}
+      onPress={onPress}
+      style={({ pressed }) => [
+        variant === 'overlay' ? styles.overlay : styles.header,
+        pressed && styles.pressed,
+        style,
+      ]}>
+      <ShareIcon size={variant === 'overlay' ? 18 : 20} color={color ?? (variant === 'overlay' ? '#F7F8FA' : '#1E1A16')} />
+    </Pressable>
+  );
+};
 
 // Title bar button of the match detail page: shares the whole match.
 export const MatchShareHeaderButton = ({ matchId }: { matchId: number }) => {

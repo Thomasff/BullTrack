@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { colors } from '../theme/colors';
 import { PrimaryButton } from './PrimaryButton';
 import { SecondaryButton } from './SecondaryButton';
@@ -22,6 +23,7 @@ type Step = 'edit' | 'confirmMerge' | 'confirmDelete';
 
 // Rename a player (merging into an existing name on request) or delete them.
 export const PlayerEditDialog = ({ player, onClose, onChanged }: PlayerEditDialogProps) => {
+  const { t } = useTranslation();
   const [step, setStep] = useState<Step>('edit');
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +43,7 @@ export const PlayerEditDialog = ({ player, onClose, onChanged }: PlayerEditDialo
     action()
       .catch(() => {
         setStep('edit');
-        setError('保存失败，请重试');
+        setError(t('setup.playerEdit.saveFailed'));
       })
       .finally(() => setBusy(false));
   };
@@ -51,11 +53,12 @@ export const PlayerEditDialog = ({ player, onClose, onChanged }: PlayerEditDialo
       return;
     }
     if (!trimmed) {
-      setError('名字不能为空');
+      setError(t('setup.playerEdit.nameEmpty'));
       return;
     }
+    // Rejects default names in either language ("玩家 2", "Player 2").
     if (isDefaultPlayerName(trimmed)) {
-      setError('「玩家 N」是没填名字时的默认名，请换一个');
+      setError(t('setup.playerEdit.nameReserved'));
       return;
     }
     if (trimmed === player.name) {
@@ -81,7 +84,7 @@ export const PlayerEditDialog = ({ player, onClose, onChanged }: PlayerEditDialo
       const result = await mergePlayerInto(player.playerId, trimmed);
       if (result === 'sharedMatch') {
         setStep('edit');
-        setError(`「${player.name}」和「${trimmed}」在同一场比赛里出现过，不能合并`);
+        setError(t('setup.playerEdit.mergeConflict', { from: player.name, to: trimmed }));
       } else {
         onChanged('merged');
       }
@@ -102,16 +105,20 @@ export const PlayerEditDialog = ({ player, onClose, onChanged }: PlayerEditDialo
     if (step === 'confirmMerge') {
       return (
         <>
-          <Text style={styles.title}>合并玩家</Text>
+          <Text style={styles.title}>{t('setup.playerEdit.mergeTitle')}</Text>
           <Text style={styles.message}>
-            「{trimmed}」已经存在。合并后「{player?.name}」的比赛和统计都算到「{trimmed}」名下，无法撤销。
+            {t('setup.playerEdit.mergeMessage', { to: trimmed, from: player?.name ?? '' })}
           </Text>
           <View style={styles.actions}>
             <View style={styles.action}>
-              <SecondaryButton label="返回" disabled={busy} onPress={() => setStep('edit')} />
+              <SecondaryButton
+                label={t('common.back')}
+                disabled={busy}
+                onPress={() => setStep('edit')}
+              />
             </View>
             <View style={styles.action}>
-              <PrimaryButton label="合并" disabled={busy} onPress={merge} />
+              <PrimaryButton label={t('setup.playerEdit.merge')} disabled={busy} onPress={merge} />
             </View>
           </View>
         </>
@@ -120,16 +127,20 @@ export const PlayerEditDialog = ({ player, onClose, onChanged }: PlayerEditDialo
     if (step === 'confirmDelete') {
       return (
         <>
-          <Text style={styles.title}>删除玩家</Text>
+          <Text style={styles.title}>{t('setup.playerEdit.deleteTitle')}</Text>
           <Text style={styles.message}>
-            「{player?.name}」会从统计和历史玩家中去掉，打过的比赛保留。以后再用这个名字打完一局会重新出现。
+            {t('setup.playerEdit.deleteMessage', { name: player?.name ?? '' })}
           </Text>
           <View style={styles.actions}>
             <View style={styles.action}>
-              <SecondaryButton label="返回" disabled={busy} onPress={() => setStep('edit')} />
+              <SecondaryButton
+                label={t('common.back')}
+                disabled={busy}
+                onPress={() => setStep('edit')}
+              />
             </View>
             <View style={styles.action}>
-              <PrimaryButton label="删除" danger disabled={busy} onPress={remove} />
+              <PrimaryButton label={t('common.delete')} danger disabled={busy} onPress={remove} />
             </View>
           </View>
         </>
@@ -137,7 +148,7 @@ export const PlayerEditDialog = ({ player, onClose, onChanged }: PlayerEditDialo
     }
     return (
       <>
-        <Text style={styles.title}>编辑玩家</Text>
+        <Text style={styles.title}>{t('setup.playerEdit.editTitle')}</Text>
         <TextInput
           value={name}
           onChangeText={value => {
@@ -145,17 +156,17 @@ export const PlayerEditDialog = ({ player, onClose, onChanged }: PlayerEditDialo
             setError(null);
           }}
           maxLength={16}
-          placeholder="名字"
+          placeholder={t('setup.playerEdit.namePlaceholder')}
           placeholderTextColor={colors.textSecondary}
           style={styles.input}
         />
         {error ? <Text style={styles.error}>{error}</Text> : null}
         <View style={styles.actions}>
           <View style={styles.action}>
-            <SecondaryButton label="取消" disabled={busy} onPress={onClose} />
+            <SecondaryButton label={t('common.cancel')} disabled={busy} onPress={onClose} />
           </View>
           <View style={styles.action}>
-            <PrimaryButton label="保存" disabled={busy} onPress={save} />
+            <PrimaryButton label={t('common.save')} disabled={busy} onPress={save} />
           </View>
         </View>
         <Pressable
@@ -166,7 +177,7 @@ export const PlayerEditDialog = ({ player, onClose, onChanged }: PlayerEditDialo
             setStep('confirmDelete');
           }}
           style={styles.deleteLink}>
-          <Text style={styles.deleteLabel}>删除这个玩家</Text>
+          <Text style={styles.deleteLabel}>{t('setup.playerEdit.deletePlayer')}</Text>
         </Pressable>
       </>
     );

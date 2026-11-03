@@ -13,9 +13,18 @@ import { useLiveFrameStore } from '../stores/liveFrameStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { createGameEngine, getGameEngine, resetGameEngine } from './gameRules';
 import { deleteMatch, saveCompletedMatch } from './historyRepository';
-import { toFriendlyErrorText } from './nativeErrorText';
+import { pruneRoundPhotos } from './shareService';
+import { isPlacementError, toFriendlyErrorText, toNativeErrorDebugText } from './nativeErrorText';
+import { toCameraStatusText, toNativeStatusText } from './nativeStatusText';
 import { getEngineSides } from '../../domain/game/teams';
-import type { SoundCue } from '../../native-bridge/bulltrack/types';
+import { t } from '../../i18n';
+import type {
+  CameraReadyState,
+  NativeErrorEvent,
+  RoundStateChangedEvent,
+  SoundCue,
+  ThrowsUpdatedEvent,
+} from '../../native-bridge/bulltrack/types';
 import type {
   CameraStatus,
   GameType,
@@ -58,13 +67,23 @@ const cueForNewThrows = (newThrows: ThrowResult[]): SoundCue => {
   }
 };
 
-// The algorithm expects the phone front-left of the board, shooting at an angle: dart tails
-// then stick out to the right, where the search area has room. Native refuses a round shot from
-// right of the board's centre (ratio below 1); up to this ratio it is close to a front view.
-const LEFT_SIDE_MIN_RATIO = 1.04;
+// The algorithm expects the phone front left or front right of the board, shooting at an angle;
+// native finds the side from the ratio. Within this ratio of 1 either way it is close to a front
+// view.
+const SIDE_VIEW_MIN_RATIO = 1.04;
 // Board height over the side of the square the model sees. Native refuses under 0.55 and over
 // 0.9 (the training range); up to this share the board is a little small.
 const BOARD_SHARE_HINT = 0.6;
+
+const isFrontView = (leftRightHalfRatio: number) =>
+  leftRightHalfRatio > 0 &&
+  Math.max(leftRightHalfRatio, 1 / leftRightHalfRatio) < SIDE_VIEW_MIN_RATIO;
+const isSmallBoard = (boardHeightShare: number) =>
+  boardHeightShare > 0 && boardHeightShare < BOARD_SHARE_HINT;
+
+// Whether describeBoardSetup has advice on where the phone stands (not just darts left on the board).
+export const boardSetupAboutPlacement = (leftRightHalfRatio: number, boardHeightShare = 0) =>
+  isFrontView(leftRightHalfRatio) || isSmallBoard(boardHeightShare);
 
 // What the first frame says about the setup; the round runs either way. leftRightHalfRatio is
 // the board's left half over its right half in the image (0 when unknown). The dart count is
@@ -76,16 +95,25 @@ export const describeBoardSetup = (
 ): string | null => {
   const hints: string[] = [];
   if (startDartCount > 0) {
-    hints.push('开局时靶上还有镖，识别可能不准，下次请先拔镖再开始');
+    hints.push(t('native.session.dartsLeftHint'));
   }
-  if (leftRightHalfRatio > 0 && leftRightHalfRatio < LEFT_SIDE_MIN_RATIO) {
-    hints.push('手机几乎正对靶盘，建议放到靶的左前方斜拍，识别更稳');
+  if (isFrontView(leftRightHalfRatio)) {
+    hints.push(t('native.session.frontViewHint'));
   }
-  if (boardHeightShare > 0 && boardHeightShare < BOARD_SHARE_HINT) {
-    hints.push('画面里的靶子偏小，靠近一点或放大画面识别更准');
+  if (isSmallBoard(boardHeightShare)) {
+    hints.push(t('native.session.smallBoardHint'));
   }
-  return hints.length > 0 ? hints.join('；') : null;
+  return hints.length > 0 ? hints.join(t('native.session.hintSeparator')) : null;
 };
+
+// Camera status from native: the round controller's messages are codes.
+const toCameraStatus = (status: Partial<CameraReadyState>): Partial<CameraStatus> => ({
+  ...status,
+  ...(status.statusMessage !== undefined
+    ? { statusMessage: toCameraStatusText(status.statusMessage) }
+    : {}),
+  ...(status.lockReason ? { lockReason: toCameraStatusText(status.lockReason) } : {}),
+});
 
 const applyRoundResult = (throws: ThrowResult[]) => {
   const engine = getGameEngine();
@@ -107,8 +135,10 @@ const applyRoundResult = (throws: ThrowResult[]) => {
     useGameStore.getState().setWinner(
       winnerId,
       winnerId
-        ? `${scoreBoard.players.find(player => player.id === winnerId)?.name ?? 'Player'} 获胜`
-        : '比赛结束',
+        ? t('native.session.winner', {
+            name: scoreBoard.players.find(player => player.id === winnerId)?.name ?? 'Player',
+          })
+        : t('native.session.gameOver'),
     );
     return { result, isGameOver, winnerId };
   }
@@ -125,24 +155,15 @@ export const ensureBullTrackSubscriptions = () => {
 
   subscriptions = [
     eventEmitter.addListener('onCameraStatusChanged', payload => {
-      useGameStore.getState().setCameraStatus(payload as Partial<CameraStatus>);
+      useGameStore.getState().setCameraStatus(toCameraStatus(payload as Partial<CameraReadyState>));
     }),
     eventEmitter.addListener('onRoundStateChanged', payload => {
-      const event = payload as {
-        roundId?: string | null;
-        phase: 'starting' | 'capturing' | 'showingResult' | 'finished';
-        statusMessage: string;
-        throws?: ThrowResult[];
-        canRedetect?: boolean;
-        // Only on 'capturing'.
-        startDartCount?: number;
-        leftRightHalfRatio?: number;
-        boardHeightShare?: number;
-      };
+      const event = payload as RoundStateChangedEvent;
+      const statusMessage = toNativeStatusText(event.statusCode, event.statusParams);
 
       if (event.phase === 'starting') {
         useLiveFrameStore.getState().clear();
-        useGameStore.setState({ setupHint: null });
+        useGameStore.setState({ setupHint: null, setupHintAboutPlacement: false });
       }
       if (event.phase === 'capturing') {
         playSoundCue('ready');
@@ -152,13 +173,17 @@ export const ensureBullTrackSubscriptions = () => {
             event.leftRightHalfRatio ?? 0,
             event.boardHeightShare ?? 0,
           ),
+          setupHintAboutPlacement: boardSetupAboutPlacement(
+            event.leftRightHalfRatio ?? 0,
+            event.boardHeightShare ?? 0,
+          ),
         });
       }
       if (event.phase === 'starting' || event.phase === 'capturing') {
         useGameStore.getState().setRoundState({
           roundId: event.roundId ?? null,
           status: 'roundInProgress',
-          statusMessage: event.statusMessage,
+          statusMessage,
           currentThrows: event.throws ?? [],
           canRedetect: false,
           errorMessage: null,
@@ -168,7 +193,7 @@ export const ensureBullTrackSubscriptions = () => {
         useGameStore.getState().setRoundState({
           roundId: event.roundId ?? null,
           status: 'showingResult',
-          statusMessage: event.statusMessage,
+          statusMessage,
           currentThrows: event.throws ?? [],
           canRedetect: event.canRedetect ?? true,
           errorMessage: null,
@@ -178,19 +203,14 @@ export const ensureBullTrackSubscriptions = () => {
         useGameStore.getState().setRoundState({
           roundId: event.roundId ?? null,
           status: 'waitingForThrow',
-          statusMessage: event.statusMessage,
+          statusMessage,
           currentThrows: event.throws ?? [],
           canRedetect: false,
         });
       }
     }),
     eventEmitter.addListener('onThrowsUpdated', payload => {
-      const event = payload as {
-        roundId: string;
-        throws: ThrowResult[];
-        statusMessage: string;
-        canRedetect: boolean;
-      };
+      const event = payload as ThrowsUpdatedEvent;
       const previous = useGameStore.getState();
       // Only a dart newly found during live capture, not the final/redetect result.
       if (
@@ -203,7 +223,7 @@ export const ensureBullTrackSubscriptions = () => {
       useGameStore.getState().setRoundState({
         roundId: event.roundId,
         status: event.canRedetect ? 'showingResult' : 'roundInProgress',
-        statusMessage: event.statusMessage,
+        statusMessage: toNativeStatusText(event.statusCode, event.statusParams),
         currentThrows: event.throws,
         canRedetect: event.canRedetect,
         errorMessage: null,
@@ -217,17 +237,16 @@ export const ensureBullTrackSubscriptions = () => {
       }
     }),
     eventEmitter.addListener('onNativeError', payload => {
-      const event = payload as {
-        message: string;
-      };
+      const event = payload as NativeErrorEvent;
       // A failed live round (e.g. board not found) leaves the player waiting at the board.
       if (useGameStore.getState().status === 'roundInProgress') {
         playSoundCue('error');
       }
       // Status transitions come from onRoundStateChanged; only surface the error here.
-      useVisionDebugStore.getState().setLastNativeError(event.message);
+      useVisionDebugStore.getState().setLastNativeError(toNativeErrorDebugText(event.message));
       useGameStore.getState().setRoundState({
         errorMessage: toFriendlyErrorText(event.message),
+        errorAboutPlacement: isPlacementError(event.message),
       });
     }),
   ];
@@ -271,6 +290,8 @@ export const startGameSession = (
   const engine = createGameEngine(mode, getEngineSides(players, teams), gameSeed);
   useGameStore.getState().setCurrentPlayer(engine.getCurrentPlayerId());
   useGameStore.getState().setScoreBoard(engine.getScoreBoard());
+  // The new game has no photos yet; games left before the end lose theirs here.
+  pruneRoundPhotos().catch(() => undefined);
 };
 
 export const prepareLiveCamera = async () => {
@@ -279,7 +300,7 @@ export const prepareLiveCamera = async () => {
     isReady: false,
     isPreviewBound: false,
     zoomRatio: useSettingsStore.getState().zoomRatio,
-    statusMessage: '等待原生预览初始化',
+    statusMessage: t('native.session.waitingPreview'),
     lockPhase: 'IDLE',
     lockReason: null,
   });
@@ -289,7 +310,7 @@ export const prepareLiveCamera = async () => {
 
 export const updateLiveZoomRatio = async (zoomRatio: number) => {
   const readyState = await bullTrackNativeBridge.setZoomRatio(zoomRatio);
-  useGameStore.getState().setCameraStatus(readyState);
+  useGameStore.getState().setCameraStatus(toCameraStatus(readyState));
 };
 
 export const startLiveRound = async () => {
@@ -387,8 +408,8 @@ export const confirmCurrentRound = async () => {
       useGameStore.setState({
         errorMessage:
           error instanceof Error
-            ? `保存历史失败: ${error.message}`
-            : '保存历史失败',
+            ? t('native.session.saveHistoryFailedDetail', { error: error.message })
+            : t('native.session.saveHistoryFailed'),
       });
     }
     return;
@@ -434,7 +455,7 @@ export const undoLastRound = async () => {
     savedMatchId: null,
     roundId: null,
     status: 'showingResult',
-    statusMessage: '已撤销上一轮，可修改后重新确认',
+    statusMessage: t('native.session.roundUndone'),
     currentThrows: lastRound.throws,
     currentThrowNumber: lastRound.throws.length,
     currentRoundResult: null,

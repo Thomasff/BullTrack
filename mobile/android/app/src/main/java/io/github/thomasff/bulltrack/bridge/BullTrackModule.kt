@@ -121,41 +121,45 @@ class BullTrackModule(
         }
     }
 
+    override fun deleteDebugFiles(promise: Promise) {
+        resolveSuspendPromise(promise) {
+            withContext(Dispatchers.IO) { controller.deleteDebugFiles() }
+            true
+        }
+    }
+
     // Zips the round off the main thread, then opens the system share sheet for the bundle.
-    override fun shareDebugRound(roundId: String, promise: Promise) {
+    // The share sheet titles come from RN, in the app language.
+    override fun shareDebugRound(roundId: String, title: String, promise: Promise) {
         resolveSuspendPromise(promise) {
             val activity = reactApplicationContext.currentActivity ?: error("No activity to share from")
             val bundle = withContext(Dispatchers.IO) { controller.exportDebugRound(roundId) }
-            shareFile(activity, bundle, "application/zip", "分享调试包")
+            shareFile(activity, bundle, "application/zip", title)
             bundle.name
         }
     }
 
     // Writes the text (e.g. a history backup) to the export cache and opens the share sheet.
-    override fun shareTextFile(fileName: String, content: String, promise: Promise) {
+    override fun shareTextFile(fileName: String, content: String, title: String, promise: Promise) {
         resolveSuspendPromise(promise) {
             val activity = reactApplicationContext.currentActivity ?: error("No activity to share from")
             val file = withContext(Dispatchers.IO) {
-                val exportDir = File(reactApplicationContext.cacheDir, BullTrackArtifactStore.EXPORT_DIR_NAME)
-                exportDir.mkdirs()
-                File(exportDir, File(fileName).name).apply { writeText(content) }
+                File(freshExportDir(), File(fileName).name).apply { writeText(content) }
             }
-            shareFile(activity, file, "application/json", "分享备份")
+            shareFile(activity, file, "application/json", title)
             file.name
         }
     }
 
     // Copies a captured share card (a file uri from react-native-view-shot) to the export cache
     // under its share name and opens the share sheet; the text goes along for apps that take one.
-    override fun shareImage(uri: String, fileName: String, text: String, promise: Promise) {
+    override fun shareImage(uri: String, fileName: String, text: String, title: String, promise: Promise) {
         resolveSuspendPromise(promise) {
             val activity = reactApplicationContext.currentActivity ?: error("No activity to share from")
             val file = withContext(Dispatchers.IO) {
-                val exportDir = File(reactApplicationContext.cacheDir, BullTrackArtifactStore.EXPORT_DIR_NAME)
-                exportDir.mkdirs()
-                capturedFile(uri).copyTo(File(exportDir, File(fileName).name), overwrite = true)
+                capturedFile(uri).copyTo(File(freshExportDir(), File(fileName).name), overwrite = true)
             }
-            shareFile(activity, file, "image/png", "分享图片", text.ifEmpty { null })
+            shareFile(activity, file, "image/png", title, text.ifEmpty { null })
             file.name
         }
     }
@@ -317,6 +321,13 @@ class BullTrackModule(
             }
         }
     }
+
+    // The export cache keeps only the newest shared file; older ones were already shared or abandoned.
+    private fun freshExportDir(): File =
+        File(reactApplicationContext.cacheDir, BullTrackArtifactStore.EXPORT_DIR_NAME).apply {
+            deleteRecursively()
+            mkdirs()
+        }
 
     private fun roundPhotoDir(target: String) =
         if (target == "current") {

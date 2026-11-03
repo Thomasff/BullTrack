@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { colors } from '../theme/colors';
 import {
   BOARD_SECTORS,
@@ -18,16 +19,17 @@ interface ThrowEditorProps {
   onSave: (throwResult: ThrowResult) => void;
 }
 
-const multiplierOptions: Array<{ value: Multiplier; label: string }> = [
-  { value: 'single', label: '单倍' },
-  { value: 'double', label: '双倍' },
-  { value: 'triple', label: '三倍' },
+const multiplierOptions: Array<{ value: Multiplier; labelKey: `game.editor.${Multiplier}` }> = [
+  { value: 'single', labelKey: 'game.editor.single' },
+  { value: 'double', labelKey: 'game.editor.double' },
+  { value: 'triple', labelKey: 'game.editor.triple' },
 ];
 
 const toMultiplier = (ring: ThrowRing | undefined): Multiplier =>
   ring === 'double' || ring === 'triple' ? ring : 'single';
 
 export const ThrowEditor = ({ visible, initialThrow, onCancel, onSave }: ThrowEditorProps) => {
+  const { t } = useTranslation();
   const [multiplier, setMultiplier] = useState<Multiplier>('single');
 
   useEffect(() => {
@@ -50,7 +52,7 @@ export const ThrowEditor = ({ visible, initialThrow, onCancel, onSave }: ThrowEd
       onRequestClose={onCancel}>
       <Pressable style={styles.backdrop} onPress={onCancel}>
         <Pressable style={styles.sheet} onPress={() => undefined}>
-          <Text style={styles.title}>修改这一镖</Text>
+          <Text style={styles.title}>{t('game.editor.title')}</Text>
           <View style={styles.segment}>
             {multiplierOptions.map(option => (
               <Pressable
@@ -62,7 +64,7 @@ export const ThrowEditor = ({ visible, initialThrow, onCancel, onSave }: ThrowEd
                     styles.segmentLabel,
                     multiplier === option.value && styles.segmentLabelActive,
                   ]}>
-                  {option.label}
+                  {t(option.labelKey)}
                 </Text>
               </Pressable>
             ))}
@@ -83,17 +85,17 @@ export const ThrowEditor = ({ visible, initialThrow, onCancel, onSave }: ThrowEd
           </View>
           <View style={styles.specialRow}>
             <Pressable style={styles.special} onPress={() => save('outerBull')}>
-              <Text style={styles.cellLabel}>外牛 25</Text>
+              <Text style={styles.cellLabel}>{t('game.editor.outerBull')}</Text>
             </Pressable>
             <Pressable style={styles.special} onPress={() => save('innerBull')}>
-              <Text style={styles.cellLabel}>内牛 50</Text>
+              <Text style={styles.cellLabel}>{t('game.editor.innerBull')}</Text>
             </Pressable>
             <Pressable style={styles.special} onPress={() => save('miss')}>
-              <Text style={styles.cellLabel}>脱靶</Text>
+              <Text style={styles.cellLabel}>{t('common.miss')}</Text>
             </Pressable>
           </View>
           <Pressable style={styles.cancel} onPress={onCancel}>
-            <Text style={styles.cancelLabel}>取消</Text>
+            <Text style={styles.cancelLabel}>{t('common.cancel')}</Text>
           </Pressable>
         </Pressable>
       </Pressable>

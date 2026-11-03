@@ -15,13 +15,13 @@ namespace bulltrack {
 namespace {
 
 std::pair<cv::Mat, cv::Mat> LoadImages(const std::string& img_before_path, const std::string& img_after_path) {
-    if (!std::filesystem::exists(img_before_path)) throw std::runtime_error("未找到图片: " + img_before_path);
-    if (!std::filesystem::exists(img_after_path)) throw std::runtime_error("未找到图片: " + img_after_path);
+    if (!std::filesystem::exists(img_before_path)) throw std::runtime_error("image_not_found: " + img_before_path);
+    if (!std::filesystem::exists(img_after_path)) throw std::runtime_error("image_not_found: " + img_after_path);
 
     cv::Mat img_before = cv::imread(img_before_path);
     cv::Mat img_after = cv::imread(img_after_path);
-    if (img_before.empty()) throw std::runtime_error("无法读取图片: " + img_before_path);
-    if (img_after.empty()) throw std::runtime_error("无法读取图片: " + img_after_path);
+    if (img_before.empty()) throw std::runtime_error("image_read_failed: " + img_before_path);
+    if (img_after.empty()) throw std::runtime_error("image_read_failed: " + img_after_path);
     return {img_before, img_after};
 }
 
@@ -38,7 +38,7 @@ PipelineContext PreparePipelineContext(const std::string& img_before_path, const
     cv::Mat after_view = EnhanceWarpedImage(img_after, config.enhancement.saturation_scale, config.enhancement.contrast_scale);
 
     BoardCircle board_circle = DetectBoardCircle(before_view, config.edge, config.circle, debug);
-    std::cout << "靶盘圆心: (" << board_circle.cx << ", " << board_circle.cy << "), 半径: " << board_circle.radius << "\n";
+    std::cout << "Board centre: (" << board_circle.cx << ", " << board_circle.cy << "), radius: " << board_circle.radius << "\n";
 
     TwoStageAlignmentResult alignment = AlignAfterImageTwoStage(before_view, after_view, board_circle.cx, board_circle.cy, board_circle.radius, debug, config.dart.preprocess_blur_kernel, 2);
     cv::Mat after_view_aligned = WarpImageWithMatrix(after_view, alignment.warp_combined, "affine", before_view.size());
@@ -84,12 +84,12 @@ std::vector<cv::Point2f> DetectDartPosition(const std::string& img_before_path, 
     PipelineContext context = PreparePipelineContext(img_before_path, img_after_path, config, debug);
     std::vector<cv::Point> tip_points = DetectDartPointsFromGrayImages(context.alignment.before_gray_final, context.alignment.after_gray_final, context.board_circle.cx, context.board_circle.cy, context.board_circle.radius, context.dart_config, debug);
 
-    std::cout << "检测到 " << tip_points.size() << " 支飞镖\n";
+    std::cout << "Detected " << tip_points.size() << " dart(s)\n";
     std::vector<cv::Point2f> normalized_positions;
     for (size_t i = 0; i < tip_points.size(); ++i) {
         cv::Point2f normalized = NormalizePoint(tip_points[i].x, tip_points[i].y, context.board_circle.cx, context.board_circle.cy, context.board_circle.radius);
         normalized_positions.push_back(normalized);
-        std::cout << "飞镖" << (i + 1) << "尖端: (" << tip_points[i].x << ", " << tip_points[i].y << "), 标准化坐标: (" << normalized.x << ", " << normalized.y << ")\n";
+        std::cout << "Dart " << (i + 1) << " tip: (" << tip_points[i].x << ", " << tip_points[i].y << "), normalized: (" << normalized.x << ", " << normalized.y << ")\n";
     }
 
     DrawResultVisualization(context.after_view_aligned, context.board_circle, tip_points, normalized_positions);

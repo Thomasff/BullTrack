@@ -36,12 +36,14 @@ const nativeBridge: BullTrackNativeBridge | null = bullTrackNativeModule
         bullTrackNativeModule.loadDebugArtifacts(roundId) as Promise<any>,
       listDebugRounds: async () =>
         bullTrackNativeModule.listDebugRounds() as Promise<DebugRoundSummary[]>,
-      shareDebugRound: async (roundId: string) => bullTrackNativeModule.shareDebugRound(roundId),
-      shareTextFile: async (fileName: string, content: string) =>
-        bullTrackNativeModule.shareTextFile(fileName, content),
+      shareDebugRound: async (roundId: string, title: string) =>
+        bullTrackNativeModule.shareDebugRound(roundId, title),
+      deleteDebugFiles: async () => bullTrackNativeModule.deleteDebugFiles(),
+      shareTextFile: async (fileName: string, content: string, title: string) =>
+        bullTrackNativeModule.shareTextFile(fileName, content, title),
       pickTextFile: async () => bullTrackNativeModule.pickTextFile(),
-      shareImage: async (uri: string, fileName: string, text: string) =>
-        bullTrackNativeModule.shareImage(uri, fileName, text),
+      shareImage: async (uri: string, fileName: string, text: string, title: string) =>
+        bullTrackNativeModule.shareImage(uri, fileName, text, title),
       saveImageToGallery: async (uri: string, fileName: string) =>
         bullTrackNativeModule.saveImageToGallery(uri, fileName),
       saveRoundPhotos: async (target: 'current' | 'highlight', name: string) =>

@@ -28,4 +28,6 @@ export interface PrepBoardDetection {
   boardTop?: number;
   boardWidth?: number;
   boardHeight?: number;
+  // Tips of darts still in the board, frame pixels.
+  dartTips?: { x: number; y: number }[];
 }

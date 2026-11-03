@@ -195,6 +195,8 @@ struct PrepBoardGuide {
     // The part of the frame the model saw, and the board box in it (frame coordinates).
     cv::Rect band;
     std::optional<cv::Rect> board_box;
+    // Tips of darts still in the board (frame coordinates), so the player pulls them first.
+    std::vector<cv::Point> dart_tips;
 };
 
 // The model sees a band through the frame centre as wide as the frame and 1400/1080 of that

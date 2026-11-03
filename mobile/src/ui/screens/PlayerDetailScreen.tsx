@@ -10,6 +10,8 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import type {
   NativeStackNavigationProp,
   NativeStackScreenProps,
@@ -40,6 +42,8 @@ import type { StatsRange } from '../../domain/share/statsCards';
 import { ShareButton } from '../components/ShareButton';
 import { formatDart } from './MatchDetailScreen';
 import { formatMatchTime } from './MatchListScreen';
+import { displayPlayerName } from '../../domain/game/players';
+import { modeDisplayName } from '../../i18n';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PlayerDetail'>;
 
@@ -53,10 +57,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export const RECENT_DAYS = 30;
 
 export type { StatsRange };
-const RANGE_OPTIONS: Array<{ key: StatsRange; label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'recent', label: `近 ${RECENT_DAYS} 天` },
-];
+const RANGE_KEYS: StatsRange[] = ['all', 'recent'];
 
 // The since argument of the stats queries for a range.
 export const rangeStart = (range: StatsRange) =>
@@ -74,21 +75,24 @@ export const RangeSwitch = ({
 }: {
   range: StatsRange;
   onChange: (range: StatsRange) => void;
-}) => (
-  <View style={styles.rangeSwitch}>
-    {RANGE_OPTIONS.map(option => (
-      <Pressable
-        key={option.key}
-        hitSlop={4}
-        onPress={() => onChange(option.key)}
-        style={[styles.rangeOption, range === option.key && styles.rangeOptionActive]}>
-        <Text style={[styles.rangeLabel, range === option.key && styles.rangeLabelActive]}>
-          {option.label}
-        </Text>
-      </Pressable>
-    ))}
-  </View>
-);
+}) => {
+  const { t } = useTranslation();
+  return (
+    <View style={styles.rangeSwitch}>
+      {RANGE_KEYS.map(key => (
+        <Pressable
+          key={key}
+          hitSlop={4}
+          onPress={() => onChange(key)}
+          style={[styles.rangeOption, range === key && styles.rangeOptionActive]}>
+          <Text style={[styles.rangeLabel, range === key && styles.rangeLabelActive]}>
+            {key === 'all' ? t('stats.rangeAll') : t('stats.rangeRecent', { days: RECENT_DAYS })}
+          </Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+};
 const HIT_MAP_MAX_SIZE = 320;
 const TOP_SEGMENTS = 3;
 const RECENT_MATCHES = 5;
@@ -100,54 +104,54 @@ const formatDay = (createdAt: number) => {
 
 const formatPercent = (share: number) => `${Math.round(share * 100)}%`;
 
-const modeTitle = (stats: PlayerModeStats) => stats.modeLabel ?? stats.mode;
+const modeTitle = (stats: PlayerModeStats) => modeDisplayName(stats.mode, stats.modeLabel);
 
 // Tiles for the figures a mode has besides X01 (which has its own block).
-const modeTiles = (stats: PlayerModeStats) => {
+const modeTiles = (stats: PlayerModeStats, t: TFunction) => {
   const tiles: Array<{ label: string; value: string }> = [
-    { label: '场次', value: `${stats.matchesPlayed}` },
-    { label: '胜率', value: formatRate(stats.wins, stats.matchesPlayed) },
+    { label: t('stats.figures.matches'), value: `${stats.matchesPlayed}` },
+    { label: t('stats.figures.winRate'), value: formatRate(stats.wins, stats.matchesPlayed) },
   ];
   if (stats.bestScore !== null) {
-    tiles.push({ label: '最好成绩', value: `${stats.bestScore}` });
+    tiles.push({ label: t('stats.figures.bestScore'), value: `${stats.bestScore}` });
   }
   if (stats.averageScore !== null) {
-    tiles.push({ label: '平均成绩', value: stats.averageScore.toFixed(1) });
+    tiles.push({ label: t('stats.figures.averageScore'), value: stats.averageScore.toFixed(1) });
   }
   if (stats.cricket) {
     tiles.push(
-      { label: 'MPR（每轮记次）', value: stats.cricket.mpr.toFixed(2) },
-      { label: '前 9 镖 MPR', value: stats.cricket.first9Mpr.toFixed(2) },
+      { label: t('stats.figures.mpr'), value: stats.cricket.mpr.toFixed(2) },
+      { label: t('stats.figures.first9Mpr'), value: stats.cricket.first9Mpr.toFixed(2) },
     );
   }
   if (stats.rounds) {
     tiles.push(
-      { label: '每轮平均分', value: stats.rounds.average.toFixed(1) },
-      { label: '最高单轮', value: `${stats.rounds.best}` },
+      { label: t('stats.figures.roundAverage'), value: stats.rounds.average.toFixed(1) },
+      { label: t('stats.figures.bestRound'), value: `${stats.rounds.best}` },
     );
   }
   if (stats.darts99) {
     tiles.push(
-      { label: '命中 20 区', value: formatPercent(stats.darts99.hitRate) },
-      { label: '三倍 20', value: formatPercent(stats.darts99.tripleRate) },
-      { label: '双倍 20', value: formatPercent(stats.darts99.doubleRate) },
+      { label: t('stats.figures.hit20'), value: formatPercent(stats.darts99.hitRate) },
+      { label: t('stats.figures.treble20'), value: formatPercent(stats.darts99.tripleRate) },
+      { label: t('stats.figures.double20'), value: formatPercent(stats.darts99.doubleRate) },
     );
   }
   if (stats.aroundTheClock) {
     const finish = stats.aroundTheClock.dartsToFinish;
     tiles.push(
-      { label: '命中当前目标', value: formatPercent(stats.aroundTheClock.hitRate) },
-      { label: '最少用镖', value: finish ? `${finish.best}` : '—' },
-      { label: '平均用镖', value: finish ? finish.average.toFixed(1) : '—' },
+      { label: t('stats.figures.targetHit'), value: formatPercent(stats.aroundTheClock.hitRate) },
+      { label: t('stats.figures.fewestDarts'), value: finish ? `${finish.best}` : '—' },
+      { label: t('stats.figures.averageDarts'), value: finish ? finish.average.toFixed(1) : '—' },
     );
   }
   if (stats.targetRounds) {
-    tiles.push({ label: '命中本轮目标', value: formatPercent(stats.targetRounds.hitRate) });
+    tiles.push({ label: t('stats.figures.roundTargetHit'), value: formatPercent(stats.targetRounds.hitRate) });
     if (stats.mode === 'shanghai') {
-      tiles.push({ label: 'Shanghai 次数', value: `${stats.targetRounds.shanghais}` });
+      tiles.push({ label: t('stats.figures.shanghais'), value: `${stats.targetRounds.shanghais}` });
     } else {
       tiles.push({
-        label: '每局被减半次数',
+        label: t('stats.figures.halvedPerMatch'),
         value: stats.targetRounds.halvedPerMatch.toFixed(1),
       });
     }
@@ -156,11 +160,15 @@ const modeTiles = (stats: PlayerModeStats) => {
     const drill = stats.checkoutDrill;
     tiles.push(
       {
-        label: `收掉的数（${drill.finished}/${drill.attempted}）`,
+        label: t('stats.figureWithCount', {
+          label: t('stats.figures.finishes'),
+          hits: drill.finished,
+          attempts: drill.attempted,
+        }),
         value: formatRate(drill.finished, drill.attempted),
       },
       {
-        label: '收掉时平均用镖',
+        label: t('stats.figures.dartsPerFinish'),
         value: drill.averageDarts !== null ? drill.averageDarts.toFixed(1) : '—',
       },
     );
@@ -168,41 +176,42 @@ const modeTiles = (stats: PlayerModeStats) => {
   return tiles;
 };
 
-const trendTitle = (stats: PlayerModeStats) => {
+const trendTitle = (stats: PlayerModeStats, t: TFunction) => {
   if (stats.x01) {
-    return '均分';
+    return t('stats.trendTitle.average');
   }
   if (stats.cricket) {
     return 'MPR';
   }
-  return stats.mode === 'aroundTheClock' ? '用镖（胜局）' : '得分';
+  return stats.mode === 'aroundTheClock' ? t('stats.trendTitle.darts') : t('stats.trendTitle.score');
 };
 
 const formatTrendValue = (value: number) =>
   value < 10 ? value.toFixed(1) : `${Math.round(value)}`;
 
-const formatMatchResult = (match: PlayerModeMatch) => {
+const formatMatchResult = (match: PlayerModeMatch, t: TFunction) => {
   if (match.score !== null) {
-    return `${match.score} 分`;
+    return t('stats.scorePoints', { score: match.score });
   }
-  return match.average !== null ? `均分 ${match.average.toFixed(1)}` : '';
+  return match.average !== null ? t('stats.averageResult', { average: match.average.toFixed(1) }) : '';
 };
 
-const modeNote = (stats: PlayerModeStats) => {
+const modeNote = (stats: PlayerModeStats, t: TFunction) => {
   if (stats.x01) {
-    return 'X01 均分按每镖实际得分算，爆镖轮也计入。收镖成功率：剩下的分一镖就能收（2–40 的双数或 50）时投出的镖里，收镖成功的比例。用镖只算个人赛的胜局。';
+    return t('stats.notes.x01');
   }
   if (stats.aroundTheClock || stats.checkoutDrill) {
-    return '只算个人赛。';
+    return t('stats.notes.soloOnly');
   }
   if (stats.bestScore !== null) {
-    return '最好、平均成绩和走势只算个人赛。';
+    return t('stats.notes.scoreSoloOnly');
   }
   return null;
 };
 
 // The days as a line, uncovered from left to right each time the chart is shown.
 const TrendLine = ({ points }: { points: PlayerTrendPoint[] }) => {
+  const { t } = useTranslation();
   const [width, setWidth] = useState(0);
   const reveal = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -231,8 +240,11 @@ const TrendLine = ({ points }: { points: PlayerTrendPoint[] }) => {
   return (
     <View style={[styles.card, styles.trend]}>
       <Text style={styles.trendSummary}>
-        最近一天 {formatTrendValue(values[values.length - 1])} · 最高 {formatTrendValue(max)} · 最低{' '}
-        {formatTrendValue(min)}
+        {t('stats.trendSummary', {
+          last: formatTrendValue(values[values.length - 1]),
+          max: formatTrendValue(max),
+          min: formatTrendValue(min),
+        })}
       </Text>
       <View
         style={styles.trendPlot}
@@ -292,6 +304,7 @@ const HitMapCard = ({
   points: BoardPoint[];
   size: number;
 }) => {
+  const { t } = useTranslation();
   const dartsThrown = segments.reduce((sum, segment) => sum + segment.count, 0);
   const misses = segments.find(segment => segment.target === 'miss')?.count ?? 0;
   // Older, hand-placed and guessed darts have no landing point.
@@ -304,18 +317,19 @@ const HitMapCard = ({
     <View style={[styles.card, styles.hitMap]}>
       <HitMapBoard size={size} segments={segments} points={points} />
       <Text style={styles.hitMapText}>
-        共 {dartsThrown} 镖 · 脱靶 {formatRate(misses, dartsThrown)}
+        {t('stats.hitMapSummary', { darts: dartsThrown, rate: formatRate(misses, dartsThrown) })}
       </Text>
       {topSegments.length > 0 ? (
         <Text style={styles.hitMapText}>
-          最常命中：
-          {topSegments
-            .map(segment => `${formatDart(segment)} ${formatRate(segment.count, dartsThrown)}`)
-            .join(' · ')}
+          {t('stats.mostHit', {
+            segments: topSegments
+              .map(segment => `${formatDart(segment)} ${formatRate(segment.count, dartsThrown)}`)
+              .join(' · '),
+          })}
         </Text>
       ) : null}
       {partialLanding ? (
-        <Text style={styles.hitMapText}>落点图按记下落点的 {points.length} 镖画</Text>
+        <Text style={styles.hitMapText}>{t('stats.partialLanding', { n: points.length })}</Text>
       ) : null}
     </View>
   );
@@ -335,6 +349,7 @@ export const PlayerStatsView = ({
   // After the player was merged into another or deleted.
   onPlayerGone: () => void;
 }) => {
+  const { t } = useTranslation();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [detail, setDetail] = useState<PlayerDetail | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -363,10 +378,10 @@ export const PlayerStatsView = ({
   );
 
   if (!loaded) {
-    return <Text style={styles.empty}>正在读取…</Text>;
+    return <Text style={styles.empty}>{t('history.loading')}</Text>;
   }
   if (!detail) {
-    return <Text style={styles.empty}>找不到这个玩家。</Text>;
+    return <Text style={styles.empty}>{t('stats.playerNotFound')}</Text>;
   }
 
   const hitMapSize = Math.min(HIT_MAP_MAX_SIZE, width - 72);
@@ -377,11 +392,11 @@ export const PlayerStatsView = ({
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   };
   const modeOptions = [
-    { key: null, label: '总览', detail: `${detail.matchesPlayed} 场` },
+    { key: null, label: t('stats.overview'), detail: t('stats.matchCount', { n: detail.matchesPlayed }) },
     ...detail.modes.map(mode => ({
       key: mode.mode,
       label: modeTitle(mode),
-      detail: `${mode.matchesPlayed} 场`,
+      detail: t('stats.matchCount', { n: mode.matchesPlayed }),
     })),
   ];
   const recentMatches = detail.modes
@@ -393,7 +408,7 @@ export const PlayerStatsView = ({
     <>
       {detail.segments.length > 0 ? (
         <>
-          <Text style={styles.sectionTitle}>命中分布（全部玩法）</Text>
+          <Text style={styles.sectionTitle}>{t('stats.sections.hitMapAll')}</Text>
           <HitMapCard
             key={`${range}-overview`}
             segments={detail.segments}
@@ -403,7 +418,7 @@ export const PlayerStatsView = ({
         </>
       ) : null}
 
-      <Text style={styles.sectionTitle}>最近比赛</Text>
+      <Text style={styles.sectionTitle}>{t('stats.sections.recentMatches')}</Text>
       <View style={styles.card}>
         {recentMatches.map(({ match, stats }) => (
           <Pressable
@@ -415,7 +430,7 @@ export const PlayerStatsView = ({
               {modeTitle(stats)}
             </Text>
             <Text style={[styles.matchOutcome, match.isWinner && styles.won]}>
-              {match.isWinner ? '胜' : '负'}
+              {match.isWinner ? t('stats.won') : t('stats.lost')}
             </Text>
             <Text style={styles.chevron}>›</Text>
           </Pressable>
@@ -423,18 +438,18 @@ export const PlayerStatsView = ({
         <Pressable
           onPress={() => navigation.navigate('MatchList')}
           style={({ pressed }) => [styles.matchRow, styles.allMatches, pressed && styles.pressed]}>
-          <Text style={styles.allMatchesLabel}>全部比赛（所有玩家）</Text>
+          <Text style={styles.allMatchesLabel}>{t('stats.sections.allMatchesAllPlayers')}</Text>
           <Text style={styles.chevron}>›</Text>
         </Pressable>
       </View>
 
-      <Text style={styles.sectionTitle}>各玩法</Text>
+      <Text style={styles.sectionTitle}>{t('stats.sections.byMode')}</Text>
       <View style={styles.card}>
         <View style={[styles.tableRow, styles.tableHeader]}>
-          <Text style={[styles.cellName, styles.headerText]}>玩法</Text>
-          <Text style={[styles.cell, styles.headerText]}>场次</Text>
-          <Text style={[styles.cell, styles.headerText]}>胜率</Text>
-          <Text style={[styles.cell, styles.headerText]}>最好成绩</Text>
+          <Text style={[styles.cellName, styles.headerText]}>{t('stats.columns.mode')}</Text>
+          <Text style={[styles.cell, styles.headerText]}>{t('stats.columns.matches')}</Text>
+          <Text style={[styles.cell, styles.headerText]}>{t('stats.columns.winRate')}</Text>
+          <Text style={[styles.cell, styles.headerText]}>{t('stats.columns.bestScore')}</Text>
           <Text style={styles.chevron} />
         </View>
         {detail.modes.map(mode => (
@@ -453,19 +468,17 @@ export const PlayerStatsView = ({
         ))}
       </View>
 
-      <Text style={styles.note}>
-        点上面的玩法或表里的一行，看该玩法的详细数据和对局记录。最好成绩只算计分类玩法的个人赛。
-      </Text>
+      <Text style={styles.note}>{t('stats.notes.overview')}</Text>
 
       {detail.opponents.length > 0 ? (
         <>
-          <Text style={styles.sectionTitle}>对战记录</Text>
+          <Text style={styles.sectionTitle}>{t('stats.sections.opponents')}</Text>
           <View style={styles.card}>
             <View style={[styles.tableRow, styles.tableHeader]}>
-              <Text style={[styles.cellName, styles.headerText]}>对手</Text>
-              <Text style={[styles.cell, styles.headerText]}>场次</Text>
-              <Text style={[styles.cell, styles.headerText]}>胜</Text>
-              <Text style={[styles.cell, styles.headerText]}>负</Text>
+              <Text style={[styles.cellName, styles.headerText]}>{t('stats.columns.opponent')}</Text>
+              <Text style={[styles.cell, styles.headerText]}>{t('stats.columns.matches')}</Text>
+              <Text style={[styles.cell, styles.headerText]}>{t('stats.columns.wins')}</Text>
+              <Text style={[styles.cell, styles.headerText]}>{t('stats.columns.losses')}</Text>
               <Text style={styles.chevron} />
             </View>
             {detail.opponents.map(opponent => (
@@ -479,7 +492,7 @@ export const PlayerStatsView = ({
                 }
                 style={({ pressed }) => [styles.tableRow, pressed && styles.pressed]}>
                 <Text numberOfLines={1} style={styles.cellName}>
-                  {opponent.name}
+                  {displayPlayerName(opponent.name)}
                 </Text>
                 <Text style={styles.cell}>{opponent.played}</Text>
                 <Text style={[styles.cell, styles.won]}>{opponent.wins}</Text>
@@ -488,20 +501,18 @@ export const PlayerStatsView = ({
               </Pressable>
             ))}
           </View>
-          <Text style={styles.note}>
-            队友不算对手；多人局里由别人获胜的场次只计入场次。点一行看两人对比。
-          </Text>
+          <Text style={styles.note}>{t('stats.notes.opponents')}</Text>
         </>
       ) : null}
     </>
   );
 
   const renderMode = (stats: PlayerModeStats) => {
-    const note = modeNote(stats);
+    const note = modeNote(stats, t);
     return (
       <>
         <StatTiles>
-          {modeTiles(stats).map(tile => (
+          {modeTiles(stats, t).map(tile => (
             <StatTile key={tile.label} label={tile.label} value={tile.value} />
           ))}
         </StatTiles>
@@ -512,7 +523,7 @@ export const PlayerStatsView = ({
         {stats.trend.length >= 2 ? (
           <>
             <Text style={styles.sectionTitle}>
-              {trendTitle(stats)}走势（按天，共 {stats.trend.length} 天）
+              {t('stats.sections.trend', { title: trendTitle(stats, t), days: stats.trend.length })}
             </Text>
             <TrendLine key={`${range}-${stats.mode}`} points={stats.trend} />
           </>
@@ -520,7 +531,7 @@ export const PlayerStatsView = ({
 
         {stats.segments.length > 0 ? (
           <>
-            <Text style={styles.sectionTitle}>命中分布</Text>
+            <Text style={styles.sectionTitle}>{t('stats.sections.hitMap')}</Text>
             <HitMapCard
               key={`${range}-${stats.mode}`}
               segments={stats.segments}
@@ -530,7 +541,7 @@ export const PlayerStatsView = ({
           </>
         ) : null}
 
-        <Text style={styles.sectionTitle}>对局记录</Text>
+        <Text style={styles.sectionTitle}>{t('stats.sections.matches')}</Text>
         <View style={styles.card}>
           {stats.matches.map(match => (
             <Pressable
@@ -538,9 +549,9 @@ export const PlayerStatsView = ({
               onPress={() => navigation.navigate('MatchDetail', { matchId: match.matchId })}
               style={({ pressed }) => [styles.matchRow, pressed && styles.pressed]}>
               <Text style={styles.matchTime}>{formatMatchTime(match.createdAt)}</Text>
-              <Text style={styles.matchResult}>{formatMatchResult(match)}</Text>
+              <Text style={styles.matchResult}>{formatMatchResult(match, t)}</Text>
               <Text style={[styles.matchOutcome, match.isWinner && styles.won]}>
-                {match.isWinner ? '胜' : '负'}
+                {match.isWinner ? t('stats.won') : t('stats.lost')}
               </Text>
               <Text style={styles.chevron}>›</Text>
             </Pressable>
@@ -561,13 +572,13 @@ export const PlayerStatsView = ({
               onPress={onPickPlayer}
               style={({ pressed }) => [styles.playerSwitch, pressed && styles.pressed]}>
               <Text numberOfLines={1} style={styles.playerSwitchName}>
-                {detail.name}
+                {displayPlayerName(detail.name)}
               </Text>
               <Text style={styles.playerSwitchArrow}>▾</Text>
             </Pressable>
           ) : (
             <Text numberOfLines={1} style={styles.name}>
-              {detail.name}
+              {displayPlayerName(detail.name)}
             </Text>
           )}
           {detail.matchesPlayed > 0 ? (
@@ -585,20 +596,23 @@ export const PlayerStatsView = ({
             hitSlop={8}
             onPress={() => setEditing(true)}
             style={({ pressed }) => [styles.editButton, pressed && styles.pressed]}>
-            <Text style={styles.editLabel}>编辑</Text>
+            <Text style={styles.editLabel}>{t('stats.edit')}</Text>
           </Pressable>
         </View>
         <View style={styles.summaryRow}>
           <Text style={styles.meta}>
-            {detail.matchesPlayed} 场 · 胜 {detail.wins} 场 · 胜率{' '}
-            {formatRate(detail.wins, detail.matchesPlayed)}
+            {t('stats.summary', {
+              played: detail.matchesPlayed,
+              wins: detail.wins,
+              rate: formatRate(detail.wins, detail.matchesPlayed),
+            })}
           </Text>
           <RangeSwitch range={range} onChange={setRange} />
         </View>
       </View>
 
       {detail.matchesPlayed === 0 ? (
-        <Text style={styles.note}>最近 {RECENT_DAYS} 天没有比赛。</Text>
+        <Text style={styles.note}>{t('stats.noRecentMatches', { days: RECENT_DAYS })}</Text>
       ) : (
         <>
           <View

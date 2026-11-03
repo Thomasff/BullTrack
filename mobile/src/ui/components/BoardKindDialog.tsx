@@ -1,5 +1,6 @@
 import React from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { colors } from '../theme/colors';
 import { SecondaryButton } from './SecondaryButton';
 import { BoardFace } from './DartBoard';
@@ -16,20 +17,22 @@ interface BoardKindDialogProps {
 
 const BOARD_SIZE = 110;
 
-const options: Array<{ kind: BoardKind; title: string; description: string }> = [
-  { kind: 'soft', title: '软靶', description: '红蓝 · 软头镖' },
-  { kind: 'steel', title: '硬靶', description: '红绿 · 钢头镖' },
-];
+// Translation keys of each board's title and description.
+const options = [
+  { kind: 'soft', title: 'common.boardSoft', description: 'setup.board.softDescription' },
+  { kind: 'steel', title: 'common.boardSteel', description: 'setup.board.steelDescription' },
+] as const;
 
 // Picks the player's board type by its colours; tapping a board picks it.
 export const BoardKindDialog = ({ visible, selected, cancelable, onPick, onCancel }: BoardKindDialogProps) => {
+  const { t } = useTranslation();
   const close = cancelable ? onCancel : () => undefined;
   return (
     <Modal transparent statusBarTranslucent animationType="fade" visible={visible} onRequestClose={close}>
       <Pressable style={styles.backdrop} onPress={close}>
         <Pressable style={styles.card} onPress={() => undefined}>
-          <Text style={styles.title}>靶子类型</Text>
-          <Text style={styles.message}>选和你的靶子颜色一样的那块</Text>
+          <Text style={styles.title}>{t('setup.board.title')}</Text>
+          <Text style={styles.message}>{t('setup.board.message')}</Text>
           <View style={styles.options}>
             {options.map(option => (
               <Pressable
@@ -41,12 +44,12 @@ export const BoardKindDialog = ({ visible, selected, cancelable, onPick, onCance
                   pressed && styles.optionPressed,
                 ]}>
                 <BoardFace size={BOARD_SIZE} kind={option.kind} />
-                <Text style={styles.optionTitle}>{option.title}</Text>
-                <Text style={styles.optionDescription}>{option.description}</Text>
+                <Text style={styles.optionTitle}>{t(option.title)}</Text>
+                <Text style={styles.optionDescription}>{t(option.description)}</Text>
               </Pressable>
             ))}
           </View>
-          {cancelable ? <SecondaryButton label="取消" onPress={onCancel} /> : null}
+          {cancelable ? <SecondaryButton label={t('common.cancel')} onPress={onCancel} /> : null}
         </Pressable>
       </Pressable>
     </Modal>

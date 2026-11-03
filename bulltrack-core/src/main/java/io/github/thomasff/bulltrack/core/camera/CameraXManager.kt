@@ -196,12 +196,12 @@ class CameraXManager : CameraManager {
                 } else {
                     _cameraState.value = readyState(
                         isPreviewBound = false,
-                        statusMessage = "相机已初始化，等待预览"
+                        statusMessage = "camera_initialized_waiting_preview"
                     )
                 }
             } catch (error: Exception) {
                 Log.e(TAG, "Failed to initialize camera", error)
-                _cameraState.value = CameraState.Error(error.message ?: "相机初始化失败")
+                _cameraState.value = CameraState.Error(error.message ?: "camera_init_failed")
             }
         }, ContextCompat.getMainExecutor(appContext!!))
     }
@@ -254,7 +254,7 @@ class CameraXManager : CameraManager {
         boundCamera = null
         _cameraState.value = readyState(
             isPreviewBound = false,
-            statusMessage = "预览已关闭"
+            statusMessage = "preview_closed"
         )
     }
 
@@ -273,7 +273,7 @@ class CameraXManager : CameraManager {
         previewRetryCount = 0
         _cameraState.value = readyState(
             isPreviewBound = false,
-            statusMessage = currentRoundConfig?.statusMessage ?: "预览已关闭"
+            statusMessage = currentRoundConfig?.statusMessage ?: "preview_closed"
         )
     }
 
@@ -288,7 +288,7 @@ class CameraXManager : CameraManager {
         camera.cameraControl.setZoomRatio(clamped)
         _cameraState.value = readyState(
             isPreviewBound = previewUseCase != null,
-            statusMessage = currentRoundConfig?.statusMessage ?: "相机就绪"
+            statusMessage = currentRoundConfig?.statusMessage ?: "camera_ready"
         )
     }
 
@@ -303,7 +303,7 @@ class CameraXManager : CameraManager {
         } else {
             lockedZoomRatioForRound = currentZoomRatio
             lockPhase = CameraLockPhase.METERING
-            lockReason = "本轮使用自动对焦/测光稳定后拍摄"
+            lockReason = "round_af_ae_capture"
             prepareAutoCapture()
         }
         val captureStartNs = SystemClock.elapsedRealtimeNanos()
@@ -337,7 +337,7 @@ class CameraXManager : CameraManager {
 
     override suspend fun captureNextFrameForRound(): CapturedFrame {
         lockPhase = CameraLockPhase.LOCKED
-        lockReason = "沿用首帧已稳定的 zoom 与自动对焦/测光状态直接快拍"
+        lockReason = "reuse_first_frame_lock"
         val capturedFrame = takePicture()
         val config = currentRoundConfig ?: buildRoundCameraConfig(capturedFrame).also {
             currentRoundConfig = it
@@ -380,7 +380,7 @@ class CameraXManager : CameraManager {
         }
         _cameraState.value = readyState(
             isPreviewBound = false,
-            statusMessage = "原生 round capture 已释放，等待预览恢复"
+            statusMessage = "round_capture_released"
         )
     }
 
@@ -443,12 +443,12 @@ class CameraXManager : CameraManager {
             _cameraState.value = readyState(
                 isPreviewBound = false,
                 statusMessage = currentRoundConfig?.statusMessage
-                    ?: if (preview != null) "预览连接中" else "相机就绪"
+                    ?: if (preview != null) "preview_connecting" else "camera_ready"
             )
             Log.d(TAG, "bindCameraUseCases success. previewBound=${preview != null}")
         } catch (error: Exception) {
             Log.e(TAG, "Failed to bind camera use cases", error)
-            _cameraState.value = CameraState.Error(error.message ?: "绑定相机失败")
+            _cameraState.value = CameraState.Error(error.message ?: "camera_bind_failed")
         }
     }
 
@@ -540,7 +540,7 @@ class CameraXManager : CameraManager {
             val stepStartNs = SystemClock.elapsedRealtimeNanos()
             lockAutoControls(lockExposure = true)
             lockPhase = CameraLockPhase.LOCKED
-            lockReason = "预览阶段的自动对焦与测光已稳定"
+            lockReason = "preview_metering_settled"
             return "preview metering kept, lock ${elapsedMs(stepStartNs)} ms"
         }
         // Otherwise (the preview had not settled, or a retried first frame) meter again from
@@ -567,9 +567,9 @@ class CameraXManager : CameraManager {
             CameraLockPhase.FALLBACK
         }
         lockReason = if (stabilized) {
-            "zoom、生效后的自动对焦与测光已稳定"
+            "af_ae_settled"
         } else {
-            "自动对焦/测光等待超时，按当前状态拍摄"
+            "af_ae_timeout"
         }
         return "zoom $zoomMs ms, focus $focusMs ms$focusOutcome, " +
             "settle $settleMs ms${if (stabilized) "" else " (timed out)"}, lock $lockMs ms"
@@ -802,7 +802,7 @@ class CameraXManager : CameraManager {
         val capture = imageCapture
         val executor = cameraExecutor
         if (capture == null || executor == null) {
-            continuation.resumeWithException(IllegalStateException("相机尚未就绪"))
+            continuation.resumeWithException(IllegalStateException("camera_not_ready"))
             return@suspendCancellableCoroutine
         }
 
@@ -811,10 +811,10 @@ class CameraXManager : CameraManager {
                 zoomRatio = currentZoomRatio,
                 lockPhase = lockPhase,
                 statusMessage = when (lockPhase) {
-                    CameraLockPhase.METERING -> "正在等待 zoom、生效后的自动对焦和测光"
-                    CameraLockPhase.LOCKED -> lockReason ?: "沿用当前稳定状态直接拍摄"
-                    CameraLockPhase.FALLBACK -> lockReason ?: "自动对焦/测光未完全稳定，按当前状态拍摄"
-                    CameraLockPhase.IDLE -> "相机拍摄中"
+                    CameraLockPhase.METERING -> "metering"
+                    CameraLockPhase.LOCKED -> lockReason ?: "reuse_current_lock"
+                    CameraLockPhase.FALLBACK -> lockReason ?: "af_ae_unsettled"
+                    CameraLockPhase.IDLE -> "capturing"
                 }
             )
         }
@@ -845,7 +845,7 @@ class CameraXManager : CameraManager {
                             _cameraState.value = readyState(
                                 isPreviewBound = previewUseCase != null,
                                 statusMessage = currentRoundConfig?.statusMessage
-                                    ?: "相机就绪"
+                                    ?: "camera_ready"
                             )
                         }
                     }
@@ -855,7 +855,7 @@ class CameraXManager : CameraManager {
                     Log.e(TAG, "Image capture failed", exception)
                     if (reportState) {
                         _cameraState.value = CameraState.Error(
-                            exception.message ?: "拍摄失败"
+                            exception.message ?: "capture_failed"
                         )
                     }
                     continuation.resumeWithException(exception)
@@ -866,7 +866,7 @@ class CameraXManager : CameraManager {
 
     private fun buildRoundCameraConfig(frame: CapturedFrame): RoundCameraConfig {
         val roundZoomRatio = lockedZoomRatioForRound ?: currentZoomRatio
-        val statusMessage = "本轮固定 zoom ${formatZoom(roundZoomRatio)}x，首帧已完成自动对焦/测光稳定，后续连续拍摄直接快拍"
+        val statusMessage = "round_zoom_locked: ${formatZoom(roundZoomRatio)}"
         val quarterTurn = frame.rotationDegrees == 90 || frame.rotationDegrees == 270
         return RoundCameraConfig(
             width = if (quarterTurn) frame.bitmap.height else frame.bitmap.width,
@@ -906,14 +906,14 @@ class CameraXManager : CameraManager {
                     startPreviewMetering()
                     _cameraState.value = readyState(
                         isPreviewBound = true,
-                        statusMessage = currentRoundConfig?.statusMessage ?: "相机预览中"
+                        statusMessage = currentRoundConfig?.statusMessage ?: "previewing"
                     )
                 }
 
                 PreviewView.StreamState.IDLE -> {
                     _cameraState.value = readyState(
                         isPreviewBound = false,
-                        statusMessage = currentRoundConfig?.statusMessage ?: "预览流等待中"
+                        statusMessage = currentRoundConfig?.statusMessage ?: "preview_stream_waiting"
                     )
                     schedulePreviewRetry()
                 }
@@ -971,7 +971,7 @@ class CameraXManager : CameraManager {
         return suspendCancellableCoroutine { continuation ->
             val context = appContext
             if (context == null) {
-                continuation.resumeWithException(IllegalStateException("相机上下文尚未初始化"))
+                continuation.resumeWithException(IllegalStateException("camera_context_missing"))
                 return@suspendCancellableCoroutine
             }
             addListener(
@@ -1019,8 +1019,8 @@ class CameraXManager : CameraManager {
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             }
 
-            else -> throw IllegalArgumentException("不支持的图像格式: ${image.format}")
-        } ?: throw IllegalStateException("无法解码相机图像")
+            else -> throw IllegalArgumentException("unsupported_image_format: ${image.format}")
+        } ?: throw IllegalStateException("camera_image_decode_failed")
 
         // Detection turns frames upright natively, so a frame that is already the target size once
         // turned skips the full-size rotated copy here and carries its rotation instead.

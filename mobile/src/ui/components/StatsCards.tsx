@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { BrandLine, CARD_COLORS, CARD_PIXEL_WIDTH, GRID, OUTFIT_BOLD, cardPixelHeight, fontFor } from './ShareCards';
 import { HitMapBoard } from './HitMapBoard';
-import type { ShareOptions } from '../../application/stores/settingsStore';
+import type { CardOptions } from '../../application/stores/settingsStore';
 import { formatShareDate } from '../../domain/share/shareCards';
 import {
   statsText,
@@ -20,17 +20,17 @@ const MAX_TREND_DOTS = 31;
 
 interface StatsCardProps {
   width: number;
-  options: ShareOptions;
+  options: CardOptions;
   showUrl: boolean;
 }
 
-const cardFrame = (width: number, options: ShareOptions, u: number) => ({
+const cardFrame = (width: number, options: CardOptions, u: number) => ({
   width,
   height: (width * cardPixelHeight(options.size)) / CARD_PIXEL_WIDTH,
   padding: 20 * u,
 });
 
-const Header = ({ subtitle, title, u, options }: { subtitle: string; title: string | null; u: number; options: ShareOptions }) => (
+const Header = ({ subtitle, title, u, options }: { subtitle: string; title: string | null; u: number; options: CardOptions }) => (
   <>
     <Text numberOfLines={1} style={[styles.muted, { fontSize: 11 * u }]}>
       {subtitle} · {formatShareDate(Date.now())}
@@ -55,7 +55,7 @@ const Change = ({ figure, size }: { figure: CardFigure; size: number }) =>
   ) : null;
 
 // One figure: the value with its change, the label under it.
-const Figure = ({ figure, u, valueSize, options }: { figure: CardFigure; u: number; valueSize: number; options: ShareOptions }) => (
+const Figure = ({ figure, u, valueSize, options }: { figure: CardFigure; u: number; valueSize: number; options: CardOptions }) => (
   <View>
     <View style={[styles.valueLine, { gap: 4 * u }]}>
       <Text style={[styles.number, { fontSize: valueSize * u, lineHeight: valueSize * 1.12 * u }]}>{figure.value}</Text>

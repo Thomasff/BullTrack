@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { useGameStore } from '../../application/stores/gameStore';
 import { MODE_RULES } from '../../domain/game/modeRules';
 import type { GameType } from '../../domain/game/types';
+import { modeDisplayName } from '../../i18n';
 import { colors } from '../theme/colors';
 import { PrimaryButton } from './PrimaryButton';
 
@@ -14,12 +16,13 @@ interface ModeRulesButtonProps {
 // Header ⓘ button that opens the game's rules. The rules scroll; the 知道了 button stays
 // pinned at the bottom of the dialog.
 export const ModeRulesButton = ({ gameType, title }: ModeRulesButtonProps) => {
+  const { t } = useTranslation();
   const [visible, setVisible] = useState(false);
   const close = () => setVisible(false);
   return (
     <>
       <Pressable
-        accessibilityLabel="玩法规则"
+        accessibilityLabel={t('modes.rulesButton')}
         hitSlop={12}
         onPress={() => setVisible(true)}
         style={({ pressed }) => [styles.icon, pressed && styles.iconPressed]}>
@@ -34,16 +37,18 @@ export const ModeRulesButton = ({ gameType, title }: ModeRulesButtonProps) => {
         <View style={styles.overlay}>
           <Pressable style={StyleSheet.absoluteFill} onPress={close} />
           <View style={styles.card}>
-            <Text style={styles.title}>{title} 规则</Text>
+            <Text style={styles.title}>{t('modes.rulesTitle', { title })}</Text>
             <ScrollView style={styles.body} contentContainerStyle={styles.points}>
               {MODE_RULES[gameType].map(point => (
                 <Text key={point.label} style={styles.point}>
-                  <Text style={styles.label}>{point.label}　</Text>
-                  {point.text}
+                  <Text style={styles.label}>
+                    {t('modes.ruleHeading', { label: t(`modes.ruleLabels.${point.label}`) })}
+                  </Text>
+                  {t(`modes.rules.${point.text}`, point.values)}
                 </Text>
               ))}
             </ScrollView>
-            <PrimaryButton label="知道了" onPress={close} />
+            <PrimaryButton label={t('modes.rulesDone')} onPress={close} />
           </View>
         </View>
       </Modal>
@@ -51,11 +56,14 @@ export const ModeRulesButton = ({ gameType, title }: ModeRulesButtonProps) => {
   );
 };
 
-// For the Game screen, whose mode lives in the game store.
+// For the Game screen, whose mode lives in the game store; the title follows the language.
 export const CurrentModeRulesButton = () => {
   const gameType = useGameStore(state => state.selectedMode);
-  const title = useGameStore(state => state.selectedModeLabel);
-  return gameType ? <ModeRulesButton gameType={gameType} title={title ?? ''} /> : null;
+  const label = useGameStore(state => state.selectedModeLabel);
+  useTranslation();
+  return gameType ? (
+    <ModeRulesButton gameType={gameType} title={modeDisplayName(gameType, label)} />
+  ) : null;
 };
 
 const styles = StyleSheet.create({

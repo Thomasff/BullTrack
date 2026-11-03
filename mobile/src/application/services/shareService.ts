@@ -1,5 +1,6 @@
-import { captureRef } from 'react-native-view-shot';
+import { captureRef, releaseCapture } from 'react-native-view-shot';
 import { bullTrackNativeBridge } from '../../native-bridge/bulltrack/bullTrackNative';
+import { t } from '../../i18n';
 import { getCurrentThrowerId, useGameStore } from '../stores/gameStore';
 import { createGameEngine, isCricketType } from './gameRules';
 import { getRoundBests, listMatchStarts } from './historyRepository';
@@ -312,17 +313,21 @@ export const loadRoundPhotos = async (): Promise<Map<string, RoundPhotos>> => {
 
 const MAX_PHOTO_MATCHES = 5;
 
-// Keeps the photos of the five newest saved matches that have any; drops older ones and those of
-// games left before the end. Run once a game is saved, so no game is being played.
+// Keeps the photos of the five newest saved matches that have any, and the newest game's whether
+// saved or not (a game that just ended may still be saving); drops older ones and those of games
+// left before the end. Run while no game is being played: once a game is saved, and when the next
+// one starts, so photos stay bounded even when games are never finished.
 export const pruneRoundPhotos = async () => {
   const [{ names }, starts] = await Promise.all([bullTrackNativeBridge.listRoundPhotos(), listMatchStarts()]);
   const saved = new Set(starts);
+  const photoStarts = [...new Set(names.map(photoStart))];
   const kept = new Set(
-    [...new Set(names.map(photoStart))]
+    photoStarts
       .filter(start => saved.has(start))
       .sort((left, right) => right - left)
       .slice(0, MAX_PHOTO_MATCHES),
   );
+  kept.add(Math.max(...photoStarts));
   const stale = names.filter(name => !kept.has(photoStart(name)));
   if (stale.length > 0) {
     await bullTrackNativeBridge.deleteRoundPhotos(stale);
@@ -342,8 +347,12 @@ export const deleteMatchPhotos = async (createdAt?: number) => {
 export const captureCard = (view: Parameters<typeof captureRef>[0], width: number, height: number) =>
   captureRef(view, { format: 'png', result: 'tmpfile', width, height });
 
+// Deletes a captured card once it has been shared or saved (both copy it first), so the cache
+// does not fill up with them.
+export const releaseCardImage = (uri: string) => releaseCapture(uri);
+
 export const shareCardImage = (uri: string, fileName: string, caption: string) =>
-  bullTrackNativeBridge.shareImage(uri, fileName, caption);
+  bullTrackNativeBridge.shareImage(uri, fileName, caption, t('native.share.image'));
 
 export const saveCardImage = (uri: string, fileName: string) =>
   bullTrackNativeBridge.saveImageToGallery(uri, fileName);

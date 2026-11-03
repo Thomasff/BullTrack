@@ -97,7 +97,7 @@ class BullTrackLiveRoundController(
                         isReady = false,
                         isPreviewBound = false,
                         zoomRatio = zoomRatio,
-                        statusMessage = "原生相机未初始化",
+                        statusMessage = "camera_not_initialized",
                         lockPhase = CameraLockPhase.IDLE,
                         lockReason = null,
                     )
@@ -136,7 +136,7 @@ class BullTrackLiveRoundController(
     suspend fun prepareRoundCamera(): WritableMap {
         cameraManager.initialize(appContext)
         warmUpDetector()
-        return currentCameraReadyState("原生相机负责预览与连续检测").apply {
+        return currentCameraReadyState("camera_handles_preview").apply {
             putBackCameraInfo(this)
         }
     }
@@ -185,7 +185,7 @@ class BullTrackLiveRoundController(
     suspend fun setZoomRatio(zoomRatio: Double): WritableMap {
         this.zoomRatio = zoomRatio.toFloat()
         cameraManager.setZoomRatio(this.zoomRatio)
-        return currentCameraReadyState("已更新原生 round zoom")
+        return currentCameraReadyState("zoom_updated")
     }
 
     // Live zoom from the preview's slider; applied to the preview, and kept for the next round.
@@ -211,7 +211,8 @@ class BullTrackLiveRoundController(
 
     // Where the board is before a round, for RN's auto zoom and aiming arrow: a still of the whole
     // frame (the preview shows only its middle) through the model. "available" is false while a
-    // round holds the camera; "found" false when no board was seen. Coordinates are frame pixels.
+    // round holds the camera; "found" false when no board was seen. "dartTips" are darts still in
+    // the board (empty without a board). Coordinates are frame pixels.
     suspend fun detectPrepBoard(yoloOnCpu: Boolean): WritableMap {
         val result = Arguments.createMap()
         if (isProbablyEmulator() || roundJob?.isActive == true || currentSession != null) {
@@ -239,7 +240,7 @@ class BullTrackLiveRoundController(
         Log.d(
             TAG,
             "Prep board guide: capture $captureMs ms, total ${elapsedMs(startNs)} ms, " +
-                "zoom ${"%.2f".format(zoomAtCapture)}, board ${box ?: "none"}"
+                "zoom ${"%.2f".format(zoomAtCapture)}, board ${box ?: "none"}, darts ${guide.dartTips.size}"
         )
         result.putBoolean("available", true)
         result.putBoolean("found", box != null)
@@ -254,6 +255,15 @@ class BullTrackLiveRoundController(
             result.putInt("boardWidth", box.width())
             result.putInt("boardHeight", box.height())
         }
+        result.putArray(
+            "dartTips",
+            guide.dartTips.map { tip ->
+                Arguments.createMap().apply {
+                    putInt("x", tip.x)
+                    putInt("y", tip.y)
+                }
+            }.toWritableArray(),
+        )
         return result
     }
 
@@ -292,7 +302,7 @@ class BullTrackLiveRoundController(
                 emitRoundState(
                     phase = "finished",
                     roundId = roundId,
-                    statusMessage = "本轮失败，已返回等待状态",
+                    statusCode = "round_failed",
                     throws = emptyList(),
                     canRedetect = false,
                 )
@@ -319,7 +329,7 @@ class BullTrackLiveRoundController(
         emitRoundState(
             phase = "starting",
             roundId = roundId,
-            statusMessage = "使用首帧与新拍图片重新识别",
+            statusCode = "redetect_starting",
             throws = session.throws,
             canRedetect = false,
         )
@@ -342,20 +352,18 @@ class BullTrackLiveRoundController(
             val normalized = update.throws.take(MAX_DARTS).toMutableList()
             session.throws.clear()
             session.throws.addAll(normalized)
+            val redetectStatus = buildRedetectStatus(session.throws, update.yoloStatus)
             emitThrowsUpdated(
                 roundId = roundId,
                 throws = session.throws,
-                statusMessage = buildRedetectStatusMessage(session.throws, update.yoloStatus),
+                statusCode = redetectStatus.first,
+                statusParams = redetectStatus.second,
                 canRedetect = true,
             )
             emitRoundState(
                 phase = "showingResult",
                 roundId = roundId,
-                statusMessage = if (session.throws.isEmpty()) {
-                    "重新识别失败，未识别到有效飞镖"
-                } else {
-                    "重新识别完成，可重检或确认结果"
-                },
+                statusCode = if (session.throws.isEmpty()) "redetect_failed_no_darts" else "redetect_done",
                 throws = session.throws,
                 canRedetect = true,
             )
@@ -366,7 +374,7 @@ class BullTrackLiveRoundController(
             emitRoundState(
                 phase = "showingResult",
                 roundId = roundId,
-                statusMessage = "重新识别失败，已保留当前结果",
+                statusCode = "redetect_failed_kept",
                 throws = session.throws,
                 canRedetect = true,
             )
@@ -401,7 +409,7 @@ class BullTrackLiveRoundController(
         emitRoundState(
             phase = "finished",
             roundId = roundId,
-            statusMessage = "本轮已确认，可开始下一轮",
+            statusCode = "round_confirmed",
             throws = session.throws,
             canRedetect = false,
         )
@@ -460,6 +468,12 @@ class BullTrackLiveRoundController(
 
     fun listDebugRounds(): WritableArray = artifactStore.listRoundsArray()
 
+    // Debug images, round logs and recorded frames, all gone when developer mode is turned off.
+    fun deleteDebugFiles() {
+        artifactStore.deleteAll()
+        frameRecorder.deleteAll()
+    }
+
     fun exportDebugRound(roundId: String): File {
         // A round still awaiting confirmation has no saved log yet.
         if (roundId == currentSession?.roundId) {
@@ -494,7 +508,7 @@ class BullTrackLiveRoundController(
         emitRoundState(
             phase = "starting",
             roundId = roundId,
-            statusMessage = "原生相机接管中，准备拍摄首帧",
+            statusCode = "round_starting",
             throws = emptyList(),
             canRedetect = false,
         )
@@ -601,7 +615,9 @@ class BullTrackLiveRoundController(
         emitRoundState(
             phase = "capturing",
             roundId = roundId,
-            statusMessage = firstFrameStatus ?: "已拍摄第 1 张图片，开始连续检测",
+            // The camera's own note on the first frame (zoom and metering) wins when it has one.
+            statusCode = if (firstFrameStatus != null) "camera_message" else "capture_started",
+            statusParams = firstFrameStatus?.let { mapOf("message" to it) } ?: emptyMap(),
             throws = emptyList(),
             canRedetect = false,
             boardSetup = boardSetup,
@@ -753,7 +769,8 @@ class BullTrackLiveRoundController(
             emitThrowsUpdated(
                 roundId = session.roundId,
                 throws = session.throws,
-                statusMessage = "第 $frameIndex 张图片处理失败: ${error.message}",
+                statusCode = "frame_failed",
+                statusParams = mapOf("frame" to frameIndex, "error" to (error.message ?: "")),
                 canRedetect = false,
             )
             return FrameLoopDecision(shouldStop = false, gateReason = "process_failed: ${error.message}")
@@ -770,7 +787,9 @@ class BullTrackLiveRoundController(
             emitThrowsUpdated(
                 roundId = session.roundId,
                 throws = session.throws,
-                statusMessage = "第 $frameIndex 张图片未触发精检: ${describeGateReason(frameUpdate.gateReason)}",
+                // RN describes the raw gate reason.
+                statusCode = "frame_not_triggered",
+                statusParams = mapOf("frame" to frameIndex, "reason" to frameUpdate.gateReason),
                 canRedetect = false,
             )
             return FrameLoopDecision(
@@ -792,17 +811,23 @@ class BullTrackLiveRoundController(
                 }
             }
         }
-        val statusMessage = if (frameUpdate.newThrows.all { it == null }) {
-            "第 $frameIndex 张图片触发精检，但未找到镖尖，先记为脱靶: ${frameUpdate.gateReason}"
+        if (frameUpdate.newThrows.all { it == null }) {
+            emitThrowsUpdated(
+                roundId = session.roundId,
+                throws = session.throws,
+                statusCode = "frame_no_tip",
+                statusParams = mapOf("frame" to frameIndex, "reason" to frameUpdate.gateReason),
+                canRedetect = false,
+            )
         } else {
-            "第 $frameIndex 张图片识别到新飞镖，当前共 ${session.throws.size} 支"
+            emitThrowsUpdated(
+                roundId = session.roundId,
+                throws = session.throws,
+                statusCode = "frame_new_dart",
+                statusParams = mapOf("frame" to frameIndex, "count" to session.throws.size),
+                canRedetect = false,
+            )
         }
-        emitThrowsUpdated(
-            roundId = session.roundId,
-            throws = session.throws,
-            statusMessage = statusMessage,
-            canRedetect = false,
-        )
         return FrameLoopDecision(
             shouldStop = session.throws.size >= MAX_DARTS,
             gateReason = frameUpdate.gateReason,
@@ -831,16 +856,16 @@ class BullTrackLiveRoundController(
         emitThrowsUpdated(
             roundId = session.roundId,
             throws = session.throws,
-            statusMessage = if (manualStop) "本轮已手动结束" else "本轮检测结束",
+            statusCode = if (manualStop) "round_stopped_manually" else "round_detection_ended",
             canRedetect = true,
         )
         emitRoundState(
             phase = "showingResult",
             roundId = session.roundId,
-            statusMessage = when {
-                manualStop -> "本轮已手动结束"
-                finalThrows.size >= MAX_DARTS -> "已识别满 3 支飞镖，自动结束"
-                else -> "本轮检测结束"
+            statusCode = when {
+                manualStop -> "round_stopped_manually"
+                finalThrows.size >= MAX_DARTS -> "round_full_auto_end"
+                else -> "round_detection_ended"
             },
             throws = finalThrows,
             canRedetect = true,
@@ -914,6 +939,7 @@ class BullTrackLiveRoundController(
         stopRequested = false
     }
 
+    // Camera status messages are codes RN translates, here and from CameraXManager.
     private fun currentCameraReadyState(statusMessage: String): WritableMap {
         return Arguments.createMap().apply {
             putBoolean("isReady", true)
@@ -925,12 +951,14 @@ class BullTrackLiveRoundController(
         }
     }
 
+    // Status text travels as a code plus parameters; RN translates it into the app language.
     private fun emitRoundState(
         phase: String,
         roundId: String,
-        statusMessage: String,
+        statusCode: String,
         throws: List<ThrowResult>,
         canRedetect: Boolean,
+        statusParams: Map<String, Any> = emptyMap(),
         // Only on "capturing": what the first frame showed, for RN's setup hints.
         boardSetup: StartRoundDetectionUpdate? = null,
     ) {
@@ -939,7 +967,8 @@ class BullTrackLiveRoundController(
             Arguments.createMap().apply {
                 putString("phase", phase)
                 putString("roundId", roundId)
-                putString("statusMessage", statusMessage)
+                putString("statusCode", statusCode)
+                putMap("statusParams", statusParams.toWritableParams())
                 putArray("throws", throws.toWritableThrows(roundId))
                 putBoolean("canRedetect", canRedetect)
                 boardSetup?.let { setup ->
@@ -954,14 +983,16 @@ class BullTrackLiveRoundController(
     private fun emitThrowsUpdated(
         roundId: String,
         throws: List<ThrowResult>,
-        statusMessage: String,
+        statusCode: String,
         canRedetect: Boolean,
+        statusParams: Map<String, Any> = emptyMap(),
     ) {
         emit(
             EVENT_THROWS_UPDATED,
             Arguments.createMap().apply {
                 putString("roundId", roundId)
-                putString("statusMessage", statusMessage)
+                putString("statusCode", statusCode)
+                putMap("statusParams", statusParams.toWritableParams())
                 putArray("throws", throws.toWritableThrows(roundId))
                 putBoolean("canRedetect", canRedetect)
             },
@@ -1012,20 +1043,29 @@ class BullTrackLiveRoundController(
         }
     }
 
-    private fun buildRedetectStatusMessage(
+    // Status code and parameters of a redetect result, with YOLO's status when it has one.
+    private fun buildRedetectStatus(
         throws: List<ThrowResult>,
         yoloStatus: String?,
-    ): String {
-        val baseMessage = if (throws.isEmpty()) {
-            "未识别到有效飞镖"
-        } else {
-            "识别到 ${throws.size} 支飞镖"
+    ): Pair<String, Map<String, Any>> {
+        val baseCode = if (throws.isEmpty()) "redetect_none" else "redetect_found"
+        val params = mutableMapOf<String, Any>("count" to throws.size)
+        if (yoloStatus.isNullOrBlank()) {
+            return baseCode to params
         }
-        return if (yoloStatus.isNullOrBlank()) {
-            baseMessage
-        } else {
-            "$baseMessage（YOLO: $yoloStatus）"
+        params["yolo"] = yoloStatus
+        return "${baseCode}_yolo" to params
+    }
+
+    private fun Map<String, Any>.toWritableParams(): WritableMap {
+        val map = Arguments.createMap()
+        forEach { (key, value) ->
+            when (value) {
+                is Int -> map.putInt(key, value)
+                else -> map.putString(key, value.toString())
+            }
         }
+        return map
     }
 
     private fun createMissThrow(index: Int): ThrowResult {
@@ -1040,24 +1080,6 @@ class BullTrackLiveRoundController(
             score = 0,
             position = position,
         )
-    }
-
-    private fun describeGateReason(gateReason: String): String {
-        return when {
-            gateReason == "yolo_count_not_increased" -> "YOLO 飞镖数量未增加"
-            gateReason == "yolo_skipped_unchanged" -> "画面没变，跳过 YOLO"
-            gateReason == "yolo_count_increased_wait_next_frame" -> "YOLO 飞镖数量增加，等待下一张确认"
-            gateReason == "yolo_count_not_stable" -> "YOLO 飞镖数量未稳定"
-            gateReason == "yolo_phantom_box_ignored" -> "多出的框已确认不是新镖，忽略"
-            gateReason.startsWith("yolo_count_increased_no_board_change") ->
-                "YOLO 多出一个框，但靶上没有新变化，已忽略（${gateReason.substringAfter(" ", "")}）"
-            gateReason.startsWith("yolo_detect_failed:") -> "YOLO 检测失败"
-            gateReason.startsWith("alignment_low") -> "画面晃动或被遮挡，等下一张"
-            gateReason == "new_box_moved" -> "新镖还在移动（飞行或掉落），等下一张"
-            gateReason.startsWith("lost_box_") -> "YOLO 这张没认出新镖，图像对比也未确认"
-            gateReason.isBlank() -> "未知原因"
-            else -> gateReason
-        }
     }
 
     private fun List<ThrowResult>.toWritableThrows(roundId: String): WritableArray {

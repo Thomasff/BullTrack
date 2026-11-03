@@ -5,6 +5,7 @@ export interface CameraReadyState {
   isReady: boolean;
   isPreviewBound: boolean;
   zoomRatio: number;
+  // A native.camera code (optionally 'code: detail'), or a native.errors code in the error state.
   statusMessage: string;
   lockPhase: CameraLockPhase;
   lockReason?: string | null;
@@ -83,6 +84,36 @@ export interface RoundPhotoFiles {
   close?: string;
 }
 
+// Native status text is a code (a key under native.status) with its parameters; RN translates it.
+export type NativeStatusParams = Record<string, string | number>;
+
+export interface RoundStateChangedEvent {
+  roundId?: string | null;
+  phase: 'starting' | 'capturing' | 'showingResult' | 'finished';
+  statusCode: string;
+  statusParams?: NativeStatusParams;
+  throws?: ThrowResult[];
+  canRedetect?: boolean;
+  // Only on 'capturing'.
+  startDartCount?: number;
+  leftRightHalfRatio?: number;
+  boardHeightShare?: number;
+}
+
+export interface ThrowsUpdatedEvent {
+  roundId: string;
+  throws: ThrowResult[];
+  statusCode: string;
+  statusParams?: NativeStatusParams;
+  canRedetect: boolean;
+}
+
+// message is a native error code (see native.errors), optionally with ': detail', or raw text.
+export interface NativeErrorEvent {
+  code?: string;
+  message: string;
+}
+
 export interface BullTrackNativeBridge {
   prepareRoundCamera(): Promise<CameraReadyState & BackCameraInfo>;
   startLiveRound(input: StartLiveRoundInput): Promise<StartLiveRoundResult>;
@@ -93,14 +124,16 @@ export interface BullTrackNativeBridge {
   listDebugRounds(): Promise<DebugRoundSummary[]>;
   // Zips the round's debug images, log and app/device info and opens the share sheet;
   // resolves with the bundle's file name.
-  shareDebugRound(roundId: string): Promise<string>;
+  shareDebugRound(roundId: string, title: string): Promise<string>;
+  // Removes every saved debug image, round log and recorded frame.
+  deleteDebugFiles(): Promise<boolean>;
   // Writes the text to a cache file and opens the share sheet; resolves with the file name.
-  shareTextFile(fileName: string, content: string): Promise<string>;
+  shareTextFile(fileName: string, content: string, title: string): Promise<string>;
   // Lets the user pick a file and resolves with its text; '' when they cancel.
   pickTextFile(): Promise<string>;
   // Shares a captured image file under the given name, with an optional caption ('' for none);
   // resolves with the shared file name.
-  shareImage(uri: string, fileName: string, text: string): Promise<string>;
+  shareImage(uri: string, fileName: string, text: string, title: string): Promise<string>;
   // Saves a captured image to Pictures/BullTrack (Android 10+); resolves with the file name.
   saveImageToGallery(uri: string, fileName: string): Promise<string>;
   // Writes the share photos of the round on screen (the live result, else the last confirmed

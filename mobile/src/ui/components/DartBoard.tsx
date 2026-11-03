@@ -1,5 +1,6 @@
 import React, { memo, useMemo, useRef, useState } from 'react';
 import { PanResponder, StyleSheet, Text, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import Svg, { Circle, G, Path, Text as SvgText } from 'react-native-svg';
 import {
   BOARD_OUTER_END,
@@ -254,6 +255,7 @@ const Marker = ({
 };
 
 export const DartBoard = ({ size, throws, editable, onThrowChange, onDragChange }: DartBoardProps) => {
+  const { t } = useTranslation();
   const boardKind = useSettingsStore(state => state.boardKind);
   const [drag, setDrag] = useState<{ index: number; point: BoardPoint } | null>(null);
   const dragRegion = useRef<string | null>(null);
@@ -318,7 +320,7 @@ export const DartBoard = ({ size, throws, editable, onThrowChange, onDragChange 
           ]}
           pointerEvents="none">
           <Text style={styles.hoverLabel}>
-            {hovered.ring === 'miss' ? '脱靶' : hovered.label} · {hovered.score}
+            {hovered.ring === 'miss' ? t('common.miss') : hovered.label} · {hovered.score}
           </Text>
         </View>
       ) : null}

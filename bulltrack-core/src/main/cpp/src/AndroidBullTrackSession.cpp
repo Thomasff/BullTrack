@@ -115,7 +115,7 @@ std::vector<std::uint8_t> EncodeJpegBytes(const cv::Mat& image) {
     std::vector<std::uint8_t> buffer;
     std::vector<int> params{cv::IMWRITE_JPEG_QUALITY, 95};
     if (!cv::imencode(".jpg", image, buffer, params)) {
-        throw std::runtime_error("调试图 JPEG 编码失败");
+        throw std::runtime_error("debug_image_encode_failed");
     }
     g_frame_stage_times.jpeg_ms += MsSince(start);
     return buffer;
@@ -554,17 +554,17 @@ cv::Rect ClampRectToImage(const cv::Rect2f& rect, const cv::Size& image_size) {
     const int right = std::min(image_size.width, static_cast<int>(std::ceil(rect.x + rect.width)));
     const int bottom = std::min(image_size.height, static_cast<int>(std::ceil(rect.y + rect.height)));
     if (left >= right || top >= bottom) {
-        throw std::runtime_error("首帧 board 框无效");
+        throw std::runtime_error("first_frame_board_box_invalid");
     }
     return cv::Rect(left, top, right - left, bottom - top);
 }
 
 cv::Mat CropBoardByRect(const cv::Mat& image, const cv::Rect& rect) {
     if (image.empty()) {
-        throw std::runtime_error("输入图为空，无法裁剪 board 区域");
+        throw std::runtime_error("board_crop_input_empty");
     }
     if (rect.width <= 0 || rect.height <= 0) {
-        throw std::runtime_error("board 裁剪区域无效");
+        throw std::runtime_error("board_crop_invalid");
     }
     return image(rect).clone();
 }
@@ -632,7 +632,7 @@ cv::Mat CropWithBlackPadding(const cv::Mat& image, const cv::Rect& rect) {
 cv::Rect SelectBestBoardBox(const YoloDetectionResult& detection, const cv::Size& image_size) {
     std::optional<cv::Rect> board_box = SelectOptionalBestBoardBox(detection, image_size);
     if (!board_box.has_value()) {
-        throw std::runtime_error("首帧未检测到 board");
+        throw std::runtime_error("board_not_found");
     }
     return board_box.value();
 }
@@ -650,7 +650,7 @@ FirstFrameBoardBaseline BuildFirstFrameBoardBaseline(
     const cv::Mat& first_frame_bgr,
     const PipelineConfig& pipeline_config) {
     if (first_frame_bgr.empty()) {
-        throw std::runtime_error("首帧为空");
+        throw std::runtime_error("first_frame_empty");
     }
 
     // The model sees a square of the frame. Each round centres it on the board along the frame's
@@ -751,10 +751,10 @@ void PushRecentFrame(std::vector<TrackedYoloFrameState>& recent_frames, TrackedY
 
 cv::Mat ResizeToTargetSize(const cv::Mat& image, const cv::Size& target_size) {
     if (image.empty()) {
-        throw std::runtime_error("输入图为空，无法缩放");
+        throw std::runtime_error("resize_input_empty");
     }
     if (target_size.width <= 0 || target_size.height <= 0) {
-        throw std::runtime_error("目标缩放尺寸无效");
+        throw std::runtime_error("resize_target_invalid");
     }
     if (image.size() == target_size) {
         return image.clone();
@@ -956,16 +956,16 @@ cv::Point2f NormalizePointFromRoundAlignedBoard(
     const cv::Mat& point_rectification_h,
     float rectified_radius) {
     if (point_rectification_h.empty()) {
-        throw std::runtime_error("首帧透视矫正矩阵为空");
+        throw std::runtime_error("first_frame_rectification_missing");
     }
     if (rectified_radius <= 1e-6f) {
-        throw std::runtime_error("首帧精确半径无效");
+        throw std::runtime_error("first_frame_radius_invalid");
     }
     std::vector<cv::Point2f> src_points{point_in_round_board};
     std::vector<cv::Point2f> dst_points;
     cv::perspectiveTransform(src_points, dst_points, point_rectification_h);
     if (dst_points.empty()) {
-        throw std::runtime_error("点坐标透视矫正失败");
+        throw std::runtime_error("point_rectification_failed");
     }
     return cv::Point2f(
         dst_points.front().x / rectified_radius,
@@ -1224,7 +1224,7 @@ AlignedBoardPair PairAlignedBoardImages(
 
 void CheckRoundBoardSize(const cv::Mat& first_preprocessed_gray) {
     if (first_preprocessed_gray.cols <= 0 || first_preprocessed_gray.rows <= 0) {
-        throw std::runtime_error("首帧预处理图为空");
+        throw std::runtime_error("first_frame_preprocessed_empty");
     }
 }
 
@@ -1940,13 +1940,34 @@ bool CanRefreshCleanFrame(
         board_offset_in_search).empty();
 }
 
+// Darts the prep check reports on the board; more than a round leaves, in case a few rounds were
+// not pulled.
+constexpr int kMaxPrepDarts = 9;
+
+// Tips of the darts boxed around the board (box centre in the dart search area, as in a round,
+// widened on both sides since the phone's side is not known yet), moved by offset from the
+// model's input into frame coordinates.
+std::vector<cv::Point> PrepDartTips(
+    const YoloDetectionResult& detection,
+    const cv::Rect& board_box,
+    const cv::Point& offset) {
+    std::vector<cv::Point> tips;
+    const cv::Rect search_rect = ExpandToDartSearchRect(board_box, true) | ExpandToDartSearchRect(board_box, false);
+    for (const YoloDetectionBox& box : SelectTopDartBoxes(detection, kMaxPrepDarts, search_rect)) {
+        tips.push_back(cv::Point(
+            static_cast<int>(std::lround(box.tip.x)),
+            static_cast<int>(std::lround(box.tip.y))) + offset);
+    }
+    return tips;
+}
+
 }  // namespace
 
 AndroidBullTrackSession::AndroidBullTrackSession() = default;
 
 AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first_frame_bgr, bool soft_board) {
     if (first_frame_bgr.empty()) {
-        throw std::runtime_error("首帧为空");
+        throw std::runtime_error("first_frame_empty");
     }
 
     AndroidStartRoundResult result;
@@ -2340,10 +2361,10 @@ void AndroidBullTrackSession::ConfirmNewDarts(
 
 AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& frame_bgr) {
     if (!started_) {
-        throw std::runtime_error("round session 尚未开始");
+        throw std::runtime_error("round_not_started");
     }
     if (frame_bgr.empty()) {
-        throw std::runtime_error("输入帧为空");
+        throw std::runtime_error("frame_empty");
     }
 
     // Adds this frame's stage times to the round's totals on every way out.
@@ -2658,10 +2679,10 @@ AndroidRedetectResult AndroidBullTrackSession::FindMissedDartsAtEnd() {
 
 AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& frame_bgr) {
     if (!started_) {
-        throw std::runtime_error("round session 尚未开始");
+        throw std::runtime_error("round_not_started");
     }
     if (frame_bgr.empty()) {
-        throw std::runtime_error("重新识别输入帧为空");
+        throw std::runtime_error("redetect_frame_empty");
     }
     latest_frame_bgr_ = frame_bgr;
     AndroidRedetectResult result;
@@ -2806,7 +2827,7 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
 
 RoundPhotoSource AndroidBullTrackSession::TakePhotoSource() const {
     if (!started_) {
-        throw std::runtime_error("round session 尚未开始");
+        throw std::runtime_error("round_not_started");
     }
     const TrackedYoloFrameState* frame = photo_frame_override_.has_value() ? &photo_frame_override_.value()
         : last_clean_frame_.has_value()                                    ? &last_clean_frame_.value()
@@ -2827,7 +2848,7 @@ RoundPhotoSource AndroidBullTrackSession::TakePhotoSource() const {
 
 PrepBoardGuide DetectPrepBoard(const cv::Mat& frame_bgr) {
     if (frame_bgr.empty()) {
-        throw std::runtime_error("画面为空");
+        throw std::runtime_error("prep_frame_empty");
     }
     constexpr double kBandHeightPerWidth = 1400.0 / 1080.0;
     const int band_height = std::min(
@@ -2849,11 +2870,14 @@ PrepBoardGuide DetectPrepBoard(const cv::Mat& frame_bgr) {
         side - guide.band.width - pad_x,
         cv::BORDER_CONSTANT,
         cv::Scalar(114, 114, 114));
-    const std::optional<cv::Rect> box = SelectOptionalBestBoardBox(DetectYoloObjects(square), square.size());
+    const YoloDetectionResult detection = DetectYoloObjects(square);
+    const std::optional<cv::Rect> box = SelectOptionalBestBoardBox(detection, square.size());
     if (box.has_value()) {
-        const cv::Rect in_frame = (box.value() - cv::Point(pad_x, pad_y) + guide.band.tl()) & guide.band;
+        const cv::Point offset = guide.band.tl() - cv::Point(pad_x, pad_y);
+        const cv::Rect in_frame = (box.value() + offset) & guide.band;
         if (in_frame.area() > 0) {
             guide.board_box = in_frame;
+            guide.dart_tips = PrepDartTips(detection, box.value(), offset);
         }
     }
     if (!guide.board_box.has_value()) {
@@ -2867,10 +2891,11 @@ PrepBoardGuide DetectPrepBoard(const cv::Mat& frame_bgr) {
             (frame_bgr.rows - crop_side) / 2,
             crop_side,
             crop_side);
-        const std::optional<cv::Rect> small_box =
-            SelectOptionalBestBoardBox(DetectYoloObjects(frame_bgr(crop)), crop.size());
+        const YoloDetectionResult small_detection = DetectYoloObjects(frame_bgr(crop));
+        const std::optional<cv::Rect> small_box = SelectOptionalBestBoardBox(small_detection, crop.size());
         if (small_box.has_value() && BoxClearOfSquareEdges(small_box.value(), cv::Rect(cv::Point(), crop.size()))) {
             guide.board_box = small_box.value() + crop.tl();
+            guide.dart_tips = PrepDartTips(small_detection, small_box.value(), crop.tl());
         }
     }
     return guide;

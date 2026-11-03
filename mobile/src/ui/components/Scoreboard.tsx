@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { colors, teamColors } from '../theme/colors';
 import {
   CHECKOUT_DRILLS,
@@ -14,6 +15,8 @@ import {
 } from '../../application/services/gameRules';
 import type { GameType, PlayerSummary } from '../../domain/game/types';
 import type { TeamInfo } from '../../domain/game/teams';
+import { displayPlayerName } from '../../domain/game/players';
+import { t } from '../../i18n';
 
 interface ScoreboardProps {
   gameType: GameType | null;
@@ -39,15 +42,15 @@ const getCricketRows = (gameType: GameType | null, players: PlayerSummary[]) =>
 
 const targetText = (target: number | string | null) =>
   target === null
-    ? '完成'
+    ? t('common.done')
     : target === 25
-      ? '靶心'
+      ? t('game.score.bull')
       : target === 'double'
-        ? '双倍'
+        ? t('game.score.double')
         : target === 'triple'
-          ? '三倍'
+          ? t('game.score.triple')
           : target === 'innerBull'
-            ? '内牛'
+            ? t('game.score.innerBull')
             : `${target}`;
 
 const killerLives = (lives: number) =>
@@ -66,39 +69,56 @@ const describePlayer = (gameType: GameType | null, player: PlayerSummary) => {
     case 'game701':
       return {
         value: `${player.score}`,
-        detail: rounds > 0 ? `均 ${average(player.roundScores).toFixed(1)}` : '剩余',
+        detail:
+          rounds > 0
+            ? t('game.score.average', { avg: average(player.roundScores).toFixed(1) })
+            : t('game.score.remaining'),
       };
     case 'highScore':
-      return { value: `${player.score}`, detail: `${rounds}/${HIGH_SCORE_ROUNDS} 轮` };
+      return { value: `${player.score}`, detail: t('game.score.roundsOf', { done: rounds, total: HIGH_SCORE_ROUNDS }) };
     case 'darts99':
-      return { value: `${player.score}`, detail: `${rounds * 3}/${DARTS_99_ROUNDS * 3} 镖` };
+      return {
+        value: `${player.score}`,
+        detail: t('game.score.dartsOf', { done: rounds * 3, total: DARTS_99_ROUNDS * 3 }),
+      };
     case 'aroundTheClock':
-      return { value: targetText(getAroundTheClockTarget(player.score)), detail: `${rounds} 轮` };
+      return {
+        value: targetText(getAroundTheClockTarget(player.score)),
+        detail: t('game.score.rounds', { n: rounds }),
+      };
     case 'cricketNoScore': {
       const targets = getCricketTargets(player);
       const closed = targets.filter(target => (player.marks?.[target] ?? 0) >= 3).length;
-      return { value: `${closed}/${targets.length}`, detail: '已关闭' };
+      return { value: `${closed}/${targets.length}`, detail: t('game.score.closed') };
     }
     case 'cutThroat':
-      return { value: `${player.score}`, detail: '分 · 低者胜' };
+      return { value: `${player.score}`, detail: t('game.score.lowWins') };
     case 'gotcha301':
-      return { value: `${player.score}`, detail: `还差 ${GOTCHA_TARGET - player.score}` };
+      return { value: `${player.score}`, detail: t('game.score.toGo', { n: GOTCHA_TARGET - player.score }) };
     case 'hammerCricket': {
       const target = player.target ?? null;
       const lastRound = target !== null && rounds === HAMMER_ROUNDS - 1;
       return {
         value: `${player.score}`,
-        detail: target === null ? '完成' : `目标 ${targetText(target)}${lastRound ? ' · 末轮' : ''}`,
+        detail:
+          target === null
+            ? t('common.done')
+            : t(lastRound ? 'game.score.targetLastRound' : 'game.score.target', {
+                target: targetText(target),
+              }),
       };
     }
     case 'catch40':
     case 'checkout4160': {
       const state = player.checkout;
       if (!state || state.target === null) {
-        return { value: '完成', detail: `${player.score} 分` };
+        return { value: t('common.done'), detail: t('game.score.points', { n: player.score }) };
       }
       const darts = CHECKOUT_DRILLS[gameType].maxDarts - state.dartsUsed;
-      return { value: `${state.remaining}`, detail: `${player.score} 分 · 剩 ${darts} 镖` };
+      return {
+        value: `${state.remaining}`,
+        detail: t('game.score.pointsDartsLeft', { n: player.score, darts }),
+      };
     }
     case 'shanghai':
     case 'halfIt':
@@ -106,21 +126,23 @@ const describePlayer = (gameType: GameType | null, player: PlayerSummary) => {
       const target = getRoundTarget(gameType, rounds + 1);
       return {
         value: `${player.score}`,
-        detail: target === null ? '完成' : `目标 ${targetText(target)}`,
+        detail: target === null ? t('common.done') : t('game.score.target', { target: targetText(target) }),
       };
     }
     case 'killer': {
       const state = player.killer;
       if (!state || state.lives <= 0) {
-        return { value: `${state?.number ?? '—'}`, detail: '出局' };
+        return { value: `${state?.number ?? '—'}`, detail: t('game.score.out') };
       }
       return {
         value: `${state.number}`,
-        detail: `${state.isKiller ? '杀手 ' : ''}${killerLives(state.lives)}`,
+        detail: state.isKiller
+          ? t('game.score.killer', { lives: killerLives(state.lives) })
+          : killerLives(state.lives),
       };
     }
     default:
-      return { value: `${player.score}`, detail: '分' };
+      return { value: `${player.score}`, detail: t('game.score.pointsUnit') };
   }
 };
 
@@ -132,58 +154,62 @@ export const Scoreboard = ({
   teams = null,
   people = [],
   currentThrowerId = null,
-}: ScoreboardProps) => (
-  <View style={styles.container}>
-    <View style={styles.cards}>
-      {players.map(player => {
-        const { value, detail } = describePlayer(gameType, player);
-        const isCurrent = winnerId === null && player.id === currentPlayerId;
-        const isWinner = player.id === winnerId;
-        const team = teams?.find(item => item.id === player.id) ?? null;
-        const teamColor = team ? teamColors[team.index % teamColors.length] : null;
-        const isOut = player.killer !== undefined && player.killer.lives <= 0;
-        return (
-          <View
-            key={player.id}
-            style={[
-              styles.card,
-              isCurrent && styles.cardCurrent,
-              isWinner && styles.cardWinner,
-              isOut && styles.cardOut,
-            ]}>
-            <View style={styles.nameRow}>
-              {teamColor ? <View style={[styles.teamDot, { backgroundColor: teamColor }]} /> : null}
-              <Text numberOfLines={1} style={[styles.name, isCurrent && styles.nameCurrent]}>
-                {isWinner ? '🏆 ' : ''}
-                {player.name}
-              </Text>
+}: ScoreboardProps) => {
+  // Redraws on a language switch; the helpers above read the current language.
+  useTranslation();
+  return (
+    <View style={styles.container}>
+      <View style={styles.cards}>
+        {players.map(player => {
+          const { value, detail } = describePlayer(gameType, player);
+          const isCurrent = winnerId === null && player.id === currentPlayerId;
+          const isWinner = player.id === winnerId;
+          const team = teams?.find(item => item.id === player.id) ?? null;
+          const teamColor = team ? teamColors[team.index % teamColors.length] : null;
+          const isOut = player.killer !== undefined && player.killer.lives <= 0;
+          return (
+            <View
+              key={player.id}
+              style={[
+                styles.card,
+                isCurrent && styles.cardCurrent,
+                isWinner && styles.cardWinner,
+                isOut && styles.cardOut,
+              ]}>
+              <View style={styles.nameRow}>
+                {teamColor ? <View style={[styles.teamDot, { backgroundColor: teamColor }]} /> : null}
+                <Text numberOfLines={1} style={[styles.name, isCurrent && styles.nameCurrent]}>
+                  {isWinner ? '🏆 ' : ''}
+                  {displayPlayerName(player.name)}
+                </Text>
+              </View>
+              <Text style={styles.value}>{value}</Text>
+              <Text style={styles.detail}>{detail}</Text>
+              {team ? (
+                <Text numberOfLines={2} style={styles.members}>
+                  {team.memberIds.map((memberId, index) => (
+                    <Text
+                      key={memberId}
+                      style={
+                        isCurrent && memberId === currentThrowerId
+                          ? [styles.memberCurrent, { color: teamColor ?? colors.accent }]
+                          : undefined
+                      }>
+                      {index > 0 ? ' · ' : ''}
+                      {displayPlayerName(people.find(person => person.id === memberId)?.name ?? '—')}
+                    </Text>
+                  ))}
+                </Text>
+              ) : null}
             </View>
-            <Text style={styles.value}>{value}</Text>
-            <Text style={styles.detail}>{detail}</Text>
-            {team ? (
-              <Text numberOfLines={2} style={styles.members}>
-                {team.memberIds.map((memberId, index) => (
-                  <Text
-                    key={memberId}
-                    style={
-                      isCurrent && memberId === currentThrowerId
-                        ? [styles.memberCurrent, { color: teamColor ?? colors.accent }]
-                        : undefined
-                    }>
-                    {index > 0 ? ' · ' : ''}
-                    {people.find(person => person.id === memberId)?.name ?? '—'}
-                  </Text>
-                ))}
-              </Text>
-            ) : null}
-          </View>
-        );
-      })}
-    </View>
+          );
+        })}
+      </View>
 
-    <CricketTable gameType={gameType} players={players} />
-  </View>
-);
+      <CricketTable gameType={gameType} players={players} />
+    </View>
+  );
+};
 
 const CricketTable = ({
   gameType,
@@ -211,7 +237,7 @@ const CricketTable = ({
       {players.map(player => (
         <View key={player.id} style={styles.tableRow}>
           <Text numberOfLines={1} style={styles.tableName}>
-            {player.name}
+            {displayPlayerName(player.name)}
           </Text>
           {rows.map(target => (
             <Text key={target} style={[styles.tableCell, compact && styles.tableCompact]}>

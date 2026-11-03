@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useEffect } from 'react';
+import '../i18n';
+import { useSettingsStore } from '../application/stores/settingsStore';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { StatusBar } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -17,13 +19,22 @@ const navigationTheme = {
   },
 };
 
-const App = () => (
-  <SafeAreaProvider>
-    <StatusBar barStyle="dark-content" backgroundColor={colors.panel} />
-    <NavigationContainer theme={navigationTheme}>
-      <RootNavigator />
-    </NavigationContainer>
-  </SafeAreaProvider>
-);
+const App = () => {
+  const settingsLoaded = useSettingsStore(state => state.loaded);
+  useEffect(() => {
+    useSettingsStore.getState().loadSettings().catch(() => undefined);
+  }, []);
+  return (
+    <SafeAreaProvider>
+      <StatusBar barStyle="dark-content" backgroundColor={colors.panel} />
+      {/* Settings carry the chosen language, so screens wait for them instead of redrawing. */}
+      {settingsLoaded ? (
+        <NavigationContainer theme={navigationTheme}>
+          <RootNavigator />
+        </NavigationContainer>
+      ) : null}
+    </SafeAreaProvider>
+  );
+};
 
 export default App;

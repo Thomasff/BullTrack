@@ -4,7 +4,7 @@ import Svg, { Circle, Path, Polyline, Rect } from 'react-native-svg';
 import { BoardFace, DART_MARKER_COLORS } from './DartBoard';
 import { VIEW_RADIUS, markerPoint } from '../../domain/game/boardGeometry';
 import type { ThrowResult } from '../../domain/game/types';
-import type { BoardKind, ShareOptions } from '../../application/stores/settingsStore';
+import type { BoardKind, CardOptions, ShareOptions } from '../../application/stores/settingsStore';
 import {
   SHARE_URL,
   formatShareDate,
@@ -41,7 +41,7 @@ const SIDE_COLORS = [...DART_MARKER_COLORS, '#9B8CF0', '#7BC47F', '#E58FB6', '#D
 interface CardProps {
   // Card width in layout units (dp); the height follows the size option.
   width: number;
-  options: ShareOptions;
+  options: CardOptions;
   showUrl: boolean;
 }
 

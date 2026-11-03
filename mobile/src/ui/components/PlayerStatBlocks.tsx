@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { colors } from '../theme/colors';
 import type { PlayerCricketStats, PlayerX01Stats } from '../../domain/history/types';
 
@@ -30,14 +31,18 @@ const BandRow = ({ bands }: { bands: Array<{ label: string; count: number }> }) 
 );
 
 // Rounds per mark count, from 5 marks up.
-export const CricketMarkRounds = ({ stats }: { stats: PlayerCricketStats }) => (
-  <BandRow
-    bands={stats.markRounds.map((count, index) => ({ label: `记 ${index + 5} 次`, count }))}
-  />
-);
+export const CricketMarkRounds = ({ stats }: { stats: PlayerCricketStats }) => {
+  const { t } = useTranslation();
+  return (
+    <BandRow
+      bands={stats.markRounds.map((count, index) => ({ label: t('stats.markRounds', { n: index + 5 }), count }))}
+    />
+  );
+};
 
 // X01 tiles plus a row counting rounds per score band.
 export const X01StatBlock = ({ stats }: { stats: PlayerX01Stats }) => {
+  const { t } = useTranslation();
   const bands = [
     { label: '60–99', count: stats.count60 },
     { label: '100–139', count: stats.count100 },
@@ -47,20 +52,24 @@ export const X01StatBlock = ({ stats }: { stats: PlayerX01Stats }) => {
   return (
     <>
       <StatTiles>
-        <StatTile label="三镖均分" value={stats.average.toFixed(1)} />
-        <StatTile label="前 9 镖均分" value={stats.first9Average.toFixed(1)} />
+        <StatTile label={t('stats.figures.average')} value={stats.average.toFixed(1)} />
+        <StatTile label={t('stats.figures.first9Average')} value={stats.first9Average.toFixed(1)} />
         <StatTile
-          label={`收镖成功率（${stats.checkoutHits}/${stats.checkoutAttempts}）`}
+          label={t('stats.figureWithCount', {
+            label: t('stats.figures.checkoutRate'),
+            hits: stats.checkoutHits,
+            attempts: stats.checkoutAttempts,
+          })}
           value={
             stats.checkoutAttempts > 0
               ? formatRate(stats.checkoutHits, stats.checkoutAttempts)
               : '—'
           }
         />
-        <StatTile label="最高收镖" value={`${stats.bestCheckout ?? '—'}`} />
-        <StatTile label="最少用镖" value={`${stats.dartsPerLeg?.best ?? '—'}`} />
+        <StatTile label={t('stats.figures.bestCheckout')} value={`${stats.bestCheckout ?? '—'}`} />
+        <StatTile label={t('stats.figures.fewestDarts')} value={`${stats.dartsPerLeg?.best ?? '—'}`} />
         <StatTile
-          label="平均用镖"
+          label={t('stats.figures.averageDarts')}
           value={stats.dartsPerLeg ? stats.dartsPerLeg.average.toFixed(1) : '—'}
         />
       </StatTiles>

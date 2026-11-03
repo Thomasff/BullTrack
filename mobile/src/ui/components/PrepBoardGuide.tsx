@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import Svg, { Path } from 'react-native-svg';
 import { bullTrackNativeBridge } from '../../native-bridge/bulltrack/bullTrackNative';
 import { useSettingsStore } from '../../application/stores/settingsStore';
@@ -100,12 +101,6 @@ export const usePrepBoardGuide = ({
   return view;
 };
 
-const HINT_TEXT: Record<Exclude<GuideHint, null>, string> = {
-  noBoard: '没找到靶子，请把手机对准靶子',
-  tooBig: '靶子太大，请把手机往后移一些',
-  tooSmall: '靶子太小，请把手机靠近一些',
-};
-
 const ARROW_LENGTH = 52;
 const ARROW_HEIGHT = 32;
 const ARROW_TRAVEL = 26;
@@ -153,9 +148,14 @@ const ARROW_DASH_ARRAY = (() => {
 })();
 // The arrow starts this far inside the preview when the bull is off it.
 const EDGE_INSET = 24;
+// A dart left in the board: a ring on its tip and a wider one spreading out from it.
+const DART_RING_SIZE = 14;
+const DART_PULSE_SIZE = 30;
+const DART_RING_WIDTH = 1.5;
 
 // The target region in the middle of the square preview, and an arrow sliding from the bull
-// (the board box centre) towards it. The region turns green once the bull is inside.
+// (the board box centre) towards it. The region turns green once the bull is inside. Darts
+// still in the board are marked where their tips are.
 export const PrepBoardGuideOverlay = ({
   size,
   view,
@@ -163,9 +163,29 @@ export const PrepBoardGuideOverlay = ({
   size: number;
   view: PrepGuideView | null;
 }) => {
+  const { t } = useTranslation();
   const progress = useRef(new Animated.Value(0)).current;
+  const pulse = useRef(new Animated.Value(0)).current;
   const guide = view?.board ? previewGuide(view.board, size) : null;
   const showArrow = guide !== null && !guide.centred;
+  const showDarts = (guide?.dartTips.length ?? 0) > 0;
+
+  useEffect(() => {
+    if (!showDarts) {
+      return;
+    }
+    pulse.setValue(0);
+    const loop = Animated.loop(
+      Animated.timing(pulse, {
+        toValue: 1,
+        duration: 1100,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse, showDarts]);
 
   useEffect(() => {
     if (!showArrow) {
@@ -255,9 +275,38 @@ export const PrepBoardGuideOverlay = ({
           </Animated.View>
         </View>
       ) : null}
+      {guide?.dartTips.map((tip, index) => (
+        <View
+          key={index}
+          style={[
+            styles.dartMark,
+            {
+              left: tip.x - DART_PULSE_SIZE / 2,
+              top: tip.y - DART_PULSE_SIZE / 2,
+            },
+          ]}>
+          <Animated.View
+            style={[
+              styles.dartPulse,
+              {
+                opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.9, 0] }),
+                transform: [
+                  {
+                    scale: pulse.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [DART_RING_SIZE / DART_PULSE_SIZE, 1],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          />
+          <View style={styles.dartRing} />
+        </View>
+      ))}
       {view.hint ? (
         <View style={styles.hintBadge}>
-          <Text style={styles.hintText}>{HINT_TEXT[view.hint]}</Text>
+          <Text style={styles.hintText}>{t(`game.guide.${view.hint}`)}</Text>
         </View>
       ) : null}
     </View>
@@ -281,6 +330,29 @@ const styles = StyleSheet.create({
   regionCentred: {
     borderStyle: 'solid',
     borderColor: '#4ADE80',
+  },
+  dartMark: {
+    position: 'absolute',
+    width: DART_PULSE_SIZE,
+    height: DART_PULSE_SIZE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dartPulse: {
+    position: 'absolute',
+    width: DART_PULSE_SIZE,
+    height: DART_PULSE_SIZE,
+    borderRadius: DART_PULSE_SIZE / 2,
+    borderWidth: DART_RING_WIDTH,
+    borderColor: colors.accent,
+  },
+  dartRing: {
+    width: DART_RING_SIZE,
+    height: DART_RING_SIZE,
+    borderRadius: DART_RING_SIZE / 2,
+    borderWidth: DART_RING_WIDTH,
+    borderColor: colors.accent,
+    backgroundColor: 'rgba(200, 40, 46, 0.2)',
   },
   hintBadge: {
     position: 'absolute',

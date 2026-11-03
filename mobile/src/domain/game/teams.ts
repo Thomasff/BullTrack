@@ -1,4 +1,5 @@
 import type { PlayerSummary } from './types';
+import { t } from '../../i18n';
 
 export const MIN_TEAMS = 2;
 export const MAX_TEAMS = 4;
@@ -14,7 +15,8 @@ export interface TeamInfo {
   memberIds: string[];
 }
 
-export const getTeamName = (index: number) => `${String.fromCharCode(65 + index)} 队`;
+export const getTeamName = (index: number) =>
+  t('setup.teamName', { letter: String.fromCharCode(65 + index) });
 
 // Groups players into teams by teamIndex; null when the game is not a team game.
 export const buildTeams = (players: PlayerSummary[]): TeamInfo[] | null => {

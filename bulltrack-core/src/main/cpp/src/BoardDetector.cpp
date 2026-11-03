@@ -253,7 +253,7 @@ cv::Point2f SelectLongEdgeMidpoint(const cv::RotatedRect& rect, const cv::Point2
         }
     }
     if (!best_midpoint.has_value()) {
-        throw std::runtime_error("无法从双倍区旋转框提取纠正点");
+        throw std::runtime_error("double_bed_points_failed");
     }
     return best_midpoint.value();
 }
@@ -1055,7 +1055,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     cv::Mat red_only_blurred = red_binary_pre.clone();
     auto components = ExtractComponentCandidates(red_binary_pre, circle_config.red_region_min_area, bed_center);
     if (components.empty()) {
-        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, cv::Mat(), cv::Mat(), cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "无可用红色区域"};
+        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, cv::Mat(), cv::Mat(), cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "no_red_regions"};
     }
 
     std::vector<ComponentCandidate> elongated_components;
@@ -1065,7 +1065,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         }
     }
     if (elongated_components.empty()) {
-        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, cv::Mat(), cv::Mat(), cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "长宽比筛选后无可用红色区域"};
+        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, cv::Mat(), cv::Mat(), cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "no_long_red_regions"};
     }
 
     std::vector<ComponentCandidate> perpendicular_components;
@@ -1104,7 +1104,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     }
 #endif
     if (static_cast<int>(perpendicular_components.size()) < kMinDoubleSeatCount) {
-        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "垂直方向筛选后双倍区不足8个"};
+        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "too_few_perpendicular_double_beds"};
     }
 
     // Drop small fragments, but keep halves of a bed cut by a dart shaft: seats merge those.
@@ -1124,10 +1124,10 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
 
     std::optional<DoubleSeatFit> seat_fit = FitDoubleSeats(pool, bed_center);
     if (!seat_fit.has_value()) {
-        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "分座位后双倍区不足8个"};
+        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "too_few_double_seats"};
     }
     if (seat_fit->max_residual > kMaxSeatResidual) {
-        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), seat_fit->src_points, seat_fit->dst_points, cv::Mat(), cv::format("双倍区位置不一致(残差%.3f)", seat_fit->max_residual), seat_fit->max_residual, static_cast<int>(seat_fit->src_points.size())};
+        return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), seat_fit->src_points, seat_fit->dst_points, cv::Mat(), cv::format("double_seats_inconsistent: %.3f", seat_fit->max_residual), seat_fit->max_residual, static_cast<int>(seat_fit->src_points.size())};
     }
     const cv::Mat& point_rectification_h = seat_fit->homography;
     const float rectified_radius = 1.0f;
@@ -1223,7 +1223,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         seat_fit->src_points,
         seat_fit->dst_points,
         point_rectification_h,
-        "透视双倍区纠正成功",
+        "double_rectification_ok",
         seat_fit->max_residual,
         static_cast<int>(seat_fit->src_points.size()),
         ring_edges

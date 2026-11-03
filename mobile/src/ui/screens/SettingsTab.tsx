@@ -1,9 +1,12 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { colors } from '../theme/colors';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { BoardKindDialog } from '../components/BoardKindDialog';
+import { LanguageDialog, languageLabel } from '../components/LanguageDialog';
 import { BoardFace } from '../components/DartBoard';
+import { PlacementGuide } from '../components/PlacementGuide';
 import { useSettingsStore } from '../../application/stores/settingsStore';
 import {
   clearHistory,
@@ -13,8 +16,12 @@ import {
 import { playHapticTick, playSoundCue } from '../../application/services/liveRoundService';
 import { bullTrackNativeBridge } from '../../native-bridge/bulltrack/bullTrackNative';
 import { deleteMatchPhotos } from '../../application/services/shareService';
+import { version } from '../../../package.json';
 
 type BackupResult = { text: string; failed: boolean };
+
+const VERSION_TAPS = 7;
+const VERSION_TAP_GAP_MS = 1500;
 
 const backupFileName = (now: Date) => {
   const pad = (value: number) => `${value}`.padStart(2, '0');
@@ -24,6 +31,12 @@ const backupFileName = (now: Date) => {
 };
 
 export const SettingsTab = () => {
+  const { t } = useTranslation();
+  const language = useSettingsStore(state => state.language);
+  const setLanguage = useSettingsStore(state => state.setLanguage);
+  const [pickingLanguage, setPickingLanguage] = useState(false);
+  const developerMode = useSettingsStore(state => state.developerMode);
+  const setDeveloperMode = useSettingsStore(state => state.setDeveloperMode);
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
   const setShowDebugInfo = useSettingsStore(state => state.setShowDebugInfo);
   const recordFrames = useSettingsStore(state => state.recordFrames);
@@ -41,11 +54,29 @@ export const SettingsTab = () => {
   const boardKind = useSettingsStore(state => state.boardKind);
   const setBoardKind = useSettingsStore(state => state.setBoardKind);
   const [pickingBoard, setPickingBoard] = useState(false);
+  const [showingGuide, setShowingGuide] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [confirmingDeveloperOff, setConfirmingDeveloperOff] = useState(false);
   const [clearResult, setClearResult] = useState<'done' | 'failed' | null>(null);
 
   const [backupBusy, setBackupBusy] = useState(false);
   const [backupResult, setBackupResult] = useState<BackupResult | null>(null);
+  const versionTaps = useRef({ count: 0, at: 0 });
+
+  // Seven quick taps on the version line turn developer mode on.
+  const tapVersion = () => {
+    if (developerMode) {
+      return;
+    }
+    const now = Date.now();
+    const taps = versionTaps.current;
+    taps.count = now - taps.at < VERSION_TAP_GAP_MS ? taps.count + 1 : 1;
+    taps.at = now;
+    if (taps.count >= VERSION_TAPS) {
+      taps.count = 0;
+      setDeveloperMode(true).catch(() => undefined);
+    }
+  };
 
   const runBackupAction = (action: () => Promise<string | null>, failedText: string) => {
     if (backupBusy) {
@@ -62,9 +93,13 @@ export const SettingsTab = () => {
   const backUpHistory = () =>
     runBackupAction(async () => {
       const content = await exportHistory();
-      await bullTrackNativeBridge.shareTextFile(backupFileName(new Date()), content);
+      await bullTrackNativeBridge.shareTextFile(
+        backupFileName(new Date()),
+        content,
+        t('native.share.backup'),
+      );
       return null;
-    }, '备份失败，请重试');
+    }, t('settings.backupFailed'));
 
   const restoreHistory = () =>
     runBackupAction(async () => {
@@ -74,12 +109,12 @@ export const SettingsTab = () => {
       }
       const result = await importHistory(text);
       if (result.status === 'invalid') {
-        return '这不是 BullTrack 的备份文件';
+        return t('settings.restoreInvalid');
       }
       return result.skipped > 0
-        ? `已导入 ${result.added} 场比赛，${result.skipped} 场已存在`
-        : `已导入 ${result.added} 场比赛`;
-    }, '导入失败，请重试');
+        ? t('settings.restoreDoneSkipped', { added: result.added, skipped: result.skipped })
+        : t('settings.restoreDone', { added: result.added });
+    }, t('settings.restoreFailed'));
 
   const clearAllHistory = () => {
     setConfirmingClear(false);
@@ -93,41 +128,42 @@ export const SettingsTab = () => {
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <View style={styles.card}>
-        <Pressable
-          onPress={() => setPickingBoard(true)}
-          style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
-          <View style={styles.rowText}>
-            <Text style={styles.label}>靶子类型</Text>
-            <Text style={styles.description}>按你的靶子选，影响圈线判定和对局里的靶图</Text>
+      {developerMode ? (
+        <View style={styles.card}>
+          <View style={styles.row}>
+            <View style={styles.rowText}>
+              <Text style={styles.label}>{t('settings.developerMode')}</Text>
+              <Text style={styles.description}>{t('settings.developerModeDescription')}</Text>
+            </View>
+            <Switch
+              value
+              onValueChange={value => {
+                if (!value) {
+                  setConfirmingDeveloperOff(true);
+                }
+              }}
+              trackColor={{ true: colors.accent, false: colors.border }}
+              thumbColor={colors.panel}
+            />
           </View>
-          <View style={styles.rowValue}>
-            <BoardFace size={26} kind={boardKind} showNumbers={false} />
-            <Text style={styles.valueText}>{boardKind === 'soft' ? '软靶' : '硬靶'}</Text>
-            <Text style={styles.chevron}>›</Text>
-          </View>
-        </Pressable>
-        <View style={[styles.row, styles.rowDivider]}>
-          <View style={styles.rowText}>
-            <Text style={styles.label}>显示调试信息</Text>
-            <Text style={styles.description}>对局页显示识别状态与调试图入口</Text>
-          </View>
-          <Switch
-            value={showDebugInfo}
-            onValueChange={value => {
-              setShowDebugInfo(value).catch(() => undefined);
-            }}
-            trackColor={{ true: colors.accent, false: colors.border }}
-            thumbColor={colors.panel}
-          />
-        </View>
-        {showDebugInfo ? (
           <View style={[styles.row, styles.rowDivider]}>
             <View style={styles.rowText}>
-              <Text style={styles.label}>录制原始画面</Text>
-              <Text style={styles.description}>
-                开发用：每轮保存拍到的画面，供以后离线测试识别。耗电和占用存储会增加，重启 App 后自动关闭
-              </Text>
+              <Text style={styles.label}>{t('settings.showDebugInfo')}</Text>
+              <Text style={styles.description}>{t('settings.showDebugInfoDescription')}</Text>
+            </View>
+            <Switch
+              value={showDebugInfo}
+              onValueChange={value => {
+                setShowDebugInfo(value).catch(() => undefined);
+              }}
+              trackColor={{ true: colors.accent, false: colors.border }}
+              thumbColor={colors.panel}
+            />
+          </View>
+          <View style={[styles.row, styles.rowDivider]}>
+            <View style={styles.rowText}>
+              <Text style={styles.label}>{t('settings.recordFrames')}</Text>
+              <Text style={styles.description}>{t('settings.recordFramesDescription')}</Text>
             </View>
             <Switch
               value={recordFrames}
@@ -136,14 +172,10 @@ export const SettingsTab = () => {
               thumbColor={colors.panel}
             />
           </View>
-        ) : null}
-        {showDebugInfo ? (
           <View style={[styles.row, styles.rowDivider]}>
             <View style={styles.rowText}>
-              <Text style={styles.label}>识别用 CPU</Text>
-              <Text style={styles.description}>
-                开发用：飞镖识别改在 CPU 上跑（默认 GPU），用来比较速度和耗电。每轮的平均电流和功率记在调试日志里，重启 App 后自动关闭
-              </Text>
+              <Text style={styles.label}>{t('settings.yoloOnCpu')}</Text>
+              <Text style={styles.description}>{t('settings.yoloOnCpuDescription')}</Text>
             </View>
             <Switch
               value={yoloOnCpu}
@@ -152,11 +184,51 @@ export const SettingsTab = () => {
               thumbColor={colors.panel}
             />
           </View>
-        ) : null}
+        </View>
+      ) : null}
+
+      <View style={styles.card}>
+        <Pressable
+          onPress={() => setPickingLanguage(true)}
+          style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>{t('settings.language')}</Text>
+          </View>
+          <View style={styles.rowValue}>
+            <Text style={styles.valueText}>{languageLabel(language, t('settings.languageSystem'))}</Text>
+            <Text style={styles.chevron}>›</Text>
+          </View>
+        </Pressable>
+        <Pressable
+          onPress={() => setPickingBoard(true)}
+          style={({ pressed }) => [styles.row, styles.rowDivider, pressed && styles.pressed]}>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>{t('settings.boardKind')}</Text>
+            <Text style={styles.description}>{t('settings.boardKindDescription')}</Text>
+          </View>
+          <View style={styles.rowValue}>
+            <BoardFace size={26} kind={boardKind} showNumbers={false} />
+            <Text style={styles.valueText}>
+              {boardKind === 'soft' ? t('common.boardSoft') : t('common.boardSteel')}
+            </Text>
+            <Text style={styles.chevron}>›</Text>
+          </View>
+        </Pressable>
+        <Pressable
+          onPress={() => setShowingGuide(true)}
+          style={({ pressed }) => [styles.row, styles.rowDivider, pressed && styles.pressed]}>
+          <View style={styles.rowText}>
+            <Text style={styles.label}>{t('guide.open')}</Text>
+            <Text style={styles.description}>{t('guide.openDescription')}</Text>
+          </View>
+          <View style={styles.rowValue}>
+            <Text style={styles.chevron}>›</Text>
+          </View>
+        </Pressable>
         <View style={[styles.row, styles.rowDivider]}>
           <View style={styles.rowText}>
-            <Text style={styles.label}>提示音</Text>
-            <Text style={styles.description}>可以投镖、识别到一镖、出错时发出落镖声</Text>
+            <Text style={styles.label}>{t('settings.soundCues')}</Text>
+            <Text style={styles.description}>{t('settings.soundCuesDescription')}</Text>
           </View>
           <Switch
             value={soundCues}
@@ -173,8 +245,8 @@ export const SettingsTab = () => {
         </View>
         <View style={[styles.row, styles.rowDivider]}>
           <View style={styles.rowText}>
-            <Text style={styles.label}>震动</Text>
-            <Text style={styles.description}>拖动飞镖标记时，每进入一个新区域轻震一下</Text>
+            <Text style={styles.label}>{t('settings.vibration')}</Text>
+            <Text style={styles.description}>{t('settings.vibrationDescription')}</Text>
           </View>
           <Switch
             value={vibration}
@@ -191,8 +263,8 @@ export const SettingsTab = () => {
         </View>
         <View style={[styles.row, styles.rowDivider]}>
           <View style={styles.rowText}>
-            <Text style={styles.label}>分享图显示网址</Text>
-            <Text style={styles.description}>分享图底部 BullTrack 名字下面加一行项目网址</Text>
+            <Text style={styles.label}>{t('settings.shareShowUrl')}</Text>
+            <Text style={styles.description}>{t('settings.shareShowUrlDescription')}</Text>
           </View>
           <Switch
             value={shareShowUrl}
@@ -205,8 +277,8 @@ export const SettingsTab = () => {
         </View>
         <View style={[styles.row, styles.rowDivider]}>
           <View style={styles.rowText}>
-            <Text style={styles.label}>自嘲类高光</Text>
-            <Text style={styles.description}>26 分（20、5、1）这种也给红色高光标签</Text>
+            <Text style={styles.label}>{t('settings.selfMocking')}</Text>
+            <Text style={styles.description}>{t('settings.selfMockingDescription')}</Text>
           </View>
           <Switch
             value={highlightSelfMocking}
@@ -225,8 +297,8 @@ export const SettingsTab = () => {
           onPress={backUpHistory}
           style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
           <View style={styles.rowText}>
-            <Text style={styles.label}>备份历史记录</Text>
-            <Text style={styles.description}>导出成一个文件，可发到微信、网盘或存到手机</Text>
+            <Text style={styles.label}>{t('settings.backup')}</Text>
+            <Text style={styles.description}>{t('settings.backupDescription')}</Text>
           </View>
         </Pressable>
         <Pressable
@@ -234,8 +306,8 @@ export const SettingsTab = () => {
           onPress={restoreHistory}
           style={({ pressed }) => [styles.row, styles.rowDivider, pressed && styles.pressed]}>
           <View style={styles.rowText}>
-            <Text style={styles.label}>从备份导入</Text>
-            <Text style={styles.description}>合并到现有记录，已有的比赛不会重复</Text>
+            <Text style={styles.label}>{t('settings.restore')}</Text>
+            <Text style={styles.description}>{t('settings.restoreDescription')}</Text>
             {backupBusy || backupResult ? (
               <Text
                 style={[
@@ -243,7 +315,7 @@ export const SettingsTab = () => {
                   styles.result,
                   backupResult?.failed && styles.danger,
                 ]}>
-                {backupBusy ? '处理中…' : backupResult?.text}
+                {backupBusy ? t('settings.working') : backupResult?.text}
               </Text>
             ) : null}
           </View>
@@ -255,27 +327,45 @@ export const SettingsTab = () => {
           }}
           style={({ pressed }) => [styles.row, styles.rowDivider, pressed && styles.pressed]}>
           <View style={styles.rowText}>
-            <Text style={[styles.label, styles.danger]}>清空历史记录</Text>
+            <Text style={[styles.label, styles.danger]}>{t('settings.clearHistory')}</Text>
             {clearResult ? (
               <Text style={[styles.description, clearResult === 'failed' && styles.danger]}>
-                {clearResult === 'done' ? '已清空' : '清空失败，请重试'}
+                {clearResult === 'done' ? t('settings.clearDone') : t('settings.clearFailed')}
               </Text>
             ) : null}
           </View>
         </Pressable>
       </View>
 
-      <Text style={styles.footer}>BullTrack · 飞镖自动计分</Text>
+      <Pressable onPress={tapVersion}>
+        <Text style={styles.footer}>{t('settings.footer', { version })}</Text>
+        {developerMode ? (
+          <Text style={styles.footerNote}>{t('settings.developerModeOnNote')}</Text>
+        ) : null}
+      </Pressable>
 
       <ConfirmDialog
         visible={confirmingClear}
-        title="清空历史记录"
-        message="所有比赛和玩家统计都会被删除，且无法恢复。"
-        confirmLabel="清空"
-        cancelLabel="取消"
+        title={t('settings.clearHistory')}
+        message={t('settings.clearConfirmMessage')}
+        confirmLabel={t('settings.clearConfirm')}
+        cancelLabel={t('common.cancel')}
         danger
         onConfirm={clearAllHistory}
         onCancel={() => setConfirmingClear(false)}
+      />
+      <ConfirmDialog
+        visible={confirmingDeveloperOff}
+        title={t('settings.developerOffTitle')}
+        message={t('settings.developerOffMessage')}
+        confirmLabel={t('settings.developerOffConfirm')}
+        cancelLabel={t('common.cancel')}
+        danger
+        onConfirm={() => {
+          setConfirmingDeveloperOff(false);
+          setDeveloperMode(false).catch(() => undefined);
+        }}
+        onCancel={() => setConfirmingDeveloperOff(false)}
       />
       <BoardKindDialog
         visible={pickingBoard}
@@ -287,6 +377,16 @@ export const SettingsTab = () => {
         }}
         onCancel={() => setPickingBoard(false)}
       />
+      <LanguageDialog
+        visible={pickingLanguage}
+        selected={language}
+        onPick={choice => {
+          setPickingLanguage(false);
+          setLanguage(choice).catch(() => undefined);
+        }}
+        onCancel={() => setPickingLanguage(false)}
+      />
+      <PlacementGuide visible={showingGuide} onClose={() => setShowingGuide(false)} />
     </ScrollView>
   );
 };
@@ -352,6 +452,12 @@ const styles = StyleSheet.create({
   },
   footer: {
     marginTop: 8,
+    textAlign: 'center',
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  footerNote: {
+    marginTop: 4,
     textAlign: 'center',
     fontSize: 12,
     color: colors.textSecondary,

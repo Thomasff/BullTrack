@@ -55,7 +55,7 @@ RoundPhotoSource MakeRoundPhotoSource(
     float rectified_radius,
     std::vector<cv::Rect2f> dart_boxes) {
     if (frame_bgr.empty() || point_rectification_h.empty() || rectified_radius <= 1e-6f) {
-        throw std::runtime_error("没有可用的本轮照片");
+        throw std::runtime_error("no_round_photo");
     }
     RoundPhotoSource source;
     source.board_box = board_box;
@@ -65,7 +65,7 @@ RoundPhotoSource MakeRoundPhotoSource(
         cv::boundingRect(PhotoCircleInFrame(source.point_rectification_h, rectified_radius, board_box)) &
         cv::Rect(0, 0, frame_bgr.cols, frame_bgr.rows);
     if (area.area() <= 0) {
-        throw std::runtime_error("靶子不在画面里");
+        throw std::runtime_error("board_not_in_photo");
     }
     source.area_bgr = frame_bgr(area).clone();
     source.area_origin = area.tl();
@@ -75,7 +75,7 @@ RoundPhotoSource MakeRoundPhotoSource(
 
 RoundPhotoJpegs RenderRoundPhotos(const RoundPhotoSource& source) {
     if (source.area_bgr.empty()) {
-        throw std::runtime_error("没有可用的本轮照片");
+        throw std::runtime_error("no_round_photo");
     }
     RoundPhotoJpegs photos;
 

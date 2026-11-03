@@ -72,6 +72,7 @@ export const mockBullTrackNativeBridge: BullTrackNativeBridge = {
   loadDebugArtifacts: async () => mockArtifacts,
   listDebugRounds: async () => [],
   shareDebugRound: async () => '',
+  deleteDebugFiles: async () => true,
   shareTextFile: async (fileName: string) => fileName,
   pickTextFile: async () => '',
   shareImage: async (_uri: string, fileName: string) => fileName,

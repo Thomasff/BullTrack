@@ -115,6 +115,16 @@ describe('stepPrepGuide', () => {
     }
     expect(delays).toEqual([FAST_INTERVAL_MS, FAST_INTERVAL_MS, SLOW_INTERVAL_MS, SLOW_INTERVAL_MS]);
   });
+
+  test('keeps checking often while darts are in the board', () => {
+    const withDart = { ...detection(540, 1000, 900, 2), dartTips: [{ x: 600, y: 900 }] };
+    let state = INITIAL_PREP_GUIDE_STATE;
+    for (let i = 0; i < 4; i += 1) {
+      const step = stepPrepGuide(state, withDart, 2, 1, 4, false);
+      state = step.state;
+      expect(step.delayMs).toBe(FAST_INTERVAL_MS);
+    }
+  });
 });
 
 describe('previewGuide', () => {
@@ -124,5 +134,16 @@ describe('previewGuide', () => {
 
   test('places a high board above the preview', () => {
     expect(previewGuide(board(540, 300, 400), 300).bull.y).toBeLessThan(0);
+  });
+
+  test('maps dart tips and leaves out those above the preview', () => {
+    const withDarts = toPrepBoard({
+      ...detection(540, 960, 800),
+      dartTips: [
+        { x: 540, y: 960 },
+        { x: 540, y: 300 },
+      ],
+    })!;
+    expect(previewGuide(withDarts, 300).dartTips).toEqual([{ x: 150, y: 150 }]);
   });
 });

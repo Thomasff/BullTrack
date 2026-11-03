@@ -1,13 +1,20 @@
 import React, { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useTranslation } from 'react-i18next';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
-import { getModeOptionsByCategory } from '../../domain/game/modeCatalog';
+import {
+  getModeOptionDescription,
+  getModeOptionTitle,
+  getModeOptionsByCategory,
+} from '../../domain/game/modeCatalog';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'ModeSelect'>;
 
 export const ModeSelectScreen = ({ navigation, route }: Props) => {
+  // Redraws the titles and descriptions on a language switch.
+  useTranslation();
   const options = useMemo(
     () => getModeOptionsByCategory(route.params.categoryId),
     [route.params.categoryId],
@@ -22,8 +29,8 @@ export const ModeSelectScreen = ({ navigation, route }: Props) => {
             onPress={() => navigation.navigate('PlayerSetup', { modeOptionId: option.id })}
             style={({ pressed }) => [styles.optionCard, pressed && styles.optionCardPressed]}>
             <View style={styles.optionText}>
-              <Text style={styles.optionTitle}>{option.title}</Text>
-              <Text style={styles.optionDescription}>{option.description}</Text>
+              <Text style={styles.optionTitle}>{getModeOptionTitle(option)}</Text>
+              <Text style={styles.optionDescription}>{getModeOptionDescription(option)}</Text>
             </View>
             <Text style={styles.chevron}>›</Text>
           </Pressable>

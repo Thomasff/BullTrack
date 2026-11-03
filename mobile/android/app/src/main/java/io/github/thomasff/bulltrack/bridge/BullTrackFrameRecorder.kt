@@ -170,6 +170,12 @@ class BullTrackFrameRecorder(
         }
     }
 
+    /** Stops recording and removes every recorded round, after any write already queued. */
+    fun deleteAll() {
+        stop()
+        writer.submit { baseDir.deleteRecursively() }.get()
+    }
+
     private fun pruneOldRounds() {
         baseDir
             .listFiles()

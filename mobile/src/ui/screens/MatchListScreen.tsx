@@ -1,11 +1,14 @@
 import React, { useCallback, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { listRecentMatches } from '../../application/services/historyRepository';
 import type { RecentMatchSummary } from '../../domain/history/types';
+import { displayPlayerName } from '../../domain/game/players';
+import { modeDisplayName } from '../../i18n';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MatchList'>;
 
@@ -23,23 +26,29 @@ export const MatchCard = ({
 }: {
   match: RecentMatchSummary;
   onPress: () => void;
-}) => (
-  <Pressable
-    onPress={onPress}
-    style={({ pressed }) => [styles.matchCard, pressed && styles.pressed]}
-  >
-    <View style={styles.matchText}>
-      <Text style={styles.matchTitle}>{match.modeLabel ?? match.mode}</Text>
-      <Text style={styles.matchMeta}>
-        {formatMatchTime(match.createdAt)} · {match.playerCount} 人
+}) => {
+  const { t } = useTranslation();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [styles.matchCard, pressed && styles.pressed]}
+    >
+      <View style={styles.matchText}>
+        <Text style={styles.matchTitle}>{modeDisplayName(match.mode, match.modeLabel)}</Text>
+        <Text style={styles.matchMeta}>
+          {formatMatchTime(match.createdAt)} · {t('history.playerCount', { n: match.playerCount })}
+        </Text>
+      </View>
+      <Text style={styles.winner}>
+        🏆 {match.winnerName ? displayPlayerName(match.winnerName) : '—'}
       </Text>
-    </View>
-    <Text style={styles.winner}>🏆 {match.winnerName ?? '—'}</Text>
-  </Pressable>
-);
+    </Pressable>
+  );
+};
 
 // Every saved match, newest first, guests-only matches included.
 export const MatchListScreen = ({ navigation }: Props) => {
+  const { t } = useTranslation();
   const [matches, setMatches] = useState<RecentMatchSummary[] | null>(null);
 
   // Reload on return, since a match can be deleted from its detail page.
@@ -52,14 +61,14 @@ export const MatchListScreen = ({ navigation }: Props) => {
   );
 
   if (matches === null) {
-    return <Text style={styles.empty}>正在读取…</Text>;
+    return <Text style={styles.empty}>{t('history.loading')}</Text>;
   }
   return (
     <FlatList
       data={matches}
       keyExtractor={match => `${match.id}`}
       contentContainerStyle={styles.content}
-      ListEmptyComponent={<Text style={styles.empty}>还没有完成的比赛。</Text>}
+      ListEmptyComponent={<Text style={styles.empty}>{t('history.noMatches')}</Text>}
       renderItem={({ item }) => (
         <MatchCard
           match={item}

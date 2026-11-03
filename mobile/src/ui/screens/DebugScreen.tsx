@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useTranslation } from 'react-i18next';
 import { useGameStore } from '../../application/stores/gameStore';
 import { bullTrackNativeBridge } from '../../native-bridge/bulltrack/bullTrackNative';
 import type { DebugRoundSummary } from '../../native-bridge/bulltrack/types';
@@ -14,6 +15,7 @@ import { SecondaryButton } from '../components/SecondaryButton';
 import { SectionHeader } from '../components/SectionHeader';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
+import { t as translate } from '../../i18n';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Debug'>;
 
@@ -29,10 +31,11 @@ const pad = (value: number) => `${value}`.padStart(2, '0');
 const roundLabel = (round: DebugRoundSummary, currentRoundId: string | null) => {
   const time = new Date(round.savedAt);
   const clock = `${pad(time.getHours())}:${pad(time.getMinutes())}:${pad(time.getSeconds())}`;
-  return round.roundId === currentRoundId ? `${clock}（本轮）` : clock;
+  return round.roundId === currentRoundId ? translate('debug.currentRound', { clock }) : clock;
 };
 
 export const DebugScreen = ({ navigation }: Props) => {
+  const { t } = useTranslation();
   const currentRoundId = useGameStore(state => state.roundId);
   const [boardThrows, setBoardThrows] = useState(sampleThrows);
   const [rounds, setRounds] = useState<DebugRoundSummary[]>([]);
@@ -84,9 +87,9 @@ export const DebugScreen = ({ navigation }: Props) => {
     setExporting(true);
     setExportError(null);
     try {
-      await bullTrackNativeBridge.shareDebugRound(selectedRoundId);
+      await bullTrackNativeBridge.shareDebugRound(selectedRoundId, t('native.share.debugBundle'));
     } catch (error) {
-      setExportError(`导出失败：${error instanceof Error ? error.message : String(error)}`);
+      setExportError(t('debug.exportFailed', { error: error instanceof Error ? error.message : String(error) }));
     } finally {
       setExporting(false);
     }
@@ -96,12 +99,12 @@ export const DebugScreen = ({ navigation }: Props) => {
     <ScrollView contentContainerStyle={styles.content} style={styles.screen}>
       <SectionHeader
         eyebrow="Debug"
-        title="调试图"
-        description="保存最近 10 轮的调试图和日志。识别出错时选中那一轮导出调试包，反馈问题时附上。"
+        title={t('debug.title')}
+        description={t('debug.description')}
       />
 
       <Panel>
-        <Text style={styles.panelTitle}>虚拟靶盘预览</Text>
+        <Text style={styles.panelTitle}>{t('debug.boardPreview')}</Text>
         <Text style={styles.body} testID="debug-board-labels">
           {boardThrows.map(item => `${item.label} ${item.score}`).join(' / ')}
         </Text>
@@ -118,9 +121,9 @@ export const DebugScreen = ({ navigation }: Props) => {
       </Panel>
 
       <Panel>
-        <Text style={styles.panelTitle}>轮次</Text>
+        <Text style={styles.panelTitle}>{t('debug.rounds')}</Text>
         {rounds.length === 0 ? (
-          <Text style={styles.body}>还没有保存的调试图。打开「显示调试信息」后打一轮，这里就会出现。</Text>
+          <Text style={styles.body}>{t('debug.noRounds')}</Text>
         ) : (
           <View style={styles.chips}>
             {rounds.map(round => {
@@ -147,7 +150,7 @@ export const DebugScreen = ({ navigation }: Props) => {
 
       {selectedRoundId && artifacts.length === 0 ? (
         <Panel>
-          <Text style={styles.body}>这一轮没有调试图（比如开局就失败了），调试包里只有日志。</Text>
+          <Text style={styles.body}>{t('debug.noImages')}</Text>
         </Panel>
       ) : (
         <View style={styles.list}>
@@ -159,19 +162,19 @@ export const DebugScreen = ({ navigation }: Props) => {
 
       <View style={styles.actionGroup}>
         <SecondaryButton
-          label={exporting ? '正在打包…' : '导出调试包'}
+          label={exporting ? t('debug.packing') : t('debug.exportBundle')}
           onPress={() => {
             shareSelectedRound().catch(() => undefined);
           }}
           disabled={!selectedRoundId || exporting}
         />
         <SecondaryButton
-          label="重新加载"
+          label={t('debug.reload')}
           onPress={() => {
             loadRounds().catch(() => undefined);
           }}
         />
-        <SecondaryButton label="返回" onPress={() => navigation.goBack()} />
+        <SecondaryButton label={t('common.back')} onPress={() => navigation.goBack()} />
       </View>
     </ScrollView>
   );

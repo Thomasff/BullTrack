@@ -5,6 +5,8 @@ import androidx.camera.view.PreviewView
 import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.flow.StateFlow
 
+// Status messages, lock reasons and error messages are codes (optionally "code: detail") that the
+// RN app translates into its language.
 sealed class CameraState {
     object Idle : CameraState()
 
@@ -12,7 +14,7 @@ sealed class CameraState {
         val zoomRatio: Float = 1f,
         val isPreviewBound: Boolean = false,
         val lockPhase: CameraLockPhase = CameraLockPhase.IDLE,
-        val statusMessage: String = "相机就绪"
+        val statusMessage: String = "camera_ready"
     ) : CameraState()
 
     data class Capturing(

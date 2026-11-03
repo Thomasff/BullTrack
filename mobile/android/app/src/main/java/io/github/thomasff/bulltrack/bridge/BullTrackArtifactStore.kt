@@ -36,6 +36,11 @@ class BullTrackArtifactStore(
         return listArtifacts(roundId)
     }
 
+    /** Removes every round's debug images and logs. */
+    fun deleteAll() {
+        baseDir.deleteRecursively()
+    }
+
     /** Keeps only the newest rounds' debug images so app storage does not grow without bound. */
     fun pruneOldRounds(keep: Int = KEEP_ROUNDS) {
         // Rounds saved before debug images moved to external storage.

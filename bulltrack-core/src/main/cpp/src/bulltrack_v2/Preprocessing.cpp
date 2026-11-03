@@ -35,7 +35,7 @@ std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractBoardColorMasks(const cv::Mat& img)
 
 AdaptiveRedLabModel EstimateAdaptiveRedLabModel(const cv::Mat& img, double reddest_share) {
     if (img.empty()) {
-        throw std::runtime_error("图像为空，无法估计红色 LAB");
+        throw std::runtime_error("red_lab_input_empty");
     }
 
     cv::Mat lab;

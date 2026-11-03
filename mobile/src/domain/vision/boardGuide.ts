@@ -29,6 +29,8 @@ export interface PrepBoard {
   top: number;
   width: number;
   height: number;
+  // Darts still in the board, frame pixels.
+  dartTips: { x: number; y: number }[];
 }
 
 export type GuideHint = 'noBoard' | 'tooBig' | 'tooSmall' | null;
@@ -45,6 +47,7 @@ export const toPrepBoard = (detection: PrepBoardDetection): PrepBoard | null =>
         top: detection.boardTop ?? 0,
         width: detection.boardWidth ?? 0,
         height: detection.boardHeight ?? 0,
+        dartTips: detection.dartTips ?? [],
       }
     : null;
 
@@ -188,20 +191,26 @@ export const stepPrepGuide = (
     state: { previous: zoomTo === null ? board : null, missCount: 0, settledCount },
     zoomTo,
     hint: advice.hint,
-    delayMs: settledCount >= SETTLED_CHECKS ? SLOW_INTERVAL_MS : FAST_INTERVAL_MS,
+    // Darts on the board keep the fast checks, so the marks go soon after they are pulled.
+    delayMs:
+      settledCount >= SETTLED_CHECKS && board.dartTips.length === 0
+        ? SLOW_INTERVAL_MS
+        : FAST_INTERVAL_MS,
   };
 };
 
-// Board centre and target region on a square preview of the given size (FILL_CENTER shows the
-// frame's full width and the middle of its height). The centre may fall outside the preview.
+// Board centre, target region and dart tips on a square preview of the given size (FILL_CENTER
+// shows the frame's full width and the middle of its height). The centre may fall outside the
+// preview; tips outside it are left out.
 export const previewGuide = (board: PrepBoard, previewSize: number) => {
   const scale = previewSize / board.frameWidth;
   const hiddenTop = (board.frameHeight - board.frameWidth) / 2;
+  const toPreview = (x: number, y: number) => ({ x: x * scale, y: (y - hiddenTop) * scale });
   return {
-    bull: {
-      x: (board.left + board.width / 2) * scale,
-      y: (board.top + board.height / 2 - hiddenTop) * scale,
-    },
+    bull: toPreview(board.left + board.width / 2, board.top + board.height / 2),
     centred: isBullCentred(board),
+    dartTips: board.dartTips
+      .map(tip => toPreview(tip.x, tip.y))
+      .filter(tip => tip.x >= 0 && tip.x <= previewSize && tip.y >= 0 && tip.y <= previewSize),
   };
 };

@@ -2,6 +2,7 @@ package io.github.thomasff.bulltrack.core.vision
 
 import android.content.res.AssetManager
 import android.graphics.Bitmap
+import android.graphics.Point
 import android.graphics.Rect
 import io.github.thomasff.bulltrack.core.domain.model.DartPosition
 import io.github.thomasff.bulltrack.core.domain.model.ThrowResult
@@ -165,6 +166,9 @@ class NativeDartDetector(
                 Rect(values[5], values[6], values[5] + values[7], values[6] + values[8])
             } else {
                 null
+            },
+            dartTips = List(values[9]) { index ->
+                Point(values[10 + index * 2], values[11 + index * 2])
             }
         )
     }
@@ -196,12 +200,13 @@ class NativeDartDetector(
 
 /**
  * The upright frame's size, the band of it the model saw (as wide as the frame) and the board box
- * in frame coordinates, null when no board was found.
+ * in frame coordinates, null when no board was found, and the tips of darts still in the board.
  */
 data class PrepBoardGuide(
     val frameWidth: Int,
     val frameHeight: Int,
     val bandTop: Int,
     val bandHeight: Int,
-    val boardBox: Rect?
+    val boardBox: Rect?,
+    val dartTips: List<Point>
 )

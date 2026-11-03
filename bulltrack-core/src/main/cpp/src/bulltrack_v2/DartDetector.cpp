@@ -146,7 +146,7 @@ std::vector<RankedComponent> SelectDartComponents(const std::vector<ComponentInf
 cv::Point ExtractComponentLeftmostPoint(const cv::Mat& component_mask) {
     std::vector<cv::Point> points;
     cv::findNonZero(component_mask, points);
-    if (points.empty()) throw std::runtime_error("连通域为空，无法提取落点");
+    if (points.empty()) throw std::runtime_error("dart_component_empty");
 
     int left_x = points.front().x;
     int y_min = points.front().y;
@@ -195,14 +195,14 @@ DiffBinaryOutputs BuildDiffBinaryOutputs(const cv::Mat& before_gray, const cv::M
 
 std::vector<cv::Point> DetectDartPointsFromGrayImages(const cv::Mat& before_gray, const cv::Mat& after_gray_aligned, int cx, int cy, int radius, const DartDetectionConfig& config, bool debug) {
     DiffBinaryOutputs outputs = BuildDiffBinaryOutputs(before_gray, after_gray_aligned, cx, cy, radius, config);
-    if (outputs.max_value <= 0) throw std::runtime_error("未检测到飞镖轮廓：差异图最大亮度为 0");
+    if (outputs.max_value <= 0) throw std::runtime_error("dart_diff_blank");
     if (debug) SaveDiffBinaryDebugImages(outputs);
-    if (cv::countNonZero(outputs.binary_img) == 0) throw std::runtime_error("未检测到飞镖轮廓");
+    if (cv::countNonZero(outputs.binary_img) == 0) throw std::runtime_error("dart_contour_not_found");
 
     auto raw_components = ExtractConnectedComponents(outputs.binary_img);
     auto [filtered_mask, filtered_components] = FilterConnectedComponents(outputs.binary_img, config.min_area, false);
     (void)filtered_mask;
-    if (raw_components.empty()) throw std::runtime_error("未检测到飞镖轮廓");
+    if (raw_components.empty()) throw std::runtime_error("dart_contour_not_found");
 
     auto selected_ranked = SelectDartComponents(raw_components, filtered_components, outputs.contrast_diff, config.max_darts);
     std::vector<cv::Point> tip_points;

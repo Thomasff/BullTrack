@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useTranslation } from 'react-i18next';
 import { Panel } from '../components/Panel';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { colors, teamColors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { startGameSession } from '../../application/services/liveRoundService';
 import { listKnownPlayerNames } from '../../application/services/historyRepository';
-import { getModeOption } from '../../domain/game/modeCatalog';
+import { getModeOption, getModeOptionTitle } from '../../domain/game/modeCatalog';
 import {
   MAX_PLAYERS,
   MIN_PLAYERS,
@@ -32,6 +33,7 @@ interface SeatRef {
 }
 
 export const PlayerSetupScreen = ({ navigation, route }: Props) => {
+  const { t } = useTranslation();
   const [teamMode, setTeamMode] = useState(false);
   // Solo: one group of names. Team game: one group per team, in A/B/C/D order.
   const [soloNames, setSoloNames] = useState<string[]>(() =>
@@ -145,7 +147,7 @@ export const PlayerSetupScreen = ({ navigation, route }: Props) => {
     startGameSession(
       selectedOption.runtimeGameType,
       resolvedNames,
-      selectedOption.title,
+      getModeOptionTitle(selectedOption),
       teamMode ? groups.flatMap((group, team) => group.map(() => team)) : undefined,
     );
     navigation.navigate('Game');
@@ -193,7 +195,7 @@ export const PlayerSetupScreen = ({ navigation, route }: Props) => {
             onPress={() => switchMode(option)}
             style={[styles.modeOption, teamMode === option && styles.modeOptionActive]}>
             <Text style={[styles.modeLabel, teamMode === option && styles.modeLabelActive]}>
-              {option ? '组队' : '个人'}
+              {option ? t('setup.team') : t('setup.solo')}
             </Text>
           </Pressable>
         ))}
@@ -202,7 +204,7 @@ export const PlayerSetupScreen = ({ navigation, route }: Props) => {
       {teamMode ? (
         <>
           <Text style={styles.hint}>
-            队与队轮流投，队内按顺序轮流；每队共用一个分。{flatNames.length} / {MAX_TEAM_PLAYERS} 人
+            {t('setup.teamHint', { players: flatNames.length, max: MAX_TEAM_PLAYERS })}
           </Text>
           {teamNames.map((group, team) => (
             <Panel key={team}>
@@ -215,45 +217,45 @@ export const PlayerSetupScreen = ({ navigation, route }: Props) => {
                 </View>
                 {teamNames.length > MIN_TEAMS ? (
                   <Pressable hitSlop={8} onPress={() => removeTeam(team)}>
-                    <Text style={styles.removeTeamLabel}>移除</Text>
+                    <Text style={styles.removeTeamLabel}>{t('setup.removeTeam')}</Text>
                   </Pressable>
                 ) : null}
               </View>
               {group.map((name, index) => renderSeat(name, { team, index }, group))}
-              {renderAddPlayer(team, '+ 添加队员')}
+              {renderAddPlayer(team, t('setup.addMember'))}
             </Panel>
           ))}
           {teamNames.length < MAX_TEAMS && flatNames.length < MAX_TEAM_PLAYERS ? (
             <Pressable onPress={addTeam} style={styles.addButton}>
-              <Text style={styles.addLabel}>+ 添加队伍</Text>
+              <Text style={styles.addLabel}>{t('setup.addTeam')}</Text>
             </Pressable>
           ) : null}
           {duplicateName ? (
-            <Text style={styles.error}>名字重复：{duplicateName}</Text>
+            <Text style={styles.error}>{t('setup.duplicateName', { name: duplicateName })}</Text>
           ) : null}
         </>
       ) : (
         <Panel>
           <View style={styles.rowBetween}>
-            <Text style={styles.panelTitle}>玩家</Text>
+            <Text style={styles.panelTitle}>{t('setup.players')}</Text>
             <Text style={styles.hint}>
               {soloNames.length} / {MAX_PLAYERS}
             </Text>
           </View>
           {soloNames.map((name, index) => renderSeat(name, { team: 0, index }, soloNames))}
-          {renderAddPlayer(0, '+ 添加玩家')}
+          {renderAddPlayer(0, t('setup.addPlayer'))}
           {duplicateName ? (
-            <Text style={styles.error}>名字重复：{duplicateName}</Text>
+            <Text style={styles.error}>{t('setup.duplicateName', { name: duplicateName })}</Text>
           ) : null}
           {tooFewSides ? (
-            <Text style={styles.hint}>这个玩法至少需要 {minSides} 人</Text>
+            <Text style={styles.hint}>{t('setup.minPlayers', { min: minSides })}</Text>
           ) : null}
         </Panel>
       )}
 
       {suggestions.length > 0 ? (
         <Panel>
-          <Text style={styles.panelTitle}>历史玩家</Text>
+          <Text style={styles.panelTitle}>{t('setup.knownPlayers')}</Text>
           <View style={styles.chips}>
             {suggestions.map(name => (
               <Pressable
@@ -268,7 +270,7 @@ export const PlayerSetupScreen = ({ navigation, route }: Props) => {
       ) : null}
 
       <PrimaryButton
-        label="开始"
+        label={t('setup.start')}
         onPress={startGame}
         disabled={!selectedOption || duplicateName !== null || tooFewSides}
       />

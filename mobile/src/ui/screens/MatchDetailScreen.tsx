@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useTranslation } from 'react-i18next';
 import { colors } from '../theme/colors';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import type { RootStackParamList } from '../../app/navigation/types';
@@ -10,23 +11,26 @@ import { formatMatchTime } from './MatchListScreen';
 import { getTeamName } from '../../domain/game/teams';
 import { deleteMatchPhotos, replayMatchDetail, roundKey } from '../../application/services/shareService';
 import { useSettingsStore } from '../../application/stores/settingsStore';
+import { displayPlayerName } from '../../domain/game/players';
+import { modeDisplayName, t as translate } from '../../i18n';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'MatchDetail'>;
 
 export const formatDart = (dart: { target: string; multiplier: number }) => {
   if (dart.target === 'miss') {
-    return '脱靶';
+    return translate('common.miss');
   }
   if (dart.target === 'IB') {
-    return '内牛';
+    return translate('common.innerBull');
   }
   if (dart.target === 'OB') {
-    return '外牛';
+    return translate('common.outerBull');
   }
   return dart.multiplier === 3 ? `T${dart.target}` : dart.multiplier === 2 ? `D${dart.target}` : dart.target;
 };
 
 export const MatchDetailScreen = ({ navigation, route }: Props) => {
+  const { t } = useTranslation();
   const [detail, setDetail] = useState<MatchDetail | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -88,21 +92,22 @@ export const MatchDetailScreen = ({ navigation, route }: Props) => {
     return indexes.map(index => {
       const members = players.filter(player => (player.teamIndex ?? 0) === index);
       const trophy = members.some(player => player.isWinner) ? '🏆 ' : '';
-      return `${trophy}${getTeamName(index)}：${members.map(player => player.name).join('、')}`;
+      const names = members.map(player => displayPlayerName(player.name)).join(t('history.nameSeparator'));
+      return `${trophy}${t('history.teamLine', { team: getTeamName(index), members: names })}`;
     });
-  }, [detail]);
+  }, [detail, t]);
 
   if (!loaded) {
-    return <Text style={styles.empty}>正在读取…</Text>;
+    return <Text style={styles.empty}>{t('history.loading')}</Text>;
   }
   if (!detail) {
-    return <Text style={styles.empty}>找不到这场比赛。</Text>;
+    return <Text style={styles.empty}>{t('history.matchNotFound')}</Text>;
   }
 
   return (
     <ScrollView contentContainerStyle={styles.content}>
       <View style={styles.summary}>
-        <Text style={styles.title}>{detail.modeLabel ?? detail.mode}</Text>
+        <Text style={styles.title}>{modeDisplayName(detail.mode, detail.modeLabel)}</Text>
         <Text style={styles.meta}>{formatMatchTime(detail.createdAt)}</Text>
         {teamLines ? (
           teamLines.map(line => (
@@ -113,7 +118,7 @@ export const MatchDetailScreen = ({ navigation, route }: Props) => {
         ) : (
           <Text style={styles.players}>
             {detail.players
-              .map(player => (player.isWinner ? `🏆 ${player.name}` : player.name))
+              .map(player => `${player.isWinner ? '🏆 ' : ''}${displayPlayerName(player.name)}`)
               .join('   ')}
           </Text>
         )}
@@ -126,7 +131,7 @@ export const MatchDetailScreen = ({ navigation, route }: Props) => {
             <View key={`${round.roundIndex}-${round.playerId}`} style={styles.roundRow}>
               <Text style={styles.roundIndex}>{round.roundIndex}</Text>
               <Text numberOfLines={1} style={styles.roundPlayer}>
-                {nameById.get(round.playerId) ?? '—'}
+                {displayPlayerName(nameById.get(round.playerId) ?? '—')}
               </Text>
               <Text style={styles.roundDarts}>{round.throws.map(formatDart).join('  ')}</Text>
               <Text style={styles.roundTotal}>
@@ -134,7 +139,7 @@ export const MatchDetailScreen = ({ navigation, route }: Props) => {
               </Text>
               {highlightKeys.has(key) ? (
                 <Pressable
-                  accessibilityLabel="分享这一轮"
+                  accessibilityLabel={t('history.shareRound')}
                   hitSlop={10}
                   onPress={() =>
                     navigation.navigate('SharePreview', { matchId: route.params.matchId, highlight: key })
@@ -157,16 +162,16 @@ export const MatchDetailScreen = ({ navigation, route }: Props) => {
           setConfirmingDelete(true);
         }}
         style={styles.deleteLink}>
-        <Text style={styles.deleteLabel}>删除这场比赛</Text>
+        <Text style={styles.deleteLabel}>{t('history.deleteMatch')}</Text>
       </Pressable>
-      {deleteFailed ? <Text style={styles.deleteError}>删除失败，请重试</Text> : null}
+      {deleteFailed ? <Text style={styles.deleteError}>{t('history.deleteFailed')}</Text> : null}
 
       <ConfirmDialog
         visible={confirmingDelete}
-        title="删除这场比赛"
-        message="这场比赛的记录和它带来的统计都会被删除，且无法恢复。"
-        confirmLabel="删除"
-        cancelLabel="取消"
+        title={t('history.deleteMatch')}
+        message={t('history.deleteConfirmMessage')}
+        confirmLabel={t('common.delete')}
+        cancelLabel={t('common.cancel')}
         danger
         onConfirm={removeMatch}
         onCancel={() => setConfirmingDelete(false)}

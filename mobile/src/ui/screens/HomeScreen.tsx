@@ -3,9 +3,14 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useIsFocused } from '@react-navigation/native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
-import { modeCategories } from '../../domain/game/modeCatalog';
+import {
+  getModeCategoryDescription,
+  getModeCategoryTitle,
+  modeCategories,
+} from '../../domain/game/modeCatalog';
 import { useSettingsStore } from '../../application/stores/settingsStore';
 import { StatsTab } from './StatsTab';
 import { SettingsTab } from './SettingsTab';
@@ -15,25 +20,18 @@ type Props = NativeStackScreenProps<RootStackParamList, 'Home'>;
 
 type RootTabId = 'home' | 'stats' | 'settings';
 
-const tabs: Array<{ id: RootTabId; title: string }> = [
-  { id: 'home', title: '主页' },
-  { id: 'stats', title: '统计' },
-  { id: 'settings', title: '设置' },
-];
+// Titles are under setup.tabs.<id>.
+const tabs: RootTabId[] = ['home', 'stats', 'settings'];
 
 export const HomeScreen = ({ navigation }: Props) => {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = React.useState<RootTabId>('home');
   const isFocused = useIsFocused();
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
-  const loadSettings = useSettingsStore(state => state.loadSettings);
   const settingsLoaded = useSettingsStore(state => state.loaded);
   const boardKind = useSettingsStore(state => state.boardKind);
   const boardKindChosen = useSettingsStore(state => state.boardKindChosen);
   const setBoardKind = useSettingsStore(state => state.setBoardKind);
-
-  React.useEffect(() => {
-    loadSettings().catch(() => undefined);
-  }, [loadSettings]);
 
   const renderHomeTab = () => (
     <ScrollView contentContainerStyle={styles.content}>
@@ -42,13 +40,15 @@ export const HomeScreen = ({ navigation }: Props) => {
           key={category.id}
           onPress={() => navigation.navigate('ModeSelect', { categoryId: category.id })}
           style={({ pressed }) => [styles.categoryCard, pressed && styles.categoryCardPressed]}>
-          <Text style={styles.categoryTitle}>{category.title}</Text>
-          <Text style={styles.categoryDescription}>{category.description}</Text>
+          <Text style={styles.categoryTitle}>{getModeCategoryTitle(category.id)}</Text>
+          <Text style={styles.categoryDescription}>
+            {getModeCategoryDescription(category.id)}
+          </Text>
         </Pressable>
       ))}
       {showDebugInfo ? (
         <Pressable onPress={() => navigation.navigate('Debug')} style={styles.debugLink}>
-          <Text style={styles.debugLinkLabel}>查看调试图</Text>
+          <Text style={styles.debugLinkLabel}>{t('setup.viewDebug')}</Text>
         </Pressable>
       ) : null}
     </ScrollView>
@@ -76,14 +76,14 @@ export const HomeScreen = ({ navigation }: Props) => {
 
         <View style={styles.tabBar}>
           {tabs.map(tab => {
-            const selected = tab.id === activeTab;
+            const selected = tab === activeTab;
             return (
               <Pressable
-                key={tab.id}
-                onPress={() => setActiveTab(tab.id)}
+                key={tab}
+                onPress={() => setActiveTab(tab)}
                 style={styles.tabButton}>
                 <Text style={[styles.tabLabel, selected && styles.tabLabelSelected]}>
-                  {tab.title}
+                  {t(`setup.tabs.${tab}`)}
                 </Text>
                 <View style={[styles.tabIndicator, selected && styles.tabIndicatorSelected]} />
               </Pressable>

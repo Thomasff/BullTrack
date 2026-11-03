@@ -60,24 +60,24 @@ long long ElapsedMs(std::chrono::steady_clock::time_point start) {
 
 std::vector<unsigned char> ReadAssetBytes(AAssetManager* asset_manager, const char* asset_path) {
     if (asset_manager == nullptr) {
-        throw std::runtime_error("NCNN AssetManager 尚未初始化");
+        throw std::runtime_error("ncnn_asset_manager_missing");
     }
     AAsset* asset = AAssetManager_open(asset_manager, asset_path, AASSET_MODE_BUFFER);
     if (asset == nullptr) {
-        throw std::runtime_error(std::string("无法打开 assets 文件: ") + asset_path);
+        throw std::runtime_error(std::string("asset_open_failed: ") + asset_path);
     }
 
     const off_t length = AAsset_getLength(asset);
     if (length <= 0) {
         AAsset_close(asset);
-        throw std::runtime_error(std::string("assets 文件为空: ") + asset_path);
+        throw std::runtime_error(std::string("asset_empty: ") + asset_path);
     }
 
     std::vector<unsigned char> buffer(static_cast<size_t>(length));
     const int64_t read_size = AAsset_read(asset, buffer.data(), static_cast<size_t>(length));
     AAsset_close(asset);
     if (read_size != length) {
-        throw std::runtime_error(std::string("读取 assets 文件失败: ") + asset_path);
+        throw std::runtime_error(std::string("asset_read_failed: ") + asset_path);
     }
     return buffer;
 }
@@ -97,7 +97,7 @@ std::vector<std::string> ReadAssetLines(AAssetManager* asset_manager, const char
         }
     }
     if (lines.empty()) {
-        throw std::runtime_error(std::string("classes.txt 为空: ") + asset_path);
+        throw std::runtime_error(std::string("classes_empty: ") + asset_path);
     }
     return lines;
 }
@@ -113,11 +113,11 @@ struct ModelInput {
 // linear resize leaves moire on a soft board's holes.
 ModelInput SquareResize(const cv::Mat& image_bgr, const cv::Rect& requested_square, int target_size) {
     if (image_bgr.empty()) {
-        throw std::runtime_error("YOLO 输入图为空");
+        throw std::runtime_error("yolo_input_empty");
     }
     const cv::Rect square = requested_square.empty() ? ModelInputSquare(image_bgr.size()) : requested_square;
     if ((square & cv::Rect(0, 0, image_bgr.cols, image_bgr.rows)) != square) {
-        throw std::runtime_error("YOLO 输入正方形超出画面");
+        throw std::runtime_error("yolo_square_outside_frame");
     }
     cv::Mat resized;
     cv::resize(
@@ -252,7 +252,7 @@ public:
     YoloDetectionResult Detect(const cv::Mat& image_bgr, const cv::Rect& square) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (g_asset_manager == nullptr) {
-            throw std::runtime_error("NCNN AssetManager 未设置，无法加载模型");
+            throw std::runtime_error("ncnn_asset_manager_not_set");
         }
 
         std::string gpu_failure_detail;
@@ -333,12 +333,12 @@ private:
 
         auto start = std::chrono::steady_clock::now();
         if (runtime.net.load_param(g_asset_manager, kModelParamAssetPath) != 0) {
-            throw std::runtime_error("加载 YOLO param 失败: ncnn/model.ncnn.param");
+            throw std::runtime_error("yolo_param_load_failed: ncnn/model.ncnn.param");
         }
         const long long param_ms = ElapsedMs(start);
         start = std::chrono::steady_clock::now();
         if (runtime.net.load_model(g_asset_manager, kModelBinAssetPath) != 0) {
-            throw std::runtime_error("加载 YOLO bin 失败: ncnn/model.ncnn.bin");
+            throw std::runtime_error("yolo_bin_load_failed: ncnn/model.ncnn.bin");
         }
         __android_log_print(
             ANDROID_LOG_INFO,
@@ -372,12 +372,12 @@ private:
         ncnn::Extractor extractor = runtime.net.create_extractor();
         extractor.set_light_mode(true);
         if (extractor.input(kInputBlobName, input) != 0) {
-            throw std::runtime_error("YOLO 输入失败: in0");
+            throw std::runtime_error("yolo_input_failed: in0");
         }
 
         ncnn::Mat output;
         if (extractor.extract(kOutputBlobName, output) != 0) {
-            throw std::runtime_error("YOLO 输出提取失败: out0");
+            throw std::runtime_error("yolo_output_failed: out0");
         }
 
         std::vector<YoloDetectionBox> boxes = DecodeOutput(output, model_input, image_bgr.size());
@@ -401,13 +401,13 @@ private:
         const int class_count = static_cast<int>(class_names_.size());
         const int value_count = 4 + class_count + kTipValueCount;
         if (output.total() % value_count != 0) {
-            throw std::runtime_error("YOLO 输出尺寸与类别数不匹配");
+            throw std::runtime_error("yolo_output_size_mismatch");
         }
 
         const int rows = static_cast<int>(output.total() / value_count);
         const float* data = reinterpret_cast<const float*>(output.data);
         if (data == nullptr) {
-            throw std::runtime_error("YOLO 输出数据为空");
+            throw std::runtime_error("yolo_output_empty");
         }
 
         auto get_value = [&](int row, int col) -> float {

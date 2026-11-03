@@ -21,7 +21,7 @@ std::pair<int, std::string> NormalizeMotionType(const std::string& motion_type) 
     if (motion == "euclidean") return {cv::MOTION_EUCLIDEAN, motion};
     if (motion == "affine") return {cv::MOTION_AFFINE, motion};
     if (motion == "homography") return {cv::MOTION_HOMOGRAPHY, motion};
-    throw std::runtime_error("不支持的 motion_type: " + motion_type);
+    throw std::runtime_error("unsupported_motion_type: " + motion_type);
 }
 
 cv::Mat InitialWarpMatrix(int motion_mode) {
@@ -42,7 +42,7 @@ std::vector<cv::Mat> BuildGaussianPyramid(const cv::Mat& gray, int levels) {
 }
 
 std::vector<int> AllocateLevelIterations(int levels) {
-    if (levels <= 0) throw std::runtime_error("levels 必须 >= 1");
+    if (levels <= 0) throw std::runtime_error("invalid_pyramid_levels");
     if (levels == 1) return {15};
 
     std::vector<int> result;
@@ -150,8 +150,8 @@ cv::Mat WarpImageWithMatrix(const cv::Mat& image, const cv::Mat& warp_matrix, co
 // finest_level_iterations (above 0): iterations on the full-size level, the costliest one, in
 // place of the default count.
 PyramidECCResult AlignPyramidEcc(const cv::Mat& templ, const cv::Mat& target, int levels, const std::string& motion_type, const cv::Mat& target_mask, int finest_level_iterations) {
-    if (templ.size() != target.size()) throw std::runtime_error("ECC 对齐失败：template/target 尺寸不一致");
-    if (levels < 1) throw std::runtime_error("levels 必须 >= 1");
+    if (templ.size() != target.size()) throw std::runtime_error("ecc_size_mismatch");
+    if (levels < 1) throw std::runtime_error("invalid_pyramid_levels");
 
     auto [motion_mode, motion_name] = NormalizeMotionType(motion_type);
     cv::Mat template_gray = templ.channels() == 3 ? PreprocessImage(templ, 1) : templ.clone();
@@ -183,7 +183,7 @@ PyramidECCResult AlignPyramidEcc(const cv::Mat& templ, const cv::Mat& target, in
         try {
             cc = cv::findTransformECC(template_f, target_f, warp_matrix, motion_mode, criteria, level_mask);
         } catch (const cv::Exception& exc) {
-            throw std::runtime_error(std::string("金字塔 ECC 对齐失败: ") + exc.what());
+            throw std::runtime_error(std::string("ecc_alignment_failed: ") + exc.what());
         }
         level_correlations.push_back(cc);
         if (level_index < actual_levels - 1) warp_matrix = ScaleWarpForNextLevel(warp_matrix);

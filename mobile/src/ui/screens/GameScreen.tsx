@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AppState, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { useIsFocused } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import {
@@ -32,6 +33,7 @@ import { DART_MARKER_COLORS, DartBoard } from '../components/DartBoard';
 import { LiveSnapshot } from '../components/LiveSnapshot';
 import { PrepBoardGuideOverlay, usePrepBoardGuide } from '../components/PrepBoardGuide';
 import { ShareButton } from '../components/ShareButton';
+import { PlacementGuide } from '../components/PlacementGuide';
 import {
   buildCurrentRoundShare,
   keepConfirmedRoundPhoto,
@@ -45,6 +47,7 @@ import {
 } from '../../application/services/shareService';
 import type { RoundBest } from '../../domain/share/highlights';
 import { highlightName } from '../../domain/share/highlights';
+import { displayPlayerName } from '../../domain/game/players';
 import { colors } from '../theme/colors';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { isRealBullTrackNativeBridgeAvailable } from '../../native-bridge/bulltrack/bullTrackNative';
@@ -63,6 +66,7 @@ const AUTO_ZOOM_DURATION_MS = 400;
 const AUTO_ZOOM_STEP_MS = 33;
 
 export const GameScreen = ({ navigation }: Props) => {
+  const { t } = useTranslation();
   const [runningAction, setRunningAction] = useState<
     'permission' | 'prepare' | 'start' | 'stop' | 'redetect' | 'confirm' | 'reload' | 'undo' | null
   >(null);
@@ -83,6 +87,7 @@ export const GameScreen = ({ navigation }: Props) => {
   const [permissionDenied, setPermissionDenied] = useState(false);
   // The player dragged the zoom slider while getting ready; auto zoom waits for the next round.
   const [autoZoomPaused, setAutoZoomPaused] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
   const autoZoomTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const allowLeaveRef = useRef(false);
   const pendingLeaveRef = useRef<(() => void) | null>(null);
@@ -104,6 +109,7 @@ export const GameScreen = ({ navigation }: Props) => {
     winnerId,
     statusMessage,
     errorMessage,
+    errorAboutPlacement,
     cameraPermissionGranted,
     backCamera,
     cameraStatus,
@@ -112,6 +118,7 @@ export const GameScreen = ({ navigation }: Props) => {
     replaceThrow,
     captureReady,
     setupHint,
+    setupHintAboutPlacement,
     reopenedRound,
     completedRounds,
     savedMatchId,
@@ -124,6 +131,8 @@ export const GameScreen = ({ navigation }: Props) => {
   const showDebugInfo = useSettingsStore(state => state.showDebugInfo);
   const recordFrames = useSettingsStore(state => state.recordFrames);
   const selfMocking = useSettingsStore(state => state.highlightSelfMocking);
+  const settingsLoaded = useSettingsStore(state => state.loaded);
+  const placementGuideSeen = useSettingsStore(state => state.placementGuideSeen);
   const gameStartedAt = useGameStore(state => state.gameStartedAt);
   const artifactCount = useVisionDebugStore(state => state.artifacts.length);
   const lastNativeError = useVisionDebugStore(state => state.lastNativeError);
@@ -194,6 +203,26 @@ export const GameScreen = ({ navigation }: Props) => {
       });
   }, []);
 
+  // The first time the camera is ready for a round, the placement guide opens by itself.
+  useEffect(() => {
+    if (
+      isFocused &&
+      settingsLoaded &&
+      !placementGuideSeen &&
+      cameraPermissionGranted &&
+      status === 'waitingForThrow'
+    ) {
+      setGuideOpen(true);
+    }
+  }, [isFocused, settingsLoaded, placementGuideSeen, cameraPermissionGranted, status]);
+
+  const closeGuide = () => {
+    setGuideOpen(false);
+    if (!useSettingsStore.getState().placementGuideSeen) {
+      useSettingsStore.getState().setPlacementGuideSeen().catch(() => undefined);
+    }
+  };
+
   // After being sent to system settings, pick up a newly granted permission on return.
   useEffect(() => {
     if (cameraPermissionGranted || !permissionDenied) {
@@ -215,7 +244,7 @@ export const GameScreen = ({ navigation }: Props) => {
       setCameraStatus({
         isReady: false,
         isPreviewBound: false,
-        statusMessage: '需要相机权限才能显示预览',
+        statusMessage: t('game.camera.needPermission'),
         lockPhase: 'IDLE',
         lockReason: null,
       });
@@ -227,7 +256,7 @@ export const GameScreen = ({ navigation }: Props) => {
       setCameraStatus({
         isReady: false,
         isPreviewBound: false,
-        statusMessage: '未找到后置相机设备',
+        statusMessage: t('game.camera.noBackCamera'),
         lockPhase: 'FALLBACK',
         lockReason: 'Back camera device unavailable',
       });
@@ -238,7 +267,7 @@ export const GameScreen = ({ navigation }: Props) => {
       setCameraStatus({
         isReady: false,
         isPreviewBound: false,
-        statusMessage: '相机已初始化，等待预览',
+        statusMessage: t('game.camera.waitingPreview'),
         lockPhase: 'IDLE',
         lockReason: null,
       });
@@ -248,11 +277,11 @@ export const GameScreen = ({ navigation }: Props) => {
     setCameraStatus({
       isReady: true,
       isPreviewBound: true,
-      statusMessage: '相机预览已就绪',
+      statusMessage: t('game.camera.previewReady'),
       lockPhase: 'IDLE',
       lockReason: null,
     });
-  }, [backCameraMissing, cameraPermissionGranted, previewReady, setCameraStatus]);
+  }, [backCameraMissing, cameraPermissionGranted, previewReady, setCameraStatus, t]);
 
   // The person about to throw; in a team game currentPlayerId is the team.
   const currentThrowerId = getCurrentThrowerId({ teams, scoreBoard, currentPlayerId });
@@ -392,9 +421,9 @@ export const GameScreen = ({ navigation }: Props) => {
     const from = latestZoomRef.current;
     const startedAt = Date.now();
     autoZoomTimerRef.current = setInterval(() => {
-      const t = Math.min(1, (Date.now() - startedAt) / AUTO_ZOOM_DURATION_MS);
-      commitZoomRatio(from + (target - from) * (1 - (1 - t) * (1 - t)));
-      if (t >= 1) {
+      const progress = Math.min(1, (Date.now() - startedAt) / AUTO_ZOOM_DURATION_MS);
+      commitZoomRatio(from + (target - from) * (1 - (1 - progress) * (1 - progress)));
+      if (progress >= 1) {
         stopAutoZoom();
         persistZoomRatio();
       }
@@ -560,28 +589,34 @@ export const GameScreen = ({ navigation }: Props) => {
   const boardBadge =
     status === 'roundInProgress'
       ? captureReady
-        ? '可以投镖了'
-        : '准备中…'
+        ? t('game.badge.canThrow')
+        : t('game.badge.preparing')
       : status === 'showingResult'
-        ? '拖动标记可修正'
+        ? t('game.badge.dragToFix')
         : status === 'gameOver'
-          ? '比赛结束'
+          ? t('game.badge.gameOver')
           : null;
   const turnHeadline =
     status === 'gameOver'
-      ? `${winner?.name ?? '比赛'} 获胜`
+      ? winner
+        ? t('game.headline.winner', { name: displayPlayerName(winner.name) })
+        : t('game.headline.noWinner')
       : status === 'roundInProgress'
         ? captureReady
-          ? `请投镖 · 已识别 ${currentThrowNumber} 镖`
-          : '准备中，先别投镖'
+          ? t('game.headline.throwNow', { n: currentThrowNumber })
+          : t('game.headline.preparing')
         : status === 'showingResult'
-          ? '确认本轮结果'
-          : `轮到 ${currentPlayer?.name ?? '玩家'}${currentTeam ? `（${currentTeam.name}）` : ''} · 第 ${currentRoundNumber} 轮`;
+          ? t('game.headline.confirm')
+          : t('game.headline.turn', {
+              name: currentPlayer ? displayPlayerName(currentPlayer.name) : t('game.headline.playerFallback'),
+              team: currentTeam ? t('game.headline.turnTeam', { team: currentTeam.name }) : '',
+              round: currentRoundNumber,
+            });
   // Only the latest confirmed round can be taken back, between rounds or after the game.
   const undoButton =
     completedRounds.length > 0 ? (
       <SecondaryButton
-        label={runningAction === 'undo' ? '正在撤销…' : '撤销上一轮'}
+        label={runningAction === 'undo' ? t('game.undoing') : t('game.undoLastRound')}
         onPress={() => runAction('undo', undoLastRound)}
         disabled={isBusy}
       />
@@ -589,14 +624,14 @@ export const GameScreen = ({ navigation }: Props) => {
   const turnHint =
     status === 'showingResult'
       ? reopenedRound
-        ? '已撤销上一轮：点飞镖修改，或重投本轮'
-        : '识别不对可以点飞镖修改'
+        ? t('game.hint.reopened')
+        : t('game.hint.tapToFix')
       : status === 'roundInProgress'
         ? captureReady
-          ? '投满 3 镖自动结束，也可以手动结束'
-          : '正在拍摄空靶作为对照'
+          ? t('game.hint.autoEnd')
+          : t('game.hint.capturingEmpty')
         : status === 'waitingForThrow'
-          ? '拔下飞镖后开始本轮'
+          ? t('game.hint.pullDarts')
           : null;
 
   return (
@@ -607,7 +642,7 @@ export const GameScreen = ({ navigation }: Props) => {
       {recordFrames ? (
         <View style={styles.recordingBanner}>
           <Text style={styles.recordingBannerText}>
-            录制模式：每轮保存原始画面，耗电和占用存储会增加
+            {t('game.recordingBanner')}
           </Text>
         </View>
       ) : null}
@@ -638,16 +673,16 @@ export const GameScreen = ({ navigation }: Props) => {
         ) : (
           <View style={styles.previewFallback}>
             <Text style={styles.fallbackText}>
-              {cameraPermissionGranted ? '未找到可用的后置相机' : '需要相机权限才能识别飞镖'}
+              {cameraPermissionGranted ? t('game.noBackCamera') : t('game.needCameraPermission')}
             </Text>
             {!cameraPermissionGranted && runningAction !== 'permission' ? (
               <>
                 <PrimaryButton
-                  label={permissionDenied ? '打开系统设置' : '允许使用相机'}
+                  label={permissionDenied ? t('game.openSystemSettings') : t('game.allowCamera')}
                   onPress={retryCameraPermission}
                 />
                 {permissionDenied ? (
-                  <Text style={styles.fallbackHint}>在系统设置的「权限」里允许相机，返回后自动生效</Text>
+                  <Text style={styles.fallbackHint}>{t('game.permissionHint')}</Text>
                 ) : null}
               </>
             ) : null}
@@ -655,6 +690,15 @@ export const GameScreen = ({ navigation }: Props) => {
         )}
         {!showBoard && shouldShowPreview ? (
           <PrepBoardGuideOverlay size={previewSize} view={prepGuide} />
+        ) : null}
+        {!showBoard && cameraPermissionGranted && !backCameraMissing ? (
+          <Pressable
+            accessibilityLabel={t('guide.open')}
+            hitSlop={8}
+            onPress={() => setGuideOpen(true)}
+            style={({ pressed }) => [styles.guideButton, pressed && styles.guideButtonPressed]}>
+            <Text style={styles.guideButtonLabel}>?</Text>
+          </Pressable>
         ) : null}
         {showBoard ? (
           <View style={[styles.boardLayer, splitView && styles.boardLayerSplit]}>
@@ -734,7 +778,7 @@ export const GameScreen = ({ navigation }: Props) => {
             <Pressable
               onPress={() => openShare()}
               style={({ pressed }) => [styles.shareResultButton, pressed && styles.dartSlotPressed]}>
-              <Text style={styles.shareResultLabel}>分享战绩</Text>
+              <Text style={styles.shareResultLabel}>{t('game.shareResult')}</Text>
             </Pressable>
           ) : (
             <Text style={styles.totalScore}>{totalScore}</Text>
@@ -743,16 +787,24 @@ export const GameScreen = ({ navigation }: Props) => {
         {status === 'gameOver' && gameHighlights.length > 0 ? (
           <Pressable disabled={savedMatchId === null} onPress={() => openShare(gameHighlights[0].key)}>
             <Text numberOfLines={2} style={styles.gameHighlights}>
-              ★ 本场高光：
+              {t('game.gameHighlights')}
               {gameHighlights
-                .map(item => `${item.share.playerName} ${item.share.highlight ? highlightName(item.share.highlight) : ''}`)
+                .map(item => `${displayPlayerName(item.share.playerName)} ${item.share.highlight ? highlightName(item.share.highlight) : ''}`)
                 .join(' · ')}
             </Text>
           </Pressable>
         ) : null}
         {turnHint ? <Text style={styles.hint}>{turnHint}</Text> : null}
-        {setupHint ? <Text style={styles.setupHint}>{setupHint}</Text> : null}
+        {prepGuide?.board?.dartTips.length ? (
+          <Text style={styles.setupHint}>{t('game.hint.dartsOnBoard')}</Text>
+        ) : null}
+        {setupHint ?<Text style={styles.setupHint}>{setupHint}</Text> : null}
         {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
+        {(errorMessage && errorAboutPlacement) || (setupHint && setupHintAboutPlacement) ? (
+          <Pressable hitSlop={6} onPress={() => setGuideOpen(true)}>
+            <Text style={styles.guideLink}>{t('guide.link')}</Text>
+          </Pressable>
+        ) : null}
         <View style={styles.dartRow}>
           {[0, 1, 2].map(index => {
             const item = currentThrows[index];
@@ -774,7 +826,7 @@ export const GameScreen = ({ navigation }: Props) => {
                   ]}>
                   <Text style={styles.dartDotLabel}>{index + 1}</Text>
                 </View>
-                <Text style={styles.dartLabel}>{item ? formatThrowLabel(item) : '—'}</Text>
+                <Text style={styles.dartLabel}>{item ? formatThrowLabel(item, t) : '—'}</Text>
                 <Text style={styles.dartScore}>{item ? item.score : ''}</Text>
               </Pressable>
             );
@@ -785,32 +837,32 @@ export const GameScreen = ({ navigation }: Props) => {
       <View style={styles.actionGroup}>
         {status === 'gameOver' ? (
           <>
-            <PrimaryButton label="再来一局" onPress={playAgain} disabled={isBusy} />
+            <PrimaryButton label={t('game.playAgain')} onPress={playAgain} disabled={isBusy} />
             {undoButton}
-            <SecondaryButton label="返回主页" onPress={exitGame} disabled={isBusy} />
+            <SecondaryButton label={t('game.backHome')} onPress={exitGame} disabled={isBusy} />
           </>
         ) : status === 'roundInProgress' ? (
           <PrimaryButton
-            label={runningAction === 'stop' ? '正在结束…' : '结束本轮'}
+            label={runningAction === 'stop' ? t('game.stopping') : t('game.endRound')}
             onPress={() => runAction('stop', stopLiveRound)}
             disabled={isBusy}
           />
         ) : status === 'showingResult' ? (
           <>
             <PrimaryButton
-              label={runningAction === 'confirm' ? '正在确认…' : '确认'}
+              label={runningAction === 'confirm' ? t('game.confirming') : t('game.confirm')}
               onPress={() => runAction('confirm', confirmCurrentRound)}
               disabled={isBusy || currentThrows.length === 0}
             />
             {reopenedRound ? (
               <SecondaryButton
-                label="重投本轮"
+                label={t('game.rethrowRound')}
                 onPress={discardReopenedRound}
                 disabled={isBusy}
               />
             ) : (
               <SecondaryButton
-                label={runningAction === 'redetect' ? '正在重新识别…' : '重新识别'}
+                label={runningAction === 'redetect' ? t('game.redetecting') : t('game.redetect')}
                 onPress={() => runAction('redetect', redetectCurrentRound)}
                 disabled={isBusy || !canRedetect || !hasBackCamera}
               />
@@ -819,7 +871,7 @@ export const GameScreen = ({ navigation }: Props) => {
         ) : (
           <>
             <PrimaryButton
-              label={runningAction === 'start' ? '正在启动…' : '开始本轮'}
+              label={runningAction === 'start' ? t('game.starting') : t('game.startRound')}
               onPress={startRound}
               disabled={isBusy || !cameraPermissionGranted || !hasBackCamera || !previewReady}
             />
@@ -831,22 +883,23 @@ export const GameScreen = ({ navigation }: Props) => {
             onPress={confirmExit}
             disabled={isBusy || status === 'roundInProgress'}
             style={styles.exitButton}>
-            <Text style={styles.exitLabel}>退出对局</Text>
+            <Text style={styles.exitLabel}>{t('game.exitGame')}</Text>
           </Pressable>
         ) : null}
       </View>
 
       {showDebugInfo ? (
         <Panel>
-          <Text style={styles.panelTitle}>调试信息</Text>
+          <Text style={styles.panelTitle}>{t('game.debug.title')}</Text>
           <Text style={styles.debugText}>{statusMessage}</Text>
           {lastNativeError ? (
-            <Text style={styles.debugText}>原生错误：{lastNativeError}</Text>
+            <Text style={styles.debugText}>{t('game.debug.nativeError', { error: lastNativeError })}</Text>
           ) : null}
           <Text style={styles.debugText}>{cameraStatus.statusMessage}</Text>
           <Text style={styles.debugText}>
             {status} · Zoom {cameraStatus.zoomRatio.toFixed(2)}x · {cameraStatus.lockPhase} ·{' '}
-            {isRealBullTrackNativeBridgeAvailable ? 'native' : 'mock'} · 调试图 {artifactCount}
+            {isRealBullTrackNativeBridgeAvailable ? 'native' : 'mock'} ·{' '}
+            {t('game.debug.images', { n: artifactCount })}
           </Text>
           {currentThrows.map(item => (
             <Text key={item.id} style={styles.debugText}>
@@ -858,12 +911,12 @@ export const GameScreen = ({ navigation }: Props) => {
           ) : null}
           <View style={styles.inlineActions}>
             <SecondaryButton
-              label="刷新调试图"
+              label={t('game.debug.refreshImages')}
               onPress={() => runAction('reload', reloadDebugArtifacts)}
               disabled={isBusy}
             />
             <SecondaryButton
-              label="查看调试图"
+              label={t('game.debug.viewImages')}
               onPress={() => navigation.navigate('Debug')}
               disabled={isBusy}
             />
@@ -885,34 +938,38 @@ export const GameScreen = ({ navigation }: Props) => {
 
       <ConfirmDialog
         visible={leaveDialog === 'roundInProgress'}
-        title="正在识别"
-        message="请先点「结束本轮」，再退出对局。"
-        confirmLabel="知道了"
+        title={t('game.dialog.detectingTitle')}
+        message={t('game.dialog.detectingMessage')}
+        confirmLabel={t('game.dialog.gotIt')}
         onConfirm={closeLeaveDialog}
         onCancel={closeLeaveDialog}
       />
       <ConfirmDialog
         visible={leaveDialog === 'confirm'}
-        title="退出对局"
-        message="未完成的对局不会保存。"
-        confirmLabel="退出"
-        cancelLabel="取消"
+        title={t('game.exitGame')}
+        message={t('game.dialog.leaveMessage')}
+        confirmLabel={t('game.dialog.leave')}
+        cancelLabel={t('common.cancel')}
         danger
         onConfirm={confirmLeaveDialog}
         onCancel={closeLeaveDialog}
       />
+      <PlacementGuide visible={guideOpen} onClose={closeGuide} />
     </ScrollView>
   );
 };
 
-const formatThrowLabel = (throwResult: ThrowResult) => {
+const formatThrowLabel = (
+  throwResult: ThrowResult,
+  t: (key: 'common.innerBull' | 'common.outerBull' | 'common.miss') => string,
+) => {
   switch (throwResult.ring) {
     case 'innerBull':
-      return '内牛';
+      return t('common.innerBull');
     case 'outerBull':
-      return '外牛';
+      return t('common.outerBull');
     case 'miss':
-      return '脱靶';
+      return t('common.miss');
     default:
       return throwResult.label.startsWith('S') ? throwResult.label.slice(1) : throwResult.label;
   }
@@ -983,6 +1040,34 @@ const styles = StyleSheet.create({
   },
   hidden: {
     opacity: 0,
+  },
+  guideButton: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(12, 16, 24, 0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 20,
+    elevation: 20,
+  },
+  guideButtonPressed: {
+    opacity: 0.7,
+  },
+  guideButtonLabel: {
+    color: '#F7F8FA',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  guideLink: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.info,
   },
   zoomOverlay: {
     position: 'absolute',

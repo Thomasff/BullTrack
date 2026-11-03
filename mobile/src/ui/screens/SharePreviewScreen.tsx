@@ -10,6 +10,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../app/navigation/types';
 import { colors } from '../theme/colors';
@@ -18,7 +19,12 @@ import { SecondaryButton } from '../components/SecondaryButton';
 import { CARD_PIXEL_WIDTH, MatchCard, RoundCard, cardPixelHeight } from '../components/ShareCards';
 import { PlayerStatsCard, VersusCard } from '../components/StatsCards';
 import { previousRange, rangeStart } from './PlayerDetailScreen';
-import { useSettingsStore, type ShareOptions } from '../../application/stores/settingsStore';
+import {
+  useSettingsStore,
+  type CardOptions,
+  type ShareOptions,
+} from '../../application/stores/settingsStore';
+import { currentLanguage, type AppLanguage } from '../../i18n';
 import {
   getHeadToHead,
   getMatchDetail,
@@ -26,6 +32,7 @@ import {
 } from '../../application/services/historyRepository';
 import {
   captureCard,
+  releaseCardImage,
   loadRoundPhotos,
   replayMatchDetail,
   roundPhotoName,
@@ -43,6 +50,7 @@ import {
 import type { HeadToHead, MatchDetail, PlayerDetail } from '../../domain/history/types';
 import { summarizePlayerStats, summarizeVersus } from '../../domain/share/statsCards';
 import { highlightName } from '../../domain/share/highlights';
+import { displayPlayerName } from '../../domain/game/players';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'SharePreview'>;
 
@@ -75,6 +83,7 @@ const Choice = <T extends string>({ value, choices, onChange }: ChoiceProps<T>) 
 );
 
 export const SharePreviewScreen = ({ route }: Props) => {
+  const { t } = useTranslation();
   const { round, matchId, highlight, player, versus } = route.params;
   // From the finished game both a round and the match are given; the match summary comes
   // first there.
@@ -95,7 +104,10 @@ export const SharePreviewScreen = ({ route }: Props) => {
   const [statsLoaded, setStatsLoaded] = useState(false);
   const [busy, setBusy] = useState<'share' | 'save' | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const options = useSettingsStore(state => state.shareOptions);
+  const savedOptions = useSettingsStore(state => state.shareOptions);
+  // Each share starts in the app language; switching it here is not remembered.
+  const [language, setLanguage] = useState<AppLanguage>(currentLanguage);
+  const options: CardOptions = useMemo(() => ({ ...savedOptions, language }), [savedOptions, language]);
   const showUrl = useSettingsStore(state => state.shareShowUrl);
   const boardKind = useSettingsStore(state => state.boardKind);
   const selfMocking = useSettingsStore(state => state.highlightSelfMocking);
@@ -165,9 +177,9 @@ export const SharePreviewScreen = ({ route }: Props) => {
 
   const pickedHighlight = highlights?.find(item => item.key === highlightKey) ?? highlights?.[0];
   const tabs: Array<{ value: Tab; label: string }> = [
-    ...(round ? [{ value: 'round' as const, label: '这一轮' }] : []),
-    ...(highlights && highlights.length > 0 ? [{ value: 'highlights' as const, label: '本场高光' }] : []),
-    ...(matchId !== undefined ? [{ value: 'match' as const, label: '本场总结' }] : []),
+    ...(round ? [{ value: 'round' as const, label: t('share.tabRound') }] : []),
+    ...(highlights && highlights.length > 0 ? [{ value: 'highlights' as const, label: t('share.tabHighlights') }] : []),
+    ...(matchId !== undefined ? [{ value: 'match' as const, label: t('share.tabMatch') }] : []),
   ];
 
   const matchShare = useMemo(
@@ -232,8 +244,9 @@ export const SharePreviewScreen = ({ route }: Props) => {
     }
     setBusy(action);
     setMessage(null);
+    let uri: string | null = null;
     try {
-      const uri = await captureCard(cardRef, CARD_PIXEL_WIDTH, pixelHeight);
+      uri = await captureCard(cardRef, CARD_PIXEL_WIDTH, pixelHeight);
       const createdAt = roundShare?.createdAt ?? matchShare?.createdAt ?? Date.now();
       const fileName = shareFileName(
         playerShare ? 'stats' : versusShare ? 'versus' : roundShare ? 'round' : 'match',
@@ -243,11 +256,14 @@ export const SharePreviewScreen = ({ route }: Props) => {
         await shareCardImage(uri, fileName, shareCaption(options.language, showUrl));
       } else {
         await saveCardImage(uri, fileName);
-        setMessage('已保存到相册（Pictures/BullTrack）');
+        setMessage(t('share.savedToGallery'));
       }
     } catch {
-      setMessage(action === 'share' ? '分享失败，请重试' : '保存失败，请重试');
+      setMessage(action === 'share' ? t('share.shareFailed') : t('share.saveFailed'));
     } finally {
+      if (uri) {
+        releaseCardImage(uri);
+      }
       setBusy(null);
     }
   };
@@ -278,8 +294,11 @@ export const SharePreviewScreen = ({ route }: Props) => {
                 }}
                 style={[styles.highlightChip, active && styles.highlightChipActive]}>
                 <Text style={[styles.highlightChipLabel, active && styles.highlightChipLabelActive]}>
-                  {item.share.highlight ? highlightName(item.share.highlight) : ''} · {item.share.playerName} 第{' '}
-                  {item.share.roundNumber} 轮
+                  {t('share.highlightChip', {
+                    highlight: item.share.highlight ? highlightName(item.share.highlight) : '',
+                    name: displayPlayerName(item.share.playerName),
+                    round: item.share.roundNumber,
+                  })}
                 </Text>
               </Pressable>
             );
@@ -297,29 +316,29 @@ export const SharePreviewScreen = ({ route }: Props) => {
         ) : (
           <Text style={styles.loading}>{((player || versus) && !statsLoaded) ||
             (matchId !== undefined && (!detail || (tab === 'highlights' && !highlights)))
-              ? '正在读取…'
-              : '没有可分享的内容'}</Text>
+              ? t('share.loading')
+              : t('share.nothingToShare')}</Text>
         )}
       </View>
 
       <View style={styles.options}>
         {photos ? (
           <View style={styles.optionRow}>
-            <Text style={styles.optionLabel}>照片</Text>
+            <Text style={styles.optionLabel}>{t('share.photo')}</Text>
             <Choice
               value={photoChoice}
               choices={[
-                { value: 'auto', label: '自动' },
-                { value: 'full', label: '整靶' },
-                ...(photos.close ? [{ value: 'close' as const, label: '特写' }] : []),
-                { value: 'none', label: '不用' },
+                { value: 'auto', label: t('share.photoAuto') },
+                { value: 'full', label: t('share.photoFull') },
+                ...(photos.close ? [{ value: 'close' as const, label: t('share.photoClose') }] : []),
+                { value: 'none', label: t('share.photoNone') },
               ]}
               onChange={choice => setOptions({ photo: choice })}
             />
           </View>
         ) : null}
         <View style={styles.optionRow}>
-          <Text style={styles.optionLabel}>尺寸</Text>
+          <Text style={styles.optionLabel}>{t('share.size')}</Text>
           <Choice
             value={options.size}
             choices={[
@@ -330,18 +349,21 @@ export const SharePreviewScreen = ({ route }: Props) => {
           />
         </View>
         <View style={styles.optionRow}>
-          <Text style={styles.optionLabel}>文字</Text>
+          <Text style={styles.optionLabel}>{t('share.cardLanguage')}</Text>
           <Choice
             value={options.language}
             choices={[
               { value: 'zh', label: '中文' },
               { value: 'en', label: 'EN' },
             ]}
-            onChange={language => setOptions({ language })}
+            onChange={choice => {
+              setMessage(null);
+              setLanguage(choice);
+            }}
           />
         </View>
         <View style={styles.optionRow}>
-          <Text style={styles.optionLabel}>显示名字</Text>
+          <Text style={styles.optionLabel}>{t('share.showNames')}</Text>
           <Switch
             value={options.showNames}
             onValueChange={showNames => setOptions({ showNames })}
@@ -353,13 +375,13 @@ export const SharePreviewScreen = ({ route }: Props) => {
 
       <View style={styles.actions}>
         <PrimaryButton
-          label={busy === 'share' ? '正在准备…' : '分享'}
+          label={busy === 'share' ? t('share.preparing') : t('share.share')}
           onPress={() => run('share')}
           disabled={!card || busy !== null}
         />
         {CAN_SAVE ? (
           <SecondaryButton
-            label={busy === 'save' ? '正在保存…' : '存相册'}
+            label={busy === 'save' ? t('share.saving') : t('share.saveToGallery')}
             onPress={() => run('save')}
             disabled={!card || busy !== null}
           />
@@ -448,6 +470,9 @@ const styles = StyleSheet.create({
   },
   optionRow: {
     flexDirection: 'row',
+    // The choices drop below the label when they do not fit beside it (English, narrow phones).
+    flexWrap: 'wrap',
+    rowGap: 6,
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 8,

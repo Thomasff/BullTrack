@@ -7,6 +7,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { colors } from '../theme/colors';
 import {
   getSetting,
@@ -21,6 +22,8 @@ import type {
 import { formatRate } from '../components/PlayerStatBlocks';
 import { MatchCard } from './MatchListScreen';
 import { PlayerStatsView } from './PlayerDetailScreen';
+import { displayPlayerName } from '../../domain/game/players';
+import { t as translate } from '../../i18n';
 
 // The player the tab showed last, so it opens on them again.
 const SELECTED_PLAYER_KEY = 'statsPlayerId';
@@ -37,6 +40,7 @@ const pickPlayer = (players: PlayerStats[], savedId: number | null) =>
   null;
 
 export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
+  const { t } = useTranslation();
   const [players, setPlayers] = useState<PlayerStats[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // Only read when no player has a name, to list the matches instead.
@@ -63,7 +67,7 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
       .catch(loadError => {
         if (isMounted) {
           setError(
-            loadError instanceof Error ? loadError.message : '读取历史失败',
+            loadError instanceof Error ? loadError.message : translate('stats.loadFailed'),
           );
         }
       })
@@ -84,27 +88,23 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
   };
 
   if (loading) {
-    return <Text style={styles.empty}>正在读取…</Text>;
+    return <Text style={styles.empty}>{t('history.loading')}</Text>;
   }
   if (error) {
     return (
-      <Text style={[styles.empty, styles.error]}>读取历史失败：{error}</Text>
+      <Text style={[styles.empty, styles.error]}>{t('stats.loadFailedDetail', { error })}</Text>
     );
   }
   if (selectedId === null) {
     if (matches.length === 0) {
       return (
-        <Text style={styles.empty}>
-          还没有完成的比赛。打完一局后会出现在这里。
-        </Text>
+        <Text style={styles.empty}>{t('stats.noMatchesYet')}</Text>
       );
     }
     return (
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.hint}>
-          给玩家起名字后，这里会显示个人统计；没填名字的「玩家 N」不计入统计。
-        </Text>
-        <Text style={styles.sectionTitle}>全部比赛</Text>
+        <Text style={styles.hint}>{t('stats.nameHint')}</Text>
+        <Text style={styles.sectionTitle}>{t('stats.allMatches')}</Text>
         {matches.map(match => (
           <MatchCard
             key={match.id}
@@ -135,12 +135,12 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
       >
         <Pressable style={styles.backdrop} onPress={() => setPicking(false)}>
           <Pressable style={styles.picker} onPress={() => undefined}>
-            <Text style={styles.pickerTitle}>选择玩家</Text>
+            <Text style={styles.pickerTitle}>{t('stats.pickPlayer')}</Text>
             <View style={[styles.tableRow, styles.tableHeader]}>
-              <Text style={[styles.cellName, styles.headerText]}>玩家</Text>
-              <Text style={[styles.cell, styles.headerText]}>场次</Text>
-              <Text style={[styles.cell, styles.headerText]}>胜率</Text>
-              <Text style={[styles.cell, styles.headerText]}>X01 均分</Text>
+              <Text style={[styles.cellName, styles.headerText]}>{t('stats.columns.player')}</Text>
+              <Text style={[styles.cell, styles.headerText]}>{t('stats.columns.matches')}</Text>
+              <Text style={[styles.cell, styles.headerText]}>{t('stats.columns.winRate')}</Text>
+              <Text style={[styles.cell, styles.headerText]}>{t('stats.columns.x01Average')}</Text>
             </View>
             <ScrollView>
               {players.map(player => (
@@ -154,7 +154,7 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
                   ]}
                 >
                   <Text numberOfLines={1} style={styles.cellName}>
-                    {player.name}
+                    {displayPlayerName(player.name)}
                   </Text>
                   <Text style={styles.cell}>{player.matchesPlayed}</Text>
                   <Text style={styles.cell}>
@@ -168,7 +168,7 @@ export const StatsTab = ({ onOpenMatch }: StatsTabProps) => {
                 </Pressable>
               ))}
             </ScrollView>
-            <Text style={styles.hint}>没填名字的「玩家 N」不计入统计。</Text>
+            <Text style={styles.hint}>{t('stats.guestHint')}</Text>
           </Pressable>
         </Pressable>
       </Modal>

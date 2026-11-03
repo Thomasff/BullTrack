@@ -9,10 +9,11 @@ export interface Spec extends TurboModule {
   finishRound(request: Object): Promise<Object>;
   loadDebugArtifacts(roundId: string): Promise<Array<Object>>;
   listDebugRounds(): Promise<Array<Object>>;
-  shareDebugRound(roundId: string): Promise<string>;
-  shareTextFile(fileName: string, content: string): Promise<string>;
+  shareDebugRound(roundId: string, title: string): Promise<string>;
+  deleteDebugFiles(): Promise<boolean>;
+  shareTextFile(fileName: string, content: string, title: string): Promise<string>;
   pickTextFile(): Promise<string>;
-  shareImage(uri: string, fileName: string, text: string): Promise<string>;
+  shareImage(uri: string, fileName: string, text: string, title: string): Promise<string>;
   saveImageToGallery(uri: string, fileName: string): Promise<string>;
   saveRoundPhotos(target: string, name: string): Promise<Object>;
   listRoundPhotos(): Promise<Object>;

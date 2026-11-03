@@ -11,6 +11,7 @@ import type {
 import type { CompletedRoundRecord } from '../../domain/history/types';
 import type { BackCameraInfo } from '../../native-bridge/bulltrack/types';
 import { getDefaultPlayerName } from '../../domain/game/players';
+import { t } from '../../i18n';
 import {
   buildTeams,
   getEngineSides,
@@ -44,6 +45,8 @@ interface GameStoreState {
   gameStartedAt: number | null;
   statusMessage: string;
   errorMessage: string | null;
+  // The error is about where the phone or the board is; the game screen links the placement guide.
+  errorAboutPlacement: boolean;
   cameraPermissionGranted: boolean;
   // null until the camera has been prepared once.
   backCamera: BackCameraInfo | null;
@@ -56,6 +59,8 @@ interface GameStoreState {
   // Advice from the round's first frame (darts left on the board, phone position); kept until
   // the next round starts so the player sees it when back at the phone.
   setupHint: string | null;
+  // Part of setupHint is about where the phone or the board is (links the placement guide).
+  setupHintAboutPlacement: boolean;
   // The shown result is an undone round brought back for correction (no native session).
   reopenedRound: boolean;
   // History id of the saved finished game, so undoing its last round can remove it.
@@ -74,6 +79,8 @@ interface GameStoreState {
     currentThrowNumber?: number;
     canRedetect?: boolean;
     errorMessage?: string | null;
+    // Goes with errorMessage; false unless given.
+    errorAboutPlacement?: boolean;
     captureReady?: boolean;
   }) => void;
   setRoundResult: (result: RoundResult) => void;
@@ -87,16 +94,17 @@ interface GameStoreState {
   resetGame: () => void;
 }
 
-const initialCameraStatus: CameraStatus = {
+// Status text is looked up when the state is created, so it follows the language at that time.
+const createInitialCameraStatus = (): CameraStatus => ({
   isReady: false,
   isPreviewBound: false,
   zoomRatio: 1,
-  statusMessage: '等待相机权限',
+  statusMessage: t('native.session.cameraPermissionWaiting'),
   lockPhase: 'IDLE',
   lockReason: null,
-};
+});
 
-const initialState = {
+const createInitialState = () => ({
   status: 'idle' as GameStatus,
   selectedMode: null as GameType | null,
   selectedModeLabel: null as string | null,
@@ -111,29 +119,31 @@ const initialState = {
   completedRounds: [] as CompletedRoundRecord[],
   winnerId: null as string | null,
   gameStartedAt: null as number | null,
-  statusMessage: '选择模式并开始新游戏',
+  statusMessage: t('native.session.chooseMode'),
   errorMessage: null as string | null,
+  errorAboutPlacement: false,
   cameraPermissionGranted: false,
   backCamera: null as BackCameraInfo | null,
-  cameraStatus: initialCameraStatus,
+  cameraStatus: createInitialCameraStatus(),
   roundId: null as string | null,
   canRedetect: false,
   throwsEdited: false,
   captureReady: false,
   setupHint: null as string | null,
+  setupHintAboutPlacement: false,
   reopenedRound: false,
   savedMatchId: null as number | null,
   gameSeed: 0,
-};
+});
 
 export const useGameStore = create<GameStoreState>(set => ({
-  ...initialState,
+  ...createInitialState(),
   selectMode: (selectedMode, selectedModeLabel) =>
     set({
       selectedMode,
       selectedModeLabel,
       status: 'modeSelected',
-      statusMessage: '已选择模式，继续设置玩家',
+      statusMessage: t('native.session.modeSelected'),
       errorMessage: null,
     }),
   configurePlayers: (playerNames, teamIndexes) => {
@@ -161,7 +171,7 @@ export const useGameStore = create<GameStoreState>(set => ({
       savedMatchId: null,
       gameStartedAt: Date.now(),
       status: 'waitingForThrow',
-      statusMessage: '准备开始第一轮',
+      statusMessage: t('native.session.firstRoundReady'),
       errorMessage: null,
     });
   },
@@ -183,6 +193,10 @@ export const useGameStore = create<GameStoreState>(set => ({
         input.status === 'roundInProgress' ? null : state.currentRoundResult,
       errorMessage:
         input.errorMessage === undefined ? state.errorMessage : input.errorMessage,
+      errorAboutPlacement:
+        input.errorMessage === undefined
+          ? state.errorAboutPlacement
+          : (input.errorAboutPlacement ?? false),
     })),
   setRoundResult: result =>
     set({
@@ -192,7 +206,7 @@ export const useGameStore = create<GameStoreState>(set => ({
       status: 'showingResult',
       canRedetect: false,
       errorMessage: null,
-      statusMessage: '本轮结果已确认',
+      statusMessage: t('native.session.roundResultConfirmed'),
       throwsEdited: false,
       reopenedRound: false,
     }),
@@ -222,7 +236,7 @@ export const useGameStore = create<GameStoreState>(set => ({
         : {
             ...state.cameraStatus,
             isReady: false,
-            statusMessage: '需要相机权限才能开始本轮',
+            statusMessage: t('native.session.cameraPermissionNeeded'),
           },
     })),
   setCameraStatus: status =>
@@ -247,7 +261,14 @@ export const useGameStore = create<GameStoreState>(set => ({
       reopenedRound: false,
       errorMessage: null,
       status: 'waitingForThrow',
-      statusMessage: '准备开始下一轮',
+      statusMessage: t('native.session.nextRoundReady'),
     }),
-  resetGame: () => set(initialState),
+  // The camera permission and back camera are facts about the phone, not the game, so a rematch on
+  // the same screen keeps them (the screen only asks for the permission when it opens).
+  resetGame: () =>
+    set(state => ({
+      ...createInitialState(),
+      cameraPermissionGranted: state.cameraPermissionGranted,
+      backCamera: state.backCamera,
+    })),
 }));

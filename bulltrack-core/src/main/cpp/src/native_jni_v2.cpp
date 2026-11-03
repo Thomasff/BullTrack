@@ -22,19 +22,19 @@ namespace {
 // rotating it clockwise by rotation_degrees, which saves the camera code a full-size rotated bitmap.
 cv::Mat BitmapToBgrMat(JNIEnv* env, jobject bitmap, jint rotation_degrees) {
     if (bitmap == nullptr) {
-        throw std::runtime_error("图像数据为空");
+        throw std::runtime_error("bitmap_null");
     }
     AndroidBitmapInfo info;
     if (AndroidBitmap_getInfo(env, bitmap, &info) != ANDROID_BITMAP_RESULT_SUCCESS) {
-        throw std::runtime_error("无法读取图像信息");
+        throw std::runtime_error("bitmap_info_failed");
     }
     if (info.format != ANDROID_BITMAP_FORMAT_RGBA_8888 || info.width == 0 || info.height == 0) {
-        throw std::runtime_error("图像格式无效");
+        throw std::runtime_error("bitmap_format_invalid");
     }
 
     void* pixels = nullptr;
     if (AndroidBitmap_lockPixels(env, bitmap, &pixels) != ANDROID_BITMAP_RESULT_SUCCESS || pixels == nullptr) {
-        throw std::runtime_error("无法读取图像数据");
+        throw std::runtime_error("bitmap_pixels_failed");
     }
     cv::Mat bgr;
     try {
@@ -65,7 +65,7 @@ cv::Mat BitmapToBgrMat(JNIEnv* env, jobject bitmap, jint rotation_degrees) {
             return upright;
         }
         default:
-            throw std::runtime_error("图像旋转角度无效");
+            throw std::runtime_error("rotation_invalid");
     }
 }
 
@@ -300,7 +300,7 @@ Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeStartRoun
     (void)thiz;
     auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
     if (session == nullptr) {
-        ThrowJavaRuntimeException(env, "native session 无效");
+        ThrowJavaRuntimeException(env, "session_invalid");
         return nullptr;
     }
     try {
@@ -324,7 +324,7 @@ Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeProcessFr
     (void)thiz;
     auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
     if (session == nullptr) {
-        ThrowJavaRuntimeException(env, "native session 无效");
+        ThrowJavaRuntimeException(env, "session_invalid");
         return nullptr;
     }
     try {
@@ -348,7 +348,7 @@ Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeRedetectR
     (void)thiz;
     auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
     if (session == nullptr) {
-        ThrowJavaRuntimeException(env, "native session 无效");
+        ThrowJavaRuntimeException(env, "session_invalid");
         return nullptr;
     }
     try {
@@ -370,7 +370,7 @@ Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeFindMisse
     (void)thiz;
     auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
     if (session == nullptr) {
-        ThrowJavaRuntimeException(env, "native session 无效");
+        ThrowJavaRuntimeException(env, "session_invalid");
         return nullptr;
     }
     try {
@@ -405,7 +405,7 @@ Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeTakePhoto
     (void)thiz;
     auto* session = reinterpret_cast<bulltrack::AndroidBullTrackSession*>(session_id);
     if (session == nullptr) {
-        ThrowJavaRuntimeException(env, "native session 无效");
+        ThrowJavaRuntimeException(env, "session_invalid");
         return 0;
     }
     try {
@@ -436,7 +436,7 @@ Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeRenderPho
     (void)thiz;
     auto* source = reinterpret_cast<bulltrack::RoundPhotoSource*>(source_id);
     if (source == nullptr) {
-        ThrowJavaRuntimeException(env, "没有可用的本轮照片");
+        ThrowJavaRuntimeException(env, "no_round_photo");
         return nullptr;
     }
     try {
@@ -464,7 +464,8 @@ Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeRenderPho
 }
 
 // Returns frame width and height, band top and height, then 1 and the board box (x, y, width,
-// height) when a board was found, or 0 and four zeros.
+// height) when a board was found, or 0 and four zeros; then the dart count and each dart's tip
+// (x, y).
 JNIEXPORT jintArray JNICALL
 Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeDetectPrepBoard(
     JNIEnv* env,
@@ -476,7 +477,7 @@ Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeDetectPre
         const cv::Mat frame_bgr = BitmapToBgrMat(env, frame, rotation_degrees);
         const bulltrack::PrepBoardGuide guide = bulltrack::DetectPrepBoard(frame_bgr);
         const cv::Rect box = guide.board_box.value_or(cv::Rect());
-        const jint values[9] = {
+        std::vector<jint> values{
             frame_bgr.cols,
             frame_bgr.rows,
             guide.band.y,
@@ -486,9 +487,15 @@ Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeDetectPre
             box.y,
             box.width,
             box.height,
+            static_cast<jint>(guide.dart_tips.size()),
         };
-        jintArray array = env->NewIntArray(9);
-        env->SetIntArrayRegion(array, 0, 9, values);
+        for (const cv::Point& tip : guide.dart_tips) {
+            values.push_back(tip.x);
+            values.push_back(tip.y);
+        }
+        const jsize size = static_cast<jsize>(values.size());
+        jintArray array = env->NewIntArray(size);
+        env->SetIntArrayRegion(array, 0, size, values.data());
         return array;
     } catch (const std::exception& error) {
         LOGE("nativeDetectPrepBoard failed: %s", error.what());
