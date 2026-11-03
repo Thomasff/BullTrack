@@ -486,6 +486,10 @@ void AppendBoardDetectionDebugImages(
     const BoardCircleDetectionResult& board_detection,
     const cv::Mat& board_crop_bgr) {
 #if BT_ENABLE_DEBUG_IMAGES
+    // The images below are drawn before AppendDebugImage looks at the switch, so check it first.
+    if (!DebugImagesActive()) {
+        return;
+    }
     AppendDebugImageIfNotEmpty(
         output,
         frame_index,
@@ -1094,9 +1098,13 @@ BoardAlignmentArea BuildBoardAlignmentArea(const BoardArea& board_area, const cv
 
 // Board-wide preparation shared by every dart box of the same before/after pair.
 constexpr const char* kDartAlignmentMotion = "homography";
-// Below this ECC score an alignment is not trusted (hand in view, motion blur, board partly out
-// of frame): the frame is not used to confirm a dart. Normal frames score 0.99 or more.
-constexpr double kMinAlignmentCorrelation = 0.97;
+// Below this ECC score an alignment is not trusted (a hand or arm over the board, board partly out
+// of frame): the frame is not used to confirm a dart. The empty board scores 0.99 or more, but
+// every dart left on the board lowers the score for the rest of the round: soft darts about 0.005
+// each, dark steel darts with hard shadows up to 0.02 (rendered rounds, third dart down to 0.943;
+// 0.97 left real third darts waiting for good). A hand over 10% of the board scores about 0.88;
+// motion blur barely lowers the score.
+constexpr double kMinAlignmentCorrelation = 0.90;
 // One iteration on the full-size level instead of three: each full-size iteration costs about as
 // much as both coarser levels together, and starting from the half-size result the first one does
 // nearly all the correcting. On 974 recorded frames (2026-10-31) it left about the same edge
@@ -1301,6 +1309,19 @@ LocalizedDartDetectionResult LocateDartTipInRegion(
     const std::string& debug_prefix,
     const std::optional<cv::Point2f>& model_tip_in_pair = std::nullopt) {
     LocalizedDartDetectionResult result;
+    // ChooseDartTip takes a usable model tip, so the image-difference tip is only worked out
+    // without one, or with debug info on to log how far apart the two lie.
+    if (model_tip_in_pair.has_value() && !DebugImagesActive()) {
+        try {
+            NormalizePointFromRoundAlignedBoard(
+                model_tip_in_pair.value() - cv::Point2f(board_offset_in_search),
+                point_rectification_h,
+                rectified_radius);
+            result.reason = "diff_skipped_model_tip";
+            return result;
+        } catch (const std::exception&) {
+        }
+    }
     cv::Rect local_rect;
     try {
         local_rect = ExpandAndClampLocalRect(ExtendTowardTip(box_in_pair, camera_on_left), pair.round_board_size);
@@ -1354,7 +1375,6 @@ LocalizedDartDetectionResult LocateDartTipInRegion(
 #else
     (void)frame_index;
     (void)debug_prefix;
-    (void)model_tip_in_pair;
 #endif
     return result;
 }
@@ -1439,7 +1459,7 @@ std::optional<cv::Point2f> ModelTipForRegion(
 }
 
 // Model tip first, the image-difference tip when the model has none. Which one was taken, and
-// how far apart the two lie, goes to log_text.
+// how far apart the two lie (worked out only with debug info on), goes to log_text.
 std::optional<cv::Point2f> ChooseDartTip(
     const LocalizedDartDetectionResult& by_difference,
     const std::optional<cv::Point2f>& model_tip_in_pair,
@@ -1620,6 +1640,11 @@ constexpr float kMaxMissedDartRadius = 1.05f;
 // beds (a red dart on the blue/black bull) and brighten them; a shadow (the player, an arm) only
 // darkens, and darkened a whole cream bed into a false dart (2026-10-21).
 constexpr double kMinMissedDartBrightShare = 0.25;
+// Strongest change (half-size gray difference) a missed-dart region must reach. A dart covers the
+// bed with metal or a coloured flight; the misses seen so far (red darts YOLO scored low) peaked
+// at 69 and 98. Leftover misalignment of the honeycomb dots only nudges the shade: the six false
+// darts the scan added (cream bed tips by the bull, bed edges) peaked at 36-45 (2026-11-01).
+constexpr double kMinMissedDartPeakChange = 55.0;
 // Margins around known darts whose change the scan ignores: an old dart may wobble when hit; a
 // dart YOLO boxed (even one not confirmed yet) also changes its shadow and its tip side.
 // Shadows no longer need wide margins (a missed-dart region must brighten), and wide ones hid a
@@ -1645,6 +1670,12 @@ cv::Rect GrowRect(const cv::Rect& rect, double share_each_side) {
     const int dx = static_cast<int>(std::lround(rect.width * share_each_side));
     const int dy = static_cast<int>(std::lround(rect.height * share_each_side));
     return cv::Rect(rect.x - dx, rect.y - dy, rect.width + 2 * dx, rect.height + 2 * dy);
+}
+
+double PeakChange(const cv::Mat& diff, const cv::Mat& changed) {
+    double peak = 0.0;
+    cv::minMaxLoc(diff, nullptr, &peak, nullptr, nullptr, changed);
+    return peak;
 }
 
 std::vector<ChangeRegion> FindUnexplainedChangeRegions(
@@ -1762,6 +1793,8 @@ std::vector<ChangeRegion> FindUnexplainedChangeRegions(
             verdict = "long";
         } else if (changed_count == 0 || bright_count < changed_count * kMinMissedDartBrightShare) {
             verdict = "dark";
+        } else if (PeakChange(diff(rect_small), changed_raw(rect_small)) < kMinMissedDartPeakChange) {
+            verdict = "faint";
         } else if (known_count >= changed_count * kMinKnownShare) {
             verdict = "known";
         } else {
@@ -2662,18 +2695,20 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
         if (top_dart_boxes.empty()) {
             result.yolo_status += " no_dart_boxes";
 #if BT_ENABLE_DEBUG_IMAGES
-            cv::Mat after_board_crop_bgr = CropWithBlackPadding(latest_frame_bgr_, after_search_rect);
-            cv::Mat after_board_resized = ResizeToTargetSize(after_board_crop_bgr, first_frame_preprocessed_for_alignment_.size());
-            cv::Mat after_board_view = EnhanceWarpedImage(
-                after_board_resized,
-                pipeline_config_.enhancement.saturation_scale,
-                pipeline_config_.enhancement.contrast_scale);
-            AppendDebugImage(
-                result.debug_images,
-                current_frame_index_,
-                "s96",
-                "redetect_board_summary",
-                after_board_view);
+            if (DebugImagesActive()) {
+                cv::Mat after_board_crop_bgr = CropWithBlackPadding(latest_frame_bgr_, after_search_rect);
+                cv::Mat after_board_resized = ResizeToTargetSize(after_board_crop_bgr, first_frame_preprocessed_for_alignment_.size());
+                cv::Mat after_board_view = EnhanceWarpedImage(
+                    after_board_resized,
+                    pipeline_config_.enhancement.saturation_scale,
+                    pipeline_config_.enhancement.contrast_scale);
+                AppendDebugImage(
+                    result.debug_images,
+                    current_frame_index_,
+                    "s96",
+                    "redetect_board_summary",
+                    after_board_view);
+            }
 #endif
             return result;
         }
@@ -2735,30 +2770,32 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
         photo_frame_override_ = std::move(photo_frame);
 
 #if BT_ENABLE_DEBUG_IMAGES
-        cv::Mat after_board_resized = ResizeToTargetSize(after_board_crop_bgr, first_frame_preprocessed_for_alignment_.size());
-        cv::Mat after_board_view = EnhanceWarpedImage(
-            after_board_resized,
-            pipeline_config_.enhancement.saturation_scale,
-            pipeline_config_.enhancement.contrast_scale);
-        std::vector<YoloDetectionBox> summary_boxes;
-        summary_boxes.reserve(top_dart_boxes.size());
-        const float scale_x = static_cast<float>(after_board_view.cols) / static_cast<float>(after_search_rect.width);
-        const float scale_y = static_cast<float>(after_board_view.rows) / static_cast<float>(after_search_rect.height);
-        for (const YoloDetectionBox& dart_box : top_dart_boxes) {
-            YoloDetectionBox scaled_box = dart_box;
-            scaled_box.rect = cv::Rect2f(
-                (dart_box.rect.x - static_cast<float>(after_search_rect.x)) * scale_x,
-                (dart_box.rect.y - static_cast<float>(after_search_rect.y)) * scale_y,
-                dart_box.rect.width * scale_x,
-                dart_box.rect.height * scale_y);
-            summary_boxes.push_back(scaled_box);
+        if (DebugImagesActive()) {
+            cv::Mat after_board_resized = ResizeToTargetSize(after_board_crop_bgr, first_frame_preprocessed_for_alignment_.size());
+            cv::Mat after_board_view = EnhanceWarpedImage(
+                after_board_resized,
+                pipeline_config_.enhancement.saturation_scale,
+                pipeline_config_.enhancement.contrast_scale);
+            std::vector<YoloDetectionBox> summary_boxes;
+            summary_boxes.reserve(top_dart_boxes.size());
+            const float scale_x = static_cast<float>(after_board_view.cols) / static_cast<float>(after_search_rect.width);
+            const float scale_y = static_cast<float>(after_board_view.rows) / static_cast<float>(after_search_rect.height);
+            for (const YoloDetectionBox& dart_box : top_dart_boxes) {
+                YoloDetectionBox scaled_box = dart_box;
+                scaled_box.rect = cv::Rect2f(
+                    (dart_box.rect.x - static_cast<float>(after_search_rect.x)) * scale_x,
+                    (dart_box.rect.y - static_cast<float>(after_search_rect.y)) * scale_y,
+                    dart_box.rect.width * scale_x,
+                    dart_box.rect.height * scale_y);
+                summary_boxes.push_back(scaled_box);
+            }
+            AppendDebugImage(
+                result.debug_images,
+                current_frame_index_,
+                "s96",
+                "redetect_board_summary",
+                DrawRedetectSummaryImage(after_board_view, summary_boxes, summary_points));
         }
-        AppendDebugImage(
-            result.debug_images,
-            current_frame_index_,
-            "s96",
-            "redetect_board_summary",
-            DrawRedetectSummaryImage(after_board_view, summary_boxes, summary_points));
 #endif
     } catch (const std::exception& error) {
         result.yolo_status = std::string("error: ") + error.what();
