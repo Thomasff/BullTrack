@@ -157,6 +157,9 @@ private:
     // type) from setup; empty means the default table.
     std::optional<MeasuredRingEdges> ring_edges_;
     cv::Rect first_frame_dart_search_rect_{};
+    // Side of the board the phone stood on in the first frame. Dart tails stick out away from
+    // the phone, so the tip is the dart's changed pixel nearest the phone's side.
+    bool camera_on_left_ = true;
     // Board box corner inside the dart search crop, to map tips back to board-crop coordinates.
     cv::Point board_offset_in_search_{};
     cv::Mat latest_frame_bgr_;

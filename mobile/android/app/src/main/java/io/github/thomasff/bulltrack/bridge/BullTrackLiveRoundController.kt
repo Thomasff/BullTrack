@@ -572,15 +572,6 @@ class BullTrackLiveRoundController(
         }
         logStartTiming(requestedNs, bindMs, attemptTimings, "ok")
 
-        // From the right, dart tails stick out to the left of the board where the search area has
-        // no room and darts get lost, so such a round is not started at all. The board setup still
-        // ran, so the player gets the same quick failure as when no board is found.
-        val sideRatio = boardSetup?.leftRightHalfRatio ?: 0f
-        if (sideRatio > 0f && sideRatio < RIGHT_SIDE_MAX_RATIO) {
-            detector.destroySession(sessionId)
-            Log.w(TAG, "Round refused: phone right of the board (left/right half ratio $sideRatio)")
-            error(PHONE_RIGHT_OF_BOARD_ERROR)
-        }
         // The model sees only a square of the frame (centred on the board up and down) and was
         // trained on boards taking 0.55-0.9 of its height, so a board outside that range or still
         // running into the square's edge is not started either. Just above the lower limit RN
@@ -1274,11 +1265,6 @@ class BullTrackLiveRoundController(
         // paces the loop rather than the camera.
         private const val FRAME_INTERVAL_MS = 500L
         private const val START_ROUND_ATTEMPTS = 3
-        // Board's left half over its right half in the image; below 1 the phone is right of the
-        // board's centre line (user-tested 2026-10-26: front-left 1.04-1.11, right 0.92-0.96).
-        private const val RIGHT_SIDE_MAX_RATIO = 1.0f
-        // Matched by RN's nativeErrorText.
-        private const val PHONE_RIGHT_OF_BOARD_ERROR = "phone right of the board"
         // Board box height over the side of the square the model sees (the model was trained
         // on 0.55-0.9). Matched by RN's nativeErrorText.
         private const val BOARD_SHARE_MIN = 0.55f

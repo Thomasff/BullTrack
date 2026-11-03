@@ -104,6 +104,9 @@ struct FirstFrameBoardBaseline {
     YoloDetectionResult yolo_detection;
     // The square the model sees for the whole round, centred on the board.
     cv::Rect model_square;
+    // Board's left half over its right half in the image (0 when unknown) and the phone's side.
+    float left_right_half_ratio = 0.0f;
+    bool camera_on_left = true;
 };
 
 #if BT_ENABLE_DEBUG_IMAGES
@@ -562,17 +565,46 @@ cv::Mat CropBoardByRect(const cv::Mat& image, const cv::Rect& rect) {
     return image(rect).clone();
 }
 
-// Dart detection looks at the board box widened on every side, more on the right: shot from the
-// left at an angle, a dart near the right edge (or one in the miss ring) sticks out of the board
-// box and was cut off, sometimes entirely. Board fitting keeps the plain board box.
-constexpr double kDartSearchMarginLeft = 0.10;
-constexpr double kDartSearchMarginRight = 0.25;
+// Maps the bull and the outer double edge at 9 and 3 o'clock back into the image and compares
+// the two half widths. The rectified board is anchored to the board itself (20 at the top), so
+// phone roll does not matter.
+float MeasureLeftRightHalfRatio(const cv::Mat& point_rectification_h, float rectified_radius) {
+    if (point_rectification_h.empty() || rectified_radius <= 1e-6f) {
+        return 0.0f;
+    }
+    const std::vector<cv::Point2f> rectified_points{
+        cv::Point2f(0.0f, 0.0f),
+        cv::Point2f(-rectified_radius, 0.0f),
+        cv::Point2f(rectified_radius, 0.0f)};
+    std::vector<cv::Point2f> image_points;
+    cv::perspectiveTransform(rectified_points, image_points, point_rectification_h.inv());
+    if (image_points.size() != rectified_points.size()) {
+        return 0.0f;
+    }
+    const float left = static_cast<float>(cv::norm(image_points[1] - image_points[0]));
+    const float right = static_cast<float>(cv::norm(image_points[2] - image_points[0]));
+    return right > 1e-3f ? left / right : 0.0f;
+}
+
+// The half nearer the phone looks longer. An unknown ratio (0) counts as the left.
+bool IsCameraOnLeft(float left_right_half_ratio) {
+    return !(left_right_half_ratio > 0.0f && left_right_half_ratio < 1.0f);
+}
+
+// Dart detection looks at the board box widened on every side, more on the side away from the
+// phone: shot at an angle, dart tails stick out that way, and a dart near that edge (or one in
+// the miss ring) leaves the board box and was cut off, sometimes entirely. Board fitting keeps
+// the plain board box.
+constexpr double kDartSearchMarginNearSide = 0.10;
+constexpr double kDartSearchMarginFarSide = 0.25;
 constexpr double kDartSearchMarginTop = 0.10;
 constexpr double kDartSearchMarginBottom = 0.10;
 
-cv::Rect ExpandToDartSearchRect(const cv::Rect& board_box) {
-    const int left = static_cast<int>(std::lround(board_box.width * kDartSearchMarginLeft));
-    const int right = static_cast<int>(std::lround(board_box.width * kDartSearchMarginRight));
+cv::Rect ExpandToDartSearchRect(const cv::Rect& board_box, bool camera_on_left) {
+    const double left_margin = camera_on_left ? kDartSearchMarginNearSide : kDartSearchMarginFarSide;
+    const double right_margin = camera_on_left ? kDartSearchMarginFarSide : kDartSearchMarginNearSide;
+    const int left = static_cast<int>(std::lround(board_box.width * left_margin));
+    const int right = static_cast<int>(std::lround(board_box.width * right_margin));
     const int top = static_cast<int>(std::lround(board_box.height * kDartSearchMarginTop));
     const int bottom = static_cast<int>(std::lround(board_box.height * kDartSearchMarginBottom));
     return cv::Rect(
@@ -650,8 +682,12 @@ FirstFrameBoardBaseline BuildFirstFrameBoardBaseline(
     baseline.board_box = board_box;
     baseline.board_crop_bgr = std::move(board_crop_bgr);
     baseline.enhanced_board_crop_bgr = std::move(enhanced_board_crop_bgr);
+    baseline.left_right_half_ratio = MeasureLeftRightHalfRatio(
+        board_detection.point_rectification_h,
+        board_detection.rectified_radius);
+    baseline.camera_on_left = IsCameraOnLeft(baseline.left_right_half_ratio);
     // Darts are aligned and compared in the widened search area, so the template covers it too.
-    baseline.dart_search_rect = ExpandToDartSearchRect(board_box);
+    baseline.dart_search_rect = ExpandToDartSearchRect(board_box, baseline.camera_on_left);
     baseline.preprocessed_gray = PreprocessImage(
         EnhanceWarpedImage(
             CropWithBlackPadding(first_frame_bgr, baseline.dart_search_rect),
@@ -670,7 +706,8 @@ TrackedYoloFrameState BuildTrackedYoloFrameState(
     int frame_index,
     const cv::Mat& frame_bgr,
     const YoloDetectionResult& detection,
-    int max_dart_count) {
+    int max_dart_count,
+    bool camera_on_left) {
     TrackedYoloFrameState frame_state;
     frame_state.frame_index = frame_index;
     // Frames are never modified after capture, so sharing the buffer is safe and saves a copy.
@@ -679,7 +716,7 @@ TrackedYoloFrameState BuildTrackedYoloFrameState(
     if (detected_board_box.has_value()) {
         frame_state.board_box = detected_board_box.value();
         frame_state.has_board_box = true;
-        frame_state.dart_search_rect = ExpandToDartSearchRect(frame_state.board_box);
+        frame_state.dart_search_rect = ExpandToDartSearchRect(frame_state.board_box, camera_on_left);
         frame_state.dart_search_crop_bgr = CropWithBlackPadding(frame_bgr, frame_state.dart_search_rect);
     }
     frame_state.dart_boxes = SelectTopDartBoxes(
@@ -819,50 +856,33 @@ cv::Mat FilterSinglePixelComponents(const cv::Mat& binary_img) {
     return filtered;
 }
 
-// A tall dart box means the dart points up in the image and its tip is the topmost changed
-// pixel; otherwise (camera at the left front) the tip is the leftmost one.
-bool IsTipOnTop(const cv::Rect& dart_box) {
-    return dart_box.height > ((dart_box.width * 5) / 4);
-}
-
+// Shot from the front left (right), dart tails stick out to the right (left), so the tip is on
+// the phone's side of the dart.
 // YOLO boxes often stop short of the thin, dark tip, so the comparison area reaches a third of
 // the box further on the tip side.
-cv::Rect ExtendTowardTip(const cv::Rect& dart_box, bool tip_on_top) {
+cv::Rect ExtendTowardTip(const cv::Rect& dart_box, bool camera_on_left) {
     cv::Rect extended = dart_box;
-    if (tip_on_top) {
-        const int extra = dart_box.height / 3;
-        extended.y -= extra;
-        extended.height += extra;
-    } else {
-        const int extra = dart_box.width / 3;
+    const int extra = dart_box.width / 3;
+    if (camera_on_left) {
         extended.x -= extra;
-        extended.width += extra;
     }
+    extended.width += extra;
     return extended;
 }
 
+// The tip is the changed pixel furthest towards the phone's side.
 std::optional<cv::Point> SelectTipPointFromLocalMask(
     const cv::Mat& filtered_binary,
     const cv::Rect& local_rect,
-    bool select_topmost) {
+    bool camera_on_left) {
     if (filtered_binary.empty() || cv::countNonZero(filtered_binary) == 0) {
         return std::nullopt;
     }
-    if (select_topmost) {
+    for (int i = 0; i < filtered_binary.cols; ++i) {
+        const int x = camera_on_left ? i : filtered_binary.cols - 1 - i;
         for (int y = 0; y < filtered_binary.rows; ++y) {
-            const uchar* row = filtered_binary.ptr<uchar>(y);
-            for (int x = 0; x < filtered_binary.cols; ++x) {
-                if (row[x] > 0) {
-                    return cv::Point(local_rect.x + x, local_rect.y + y);
-                }
-            }
-        }
-    } else {
-        for (int x = 0; x < filtered_binary.cols; ++x) {
-            for (int y = 0; y < filtered_binary.rows; ++y) {
-                if (filtered_binary.at<uchar>(y, x) > 0) {
-                    return cv::Point(local_rect.x + x, local_rect.y + y);
-                }
+            if (filtered_binary.at<uchar>(y, x) > 0) {
+                return cv::Point(local_rect.x + x, local_rect.y + y);
             }
         }
     }
@@ -946,27 +966,6 @@ cv::Point2f NormalizePointFromRoundAlignedBoard(
     return cv::Point2f(
         dst_points.front().x / rectified_radius,
         -dst_points.front().y / rectified_radius);
-}
-
-// Maps the bull and the outer double edge at 9 and 3 o'clock back into the image and compares
-// the two half widths. The rectified board is anchored to the board itself (20 at the top), so
-// phone roll does not matter.
-float MeasureLeftRightHalfRatio(const cv::Mat& point_rectification_h, float rectified_radius) {
-    if (point_rectification_h.empty() || rectified_radius <= 1e-6f) {
-        return 0.0f;
-    }
-    const std::vector<cv::Point2f> rectified_points{
-        cv::Point2f(0.0f, 0.0f),
-        cv::Point2f(-rectified_radius, 0.0f),
-        cv::Point2f(rectified_radius, 0.0f)};
-    std::vector<cv::Point2f> image_points;
-    cv::perspectiveTransform(rectified_points, image_points, point_rectification_h.inv());
-    if (image_points.size() != rectified_points.size()) {
-        return 0.0f;
-    }
-    const float left = static_cast<float>(cv::norm(image_points[1] - image_points[0]));
-    const float right = static_cast<float>(cv::norm(image_points[2] - image_points[0]));
-    return right > 1e-3f ? left / right : 0.0f;
 }
 
 #if BT_ENABLE_DEBUG_IMAGES
@@ -1297,14 +1296,14 @@ LocalizedDartDetectionResult LocateDartTipInRegion(
     const cv::Mat& point_rectification_h,
     float rectified_radius,
     const cv::Point& board_offset_in_search,
+    bool camera_on_left,
     int frame_index,
     const std::string& debug_prefix,
     const std::optional<cv::Point2f>& model_tip_in_pair = std::nullopt) {
     LocalizedDartDetectionResult result;
-    const bool tip_on_top = IsTipOnTop(box_in_pair);
     cv::Rect local_rect;
     try {
-        local_rect = ExpandAndClampLocalRect(ExtendTowardTip(box_in_pair, tip_on_top), pair.round_board_size);
+        local_rect = ExpandAndClampLocalRect(ExtendTowardTip(box_in_pair, camera_on_left), pair.round_board_size);
     } catch (const std::exception&) {
         result.reason = "local_dart_box_invalid";
         return result;
@@ -1314,7 +1313,7 @@ LocalizedDartDetectionResult LocateDartTipInRegion(
     cv::Mat after_local_gray = pair.after_gray_aligned(local_rect).clone();
     cv::Mat diff_thresh = BuildTipDiffBinary(before_local_gray, after_local_gray);
     cv::Mat filtered_local = FilterSinglePixelComponents(diff_thresh);
-    std::optional<cv::Point> tip_point = SelectTipPointFromLocalMask(filtered_local, local_rect, tip_on_top);
+    std::optional<cv::Point> tip_point = SelectTipPointFromLocalMask(filtered_local, local_rect, camera_on_left);
 
     if (cv::countNonZero(filtered_local) == 0) {
         result.reason = "local_mask_empty_after_filter";
@@ -1367,6 +1366,7 @@ LocalizedDartDetectionResult LocateDartTipInAlignedPair(
     const cv::Mat& point_rectification_h,
     float rectified_radius,
     const cv::Point& board_offset_in_search,
+    bool camera_on_left,
     int frame_index,
     const std::string& debug_prefix,
     const std::optional<cv::Point2f>& model_tip_in_pair = std::nullopt) {
@@ -1376,6 +1376,7 @@ LocalizedDartDetectionResult LocateDartTipInAlignedPair(
         point_rectification_h,
         rectified_radius,
         board_offset_in_search,
+        camera_on_left,
         frame_index,
         debug_prefix,
         model_tip_in_pair);
@@ -1801,7 +1802,8 @@ std::vector<ChangeRegion> FindUnexplainedChangeRegions(
 std::vector<cv::Rect> KnownDartAreas(
     const AlignedBoardPair& pair,
     const TrackedYoloFrameState& clean_frame,
-    const std::vector<const TrackedYoloFrameState*>& boxed_frames) {
+    const std::vector<const TrackedYoloFrameState*>& boxed_frames,
+    bool camera_on_left) {
     std::vector<cv::Rect> areas;
     for (const YoloDetectionBox& box : clean_frame.dart_boxes) {
         areas.push_back(GrowRect(MapDartBoxIntoAlignedPair(pair, clean_frame.dart_search_rect, box), kOldDartMargin));
@@ -1809,7 +1811,7 @@ std::vector<cv::Rect> KnownDartAreas(
     for (const TrackedYoloFrameState* frame : boxed_frames) {
         for (const YoloDetectionBox& box : frame->dart_boxes) {
             const cv::Rect in_pair = MapDartBoxIntoAlignedPair(pair, frame->dart_search_rect, box);
-            areas.push_back(GrowRect(ExtendTowardTip(in_pair, IsTipOnTop(in_pair)), kBoxedDartMargin));
+            areas.push_back(GrowRect(ExtendTowardTip(in_pair, camera_on_left), kBoxedDartMargin));
         }
     }
     return areas;
@@ -1880,7 +1882,8 @@ bool CanRefreshCleanFrame(
     const PipelineConfig& config,
     const cv::Mat& point_rectification_h,
     float rectified_radius,
-    const cv::Point& board_offset_in_search) {
+    const cv::Point& board_offset_in_search,
+    bool camera_on_left) {
     std::optional<AlignedBoardPair> pair;
     try {
         pair = PrepareAlignedBoardPair(
@@ -1898,7 +1901,7 @@ bool CanRefreshCleanFrame(
     }
     return FindUnexplainedChangeRegions(
         pair.value(),
-        KnownDartAreas(pair.value(), clean_frame, {&current_frame}),
+        KnownDartAreas(pair.value(), clean_frame, {&current_frame}, camera_on_left),
         point_rectification_h,
         rectified_radius,
         board_offset_in_search).empty();
@@ -1938,6 +1941,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     first_frame_board_crop_bgr_ = baseline.board_crop_bgr.clone();
     first_frame_preprocessed_for_alignment_ = baseline.preprocessed_gray.clone();
     first_frame_dart_search_rect_ = baseline.dart_search_rect;
+    camera_on_left_ = baseline.camera_on_left;
     board_offset_in_search_ = baseline.board_box.tl() - baseline.dart_search_rect.tl();
     first_frame_point_rectification_h_ = baseline.point_rectification_h.clone();
     first_frame_rectified_radius_ = baseline.rectified_radius;
@@ -1952,9 +1956,7 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     last_confirmed_dart_count_ = static_cast<int>(SelectTopDartBoxes(baseline.yolo_detection, 3, baseline.dart_search_rect).size());
     round_start_dart_count_ = last_confirmed_dart_count_;
     result.start_dart_count = round_start_dart_count_;
-    result.left_right_half_ratio = MeasureLeftRightHalfRatio(
-        first_frame_point_rectification_h_,
-        first_frame_rectified_radius_);
+    result.left_right_half_ratio = baseline.left_right_half_ratio;
     // The model was trained on boards taking 0.55-0.9 of the square's height; a board box running
     // into the square's edge is cut off where the model stops seeing. Centring the square fixes
     // that along the frame's long side but not across it.
@@ -1964,9 +1966,10 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
     __android_log_print(
         ANDROID_LOG_INFO,
         "BullTrackNativeV2",
-        "round start: darts on board=%d, left/right half ratio=%.3f, board height share=%.3f, model square top=%d%s",
+        "round start: darts on board=%d, left/right half ratio=%.3f (phone %s), board height share=%.3f, model square top=%d%s",
         result.start_dart_count,
         result.left_right_half_ratio,
+        camera_on_left_ ? "left" : "right",
         result.board_height_share,
         model_square_.y,
         result.board_in_square ? "" : " (touches the square's edge)");
@@ -1976,7 +1979,8 @@ AndroidStartRoundResult AndroidBullTrackSession::StartRound(const cv::Mat& first
             1,
             first_frame_bgr_,
             baseline.yolo_detection,
-            3));
+            3,
+            camera_on_left_));
     last_clean_frame_ = recent_frames_.back();
 
     started_ = true;
@@ -2200,7 +2204,7 @@ void AndroidBullTrackSession::ConfirmNewDarts(
     if (static_cast<int>(new_dart_boxes.size()) < remaining) {
         missed_regions = FindStillMissedDartRegions(
             pair.value(),
-            KnownDartAreas(pair.value(), base_frame, {&stable_frame, &candidate_frame}),
+            KnownDartAreas(pair.value(), base_frame, {&stable_frame, &candidate_frame}, camera_on_left_),
             candidate_frame,
             stable_frame,
             first_frame_preprocessed_for_alignment_,
@@ -2246,6 +2250,7 @@ void AndroidBullTrackSession::ConfirmNewDarts(
             first_frame_point_rectification_h_,
             first_frame_rectified_radius_,
             board_offset_in_search_,
+            camera_on_left_,
             current_frame_index_,
             i == 0 ? std::string("s3") : cv::format("s3%c", static_cast<char>('a' + i)),
             model_tip);
@@ -2271,6 +2276,7 @@ void AndroidBullTrackSession::ConfirmNewDarts(
             first_frame_point_rectification_h_,
             first_frame_rectified_radius_,
             board_offset_in_search_,
+            camera_on_left_,
             current_frame_index_,
             cv::format("s3m%c", static_cast<char>('a' + i)),
             model_tip);
@@ -2387,7 +2393,8 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
         current_frame_index_,
         latest_frame_bgr_,
         yolo_detection,
-        max_candidate_count);
+        max_candidate_count,
+        camera_on_left_);
 #if BT_ENABLE_DEBUG_IMAGES
     if (!current_frame_state.overlay_bgr.empty()) {
         AppendDebugImage(
@@ -2444,7 +2451,8 @@ AndroidFrameProcessResult AndroidBullTrackSession::ProcessFrame(const cv::Mat& f
                 pipeline_config_,
                 first_frame_point_rectification_h_,
                 first_frame_rectified_radius_,
-                board_offset_in_search_)) {
+                board_offset_in_search_,
+                camera_on_left_)) {
             last_clean_frame_ = stored_current;
         }
     }
@@ -2556,7 +2564,7 @@ AndroidRedetectResult AndroidBullTrackSession::FindMissedDartsAtEnd() {
     // Only the confirmed darts are known here: a dart YOLO boxed but never confirmed counts too.
     std::vector<ChangeRegion> regions = FindStillMissedDartRegions(
         pair.value(),
-        KnownDartAreas(pair.value(), last_clean_frame_.value(), {}),
+        KnownDartAreas(pair.value(), last_clean_frame_.value(), {}, camera_on_left_),
         previous,
         current,
         first_frame_preprocessed_for_alignment_,
@@ -2578,6 +2586,7 @@ AndroidRedetectResult AndroidBullTrackSession::FindMissedDartsAtEnd() {
             first_frame_point_rectification_h_,
             first_frame_rectified_radius_,
             board_offset_in_search_,
+            camera_on_left_,
             current_frame_index_,
             cv::format("s3e%c", static_cast<char>('a' + i)),
             model_tip);
@@ -2647,7 +2656,7 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
             result.yolo_status += " board_missing";
             return result;
         }
-        const cv::Rect after_search_rect = ExpandToDartSearchRect(after_board_box.value());
+        const cv::Rect after_search_rect = ExpandToDartSearchRect(after_board_box.value(), camera_on_left_);
 
         std::vector<YoloDetectionBox> top_dart_boxes = SelectTopDartBoxes(yolo_detection, 3, after_search_rect);
         if (top_dart_boxes.empty()) {
@@ -2697,6 +2706,7 @@ AndroidRedetectResult AndroidBullTrackSession::RedetectRound(const cv::Mat& fram
                 first_frame_point_rectification_h_,
                 first_frame_rectified_radius_,
                 board_offset_in_search_,
+                camera_on_left_,
                 current_frame_index_,
                 prefix,
                 model_tip);
