@@ -18,7 +18,9 @@ struct AdaptiveRedLabModel {
 
 std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractBoardColorMasks(const cv::Mat& img);
 std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractBoardColorMasks(const cv::Mat& img, const AdaptiveRedLabModel& red_model);
-AdaptiveRedLabModel EstimateAdaptiveRedLabModel(const cv::Mat& img, int max_sample_count = 40);
+// With reddest_share above 0 only the reddest samples (highest Lab a), as many as this share of the
+// image's pixels, set the reference.
+AdaptiveRedLabModel EstimateAdaptiveRedLabModel(const cv::Mat& img, double reddest_share = 0.0);
 cv::Mat ExtractRedOnlyMask(const cv::Mat& img);
 cv::Mat ExtractRedOnlyMask(const cv::Mat& img, const AdaptiveRedLabModel& red_model);
 cv::Mat PrepareBoardDetectionImage(const cv::Mat& img);

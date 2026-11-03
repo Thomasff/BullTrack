@@ -10,9 +10,15 @@
 namespace bulltrack {
 namespace {
 
-// Inner edge of the red sampling ring, as a fraction of the board radius: just inside the
-// treble bed (about 0.58 of the double ring's outer edge), so trebles and doubles are both in.
-constexpr double kRedSampleInnerRadius = 0.45;
+// The red reference is sampled inside this fraction of the board radius: the treble beds (about
+// 0.58-0.63 of the double ring's outer edge) and the bull, but not the doubles. The doubles are
+// what the reference must find; at the board's edge they catch the most uneven light, and the
+// box corners can hold a red surround.
+constexpr double kRedSampleRadius = 0.66;
+// Only clearly red pixels (Lab a above this) are samples.
+constexpr float kRedSampleMinA = 140.0f;
+// Sample points kept for the debug image.
+constexpr int kRedDebugSampleCount = 40;
 
 AdaptiveRedLabModel BuildFallbackAdaptiveRedLabModel(const cv::Size& image_size) {
     AdaptiveRedLabModel model;
@@ -27,7 +33,7 @@ std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractBoardColorMasks(const cv::Mat& img)
     return ExtractBoardColorMasks(img, red_model);
 }
 
-AdaptiveRedLabModel EstimateAdaptiveRedLabModel(const cv::Mat& img, int max_sample_count) {
+AdaptiveRedLabModel EstimateAdaptiveRedLabModel(const cv::Mat& img, double reddest_share) {
     if (img.empty()) {
         throw std::runtime_error("图像为空，无法估计红色 LAB");
     }
@@ -43,9 +49,7 @@ AdaptiveRedLabModel EstimateAdaptiveRedLabModel(const cv::Mat& img, int max_samp
         float b = 0.0f;
     };
 
-    // Sample from the ring holding the treble and double beds (the crop is the board box, so the
-    // board is the inscribed ellipse). The centre third only holds the tiny inner bull, which the
-    // heavy measurement blur often washes into the outer bull, leaving no red sample at all.
+    // The crop is the board box, so the board is the inscribed ellipse.
     const double half_width = std::max(1.0, img.cols * 0.5);
     const double half_height = std::max(1.0, img.rows * 0.5);
     std::vector<SamplePixel> candidates;
@@ -54,14 +58,14 @@ AdaptiveRedLabModel EstimateAdaptiveRedLabModel(const cv::Mat& img, int max_samp
         for (int x = 0; x < img.cols; ++x) {
             const double nx = (x + 0.5 - half_width) / half_width;
             const double radius_sq = nx * nx + ny * ny;
-            if (radius_sq < kRedSampleInnerRadius * kRedSampleInnerRadius || radius_sq > 1.0) {
+            if (radius_sq > kRedSampleRadius * kRedSampleRadius) {
                 continue;
             }
             const cv::Vec3b lab_pixel = lab.at<cv::Vec3b>(y, x);
             const float l = static_cast<float>(lab_pixel[0]);
             const float a = static_cast<float>(lab_pixel[1]);
             const float b = static_cast<float>(lab_pixel[2]);
-            if (a <= 128.0f || b <= 128.0f) {
+            if (a <= kRedSampleMinA || b <= 128.0f) {
                 continue;
             }
             candidates.push_back(SamplePixel{
@@ -76,42 +80,46 @@ AdaptiveRedLabModel EstimateAdaptiveRedLabModel(const cv::Mat& img, int max_samp
     if (candidates.empty()) {
         return BuildFallbackAdaptiveRedLabModel(img.size());
     }
+    if (reddest_share > 0.0) {
+        const size_t keep = std::max<size_t>(1, static_cast<size_t>(reddest_share * img.cols * img.rows));
+        if (candidates.size() > keep) {
+            std::nth_element(
+                candidates.begin(),
+                candidates.begin() + keep,
+                candidates.end(),
+                [](const SamplePixel& lhs, const SamplePixel& rhs) { return lhs.a > rhs.a; });
+            candidates.resize(keep);
+        }
+    }
 
-    const int selected_count = std::min<int>(std::max(1, max_sample_count), static_cast<int>(candidates.size()));
-    // Only the reddest few are used, so a partial sort is enough over the much larger ring.
-    std::partial_sort(
-        candidates.begin(),
-        candidates.begin() + selected_count,
-        candidates.end(),
-        [](const SamplePixel& lhs, const SamplePixel& rhs) {
-            if (lhs.a != rhs.a) {
-                return lhs.a > rhs.a;
-            }
-            if (lhs.l != rhs.l) {
-                return lhs.l > rhs.l;
-            }
-            return lhs.b > rhs.b;
-        });
-
-    float sum_l = 0.0f;
-    float sum_a = 0.0f;
-    float sum_b = 0.0f;
+    // The median of every red sample is the beds' typical red; the mean of the 40 reddest was an
+    // extreme of the board's red and left lighter or darker beds out of the window.
+    std::vector<float> ls;
+    std::vector<float> as;
+    std::vector<float> bs;
+    ls.reserve(candidates.size());
+    as.reserve(candidates.size());
+    bs.reserve(candidates.size());
+    for (const SamplePixel& sample : candidates) {
+        ls.push_back(sample.l);
+        as.push_back(sample.a);
+        bs.push_back(sample.b);
+    }
+    const auto median = [](std::vector<float>& values) {
+        std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+        return values[values.size() / 2];
+    };
 
     AdaptiveRedLabModel model;
     model.sample_rect = sample_rect;
-    model.sample_count = selected_count;
-    model.sample_points.reserve(static_cast<size_t>(selected_count));
-    for (int i = 0; i < selected_count; ++i) {
-        const SamplePixel& sample = candidates[i];
-        sum_l += sample.l;
-        sum_a += sample.a;
-        sum_b += sample.b;
-        model.sample_points.push_back(sample.point);
+    model.sample_count = static_cast<int>(candidates.size());
+    const size_t debug_step = std::max<size_t>(1, candidates.size() / kRedDebugSampleCount);
+    for (size_t i = 0; i < candidates.size(); i += debug_step) {
+        model.sample_points.push_back(candidates[i].point);
     }
-
-    model.l = sum_l / static_cast<float>(selected_count);
-    model.a = sum_a / static_cast<float>(selected_count);
-    model.b = sum_b / static_cast<float>(selected_count);
+    model.l = median(ls);
+    model.a = median(as);
+    model.b = median(bs);
     return model;
 }
 
@@ -123,8 +131,10 @@ std::tuple<cv::Mat, cv::Mat, cv::Mat> ExtractBoardColorMasks(const cv::Mat& img,
     cv::Mat blue_mask = cv::Mat::zeros(img.size(), CV_8U);
     cv::Mat green_mask = cv::Mat::zeros(img.size(), CV_8U);
 
-    const float min_l = std::max(0.0f, red_model.l - 25.0f);
-    const float max_l = std::min(255.0f, red_model.l + 25.0f);
+    // Wide in L: light from one side leaves the beds near it far brighter than the far ones
+    // (L 42 to 132 on one board); a and b keep out what is not red.
+    const float min_l = std::max(0.0f, red_model.l - 60.0f);
+    const float max_l = std::min(255.0f, red_model.l + 60.0f);
     const float min_a = std::max(0.0f, red_model.a - 15.0f);
     const float max_a = std::min(255.0f, red_model.a + 15.0f);
     const float min_b = std::max(0.0f, red_model.b - 15.0f);

@@ -19,7 +19,11 @@ namespace bulltrack {
 namespace {
 
 constexpr double kAndroidRedRegionMinLongShortRatio = 2.3;
+// Without a treble frame the doubles are looked for between these shares of the box's ellipse.
 constexpr double kInnerRemoveRadiusScale = 0.85;
+// Red beyond this share of the box's ellipse is off the board (a red surround or wall in the box
+// corners) and is not looked at.
+constexpr double kRedSearchRadiusScale = 1.05;
 // A piece shorter than this share of the median bed is noise; halves of a cut bed stay.
 constexpr double kFragmentLongEdgeScale = 0.35;
 constexpr int kExpectedDoubleRegionCount = 10;
@@ -32,6 +36,26 @@ constexpr double kEllipseInlierTolerance = 0.2;
 // Largest allowed gap between a bed and its seat after the fit, in board radii (0.04 is about
 // 7 mm). First value; the real residual is logged and shown in the debug preview.
 constexpr double kMaxSeatResidual = 0.04;
+// The treble beds are found first, with a reference from only the reddest pixels: half the share
+// of the box the treble beds and bull take (about 2.35%), so cream under warm light stays out.
+constexpr double kTrebleReferenceShare = 0.0117;
+// The treble ring lies within this band of the box's ellipse up to about 46 degrees of tilt; no
+// double comes inside it and the bull stays out.
+constexpr double kTrebleSearchMinRadius = 0.3;
+constexpr double kTrebleSearchMaxRadius = 0.76;
+constexpr double kMaxTrebleSeatResidual = 0.06;
+// In the treble fit's frame the treble ring's outer edge is radius 1, so steel doubles span
+// 0.953-1.0 / 0.629 = 1.515-1.590. Red is cut out to the wide outer limit, so beds stay whole even
+// where a soft board's or a lens's proportions differ, and a piece counts only when its centre is
+// within the narrow range; red printing just off the board centres further out.
+constexpr double kDoubleBandMinRadius = 1.35;
+constexpr double kDoubleBandMaxRadius = 1.85;
+constexpr double kDoubleCentreMinRadius = 1.4;
+constexpr double kDoubleCentreMaxRadius = 1.7;
+// The double reference is sampled this close to the double ring's middle.
+constexpr double kDoubleRingMiddle = 1.552;
+constexpr double kDoubleRingSampleHalfWidth = 0.02;
+constexpr int kMinDoubleRingSamples = 100;
 
 cv::Mat PrepareBoardMeasurementBaseImage(const cv::Mat& image_bgr) {
     if (image_bgr.empty()) {
@@ -394,6 +418,262 @@ std::optional<DoubleSeatFit> FitDoubleSeats(
     std::optional<DoubleSeatFit> precise_fit = FitSeatsFromAngles(pool, angles, usable, board_center, 0.0);
     return precise_fit.has_value() ? precise_fit : rough_fit;
 }
+
+// A vector in the frame where `ellipse` is the unit circle.
+cv::Point2d ToEllipseFrame(const cv::RotatedRect& ellipse, const cv::Point2d& vector) {
+    const double theta = ellipse.angle * CV_PI / 180.0;
+    return cv::Point2d(
+        (vector.x * std::cos(theta) + vector.y * std::sin(theta)) / std::max(1e-6, ellipse.size.width * 0.5),
+        (-vector.x * std::sin(theta) + vector.y * std::cos(theta)) / std::max(1e-6, ellipse.size.height * 0.5));
+}
+
+// A bed's long edge against the line to the centre, both taken where the board's own ellipse is a
+// circle, so the beds of a board tilted any way are checked against its outline.
+bool IsComponentAlongEllipse(
+    const cv::RotatedRect& rect,
+    const cv::RotatedRect& ellipse,
+    double min_angle_deg,
+    double max_angle_deg) {
+    const cv::Point2d radial = ToEllipseFrame(
+        ellipse,
+        cv::Point2d(rect.center.x - ellipse.center.x, rect.center.y - ellipse.center.y));
+    std::array<cv::Point2f, 4> box_points{};
+    rect.points(box_points.data());
+    cv::Point2d longest_edge(0.0, 0.0);
+    for (int i = 0; i < 4; ++i) {
+        const cv::Point2d edge(box_points[(i + 1) % 4].x - box_points[i].x, box_points[(i + 1) % 4].y - box_points[i].y);
+        if (std::hypot(edge.x, edge.y) > std::hypot(longest_edge.x, longest_edge.y)) {
+            longest_edge = edge;
+        }
+    }
+    const cv::Point2d along = ToEllipseFrame(ellipse, longest_edge);
+    const double radial_norm = std::hypot(radial.x, radial.y);
+    const double along_norm = std::hypot(along.x, along.y);
+    if (radial_norm <= 1e-9 || along_norm <= 1e-9) {
+        return false;
+    }
+    const double cosine = std::clamp((radial.x * along.x + radial.y * along.y) / (radial_norm * along_norm), -1.0, 1.0);
+    const double angle_deg = std::acos(cosine) * 180.0 / CV_PI;
+    return angle_deg >= min_angle_deg && angle_deg <= max_angle_deg;
+}
+
+// Ellipse through the red of the treble ring: every red pixel within the treble search band of the
+// box's ellipse, refitted once without those far from the first fit. Empty when the red does not
+// go round the board or the ellipse is not a plausible treble ring.
+std::optional<cv::RotatedRect> FitTrebleEllipse(const cv::Mat& red_mask) {
+    const double half_width = red_mask.cols * 0.5;
+    const double half_height = red_mask.rows * 0.5;
+    constexpr int kSectors = 20;
+    std::array<int, kSectors> sector_counts{};
+    std::vector<cv::Point> points;
+    for (int y = 0; y < red_mask.rows; y += 2) {
+        for (int x = 0; x < red_mask.cols; x += 2) {
+            if (red_mask.at<uchar>(y, x) == 0) {
+                continue;
+            }
+            const double nx = (x + 0.5 - half_width) / half_width;
+            const double ny = (y + 0.5 - half_height) / half_height;
+            const double radius = std::hypot(nx, ny);
+            if (radius < kTrebleSearchMinRadius || radius > kTrebleSearchMaxRadius) {
+                continue;
+            }
+            points.emplace_back(x, y);
+            const double angle = std::atan2(nx, -ny) + CV_PI;
+            ++sector_counts[std::min(kSectors - 1, static_cast<int>(angle / (2.0 * CV_PI) * kSectors))];
+        }
+    }
+    const int filled_sectors = static_cast<int>(std::count_if(
+        sector_counts.begin(), sector_counts.end(), [](int count) { return count > 5; }));
+    if (points.size() < 50 || filled_sectors < 6) {
+        return std::nullopt;
+    }
+    cv::RotatedRect ellipse = cv::fitEllipse(points);
+    std::vector<cv::Point> inliers;
+    for (const cv::Point& point : points) {
+        const cv::Point2d normalized = ToEllipseFrame(ellipse, cv::Point2d(point.x - ellipse.center.x, point.y - ellipse.center.y));
+        const double radius = std::hypot(normalized.x, normalized.y);
+        if (radius > 0.8 && radius < 1.2) {
+            inliers.push_back(point);
+        }
+    }
+    if (inliers.size() >= 50 && inliers.size() < points.size()) {
+        ellipse = cv::fitEllipse(inliers);
+    }
+    const double major = std::max(ellipse.size.width, ellipse.size.height);
+    const double minor = std::min(ellipse.size.width, ellipse.size.height);
+    const double box_size = std::max(red_mask.cols, red_mask.rows);
+    if (minor / major < 0.4 || major / box_size < 0.4 || major / box_size > 0.9) {
+        return std::nullopt;
+    }
+    return ellipse;
+}
+
+struct TrebleFrame {
+    cv::RotatedRect ellipse;
+    // Image to the frame where the treble ring's outer edge is the unit circle.
+    cv::Matx33d homography;
+    cv::Point2f board_center;
+    int seat_count = 0;
+    double max_residual = 0.0;
+};
+
+// The treble beds fitted to their 10 seats, the same fit as the doubles' (red trebles sit in the
+// red doubles' segments). Perspective comes with the homography, so the double ring can be found
+// from it; an ellipse scaled from the treble ring misses the near side of a board shot from close.
+std::optional<TrebleFrame> FitTrebleFrame(const cv::Mat& measurement_base_bgr, const CircleDetectionConfig& circle_config) {
+    const AdaptiveRedLabModel reddest_model = EstimateAdaptiveRedLabModel(measurement_base_bgr, kTrebleReferenceShare);
+    const cv::Mat reddest_mask = ExtractRedOnlyMask(measurement_base_bgr, reddest_model);
+    const std::optional<cv::RotatedRect> ellipse = FitTrebleEllipse(reddest_mask);
+    if (!ellipse.has_value()) {
+        return std::nullopt;
+    }
+    cv::Mat ring_red = cv::Mat::zeros(reddest_mask.size(), CV_8U);
+    cv::ellipse(ring_red, cv::RotatedRect(ellipse->center, ellipse->size * 1.2f, ellipse->angle), cv::Scalar(255), -1);
+    cv::ellipse(ring_red, cv::RotatedRect(ellipse->center, ellipse->size * 0.8f, ellipse->angle), cv::Scalar(0), -1);
+    cv::bitwise_and(ring_red, reddest_mask, ring_red);
+    std::vector<ComponentCandidate> beds;
+    for (const auto& component : ExtractComponentCandidates(ring_red, circle_config.red_region_min_area, ellipse->center)) {
+        if (HasMinRotatedRectLongShortRatio(component.rect, kAndroidRedRegionMinLongShortRatio) &&
+            IsComponentAlongEllipse(
+                component.rect,
+                ellipse.value(),
+                circle_config.red_region_perpendicular_min_angle_deg,
+                circle_config.red_region_perpendicular_max_angle_deg)) {
+            beds.push_back(component);
+        }
+    }
+    const std::optional<DoubleSeatFit> fit = FitDoubleSeats(beds, ellipse->center);
+    if (!fit.has_value() || fit->max_residual > kMaxTrebleSeatResidual) {
+        return std::nullopt;
+    }
+    TrebleFrame frame;
+    frame.ellipse = ellipse.value();
+    frame.homography = cv::Matx33d(fit->homography);
+    std::vector<cv::Point2f> center;
+    cv::perspectiveTransform(std::vector<cv::Point2f>{cv::Point2f(0.0f, 0.0f)}, center, fit->homography.inv());
+    frame.board_center = center.front();
+    frame.seat_count = static_cast<int>(fit->src_points.size());
+    frame.max_residual = fit->max_residual;
+    return frame;
+}
+
+// The red that may be double beds, found from the treble frame: cut out to the double band, kept
+// per piece by its centre. Two references are tried, the usual one and one sampled on the double
+// ring itself, and the one leaving more bed-like pieces wins (the usual one on a tie). The usual
+// one holds a board's lighter and darker beds alike but turns orange when warm light makes cream
+// look red; the double ring's own red cannot catch cream, which does not lie on that ring, but
+// follows the brighter beds and can lose the darkest ones.
+cv::Mat SelectDoubleRedFromTrebleFrame(
+    const cv::Mat& measurement_base_bgr,
+    const TrebleFrame& frame,
+    const CircleDetectionConfig& circle_config,
+    AdaptiveRedLabModel& red_lab_model,
+    cv::Mat& red_only_mask) {
+    cv::Mat lab;
+    cv::cvtColor(measurement_base_bgr, lab, cv::COLOR_BGR2Lab);
+    cv::Mat frame_radius(lab.size(), CV_32F);
+    cv::Mat band = cv::Mat::zeros(lab.size(), CV_8U);
+    std::vector<float> ls;
+    std::vector<float> as;
+    std::vector<float> bs;
+    std::vector<cv::Point> ring_points;
+    const cv::Matx33d& h = frame.homography;
+    for (int y = 0; y < lab.rows; ++y) {
+        for (int x = 0; x < lab.cols; ++x) {
+            const double w = h(2, 0) * x + h(2, 1) * y + h(2, 2);
+            const double u = (h(0, 0) * x + h(0, 1) * y + h(0, 2)) / w;
+            const double v = (h(1, 0) * x + h(1, 1) * y + h(1, 2)) / w;
+            const double radius = std::hypot(u, v);
+            frame_radius.at<float>(y, x) = static_cast<float>(radius);
+            if (radius >= kDoubleBandMinRadius && radius <= kDoubleBandMaxRadius) {
+                band.at<uchar>(y, x) = 255;
+            }
+            if (std::abs(radius - kDoubleRingMiddle) > kDoubleRingSampleHalfWidth) {
+                continue;
+            }
+            // Only red and green (or blue) beds lie on the ring; this keeps the red.
+            const cv::Vec3b pixel = lab.at<cv::Vec3b>(y, x);
+            if (pixel[1] <= 140 || pixel[2] <= 128) {
+                continue;
+            }
+            ls.push_back(pixel[0]);
+            as.push_back(pixel[1]);
+            bs.push_back(pixel[2]);
+            ring_points.emplace_back(x, y);
+        }
+    }
+
+    const auto select = [&](const cv::Mat& mask) {
+        cv::Mat selected;
+        cv::bitwise_and(mask, band, selected);
+        cv::Mat labels;
+        cv::Mat stats;
+        cv::Mat centroids;
+        const int count = cv::connectedComponentsWithStats(selected, labels, stats, centroids, 8, CV_32S);
+        std::vector<uchar> keep(count, 0);
+        for (int i = 1; i < count; ++i) {
+            const int cx = std::clamp(static_cast<int>(std::lround(centroids.at<double>(i, 0))), 0, lab.cols - 1);
+            const int cy = std::clamp(static_cast<int>(std::lround(centroids.at<double>(i, 1))), 0, lab.rows - 1);
+            const float radius = frame_radius.at<float>(cy, cx);
+            keep[i] = radius >= kDoubleCentreMinRadius && radius <= kDoubleCentreMaxRadius;
+        }
+        for (int y = 0; y < labels.rows; ++y) {
+            for (int x = 0; x < labels.cols; ++x) {
+                if (keep[labels.at<int>(y, x)] == 0) {
+                    selected.at<uchar>(y, x) = 0;
+                }
+            }
+        }
+        return selected;
+    };
+    const auto bed_count = [&](const cv::Mat& selected) {
+        int beds = 0;
+        for (const auto& component : ExtractComponentCandidates(selected, circle_config.red_region_min_area, frame.board_center)) {
+            beds += HasMinRotatedRectLongShortRatio(component.rect, kAndroidRedRegionMinLongShortRatio) &&
+                    IsComponentAlongEllipse(
+                        component.rect,
+                        frame.ellipse,
+                        circle_config.red_region_perpendicular_min_angle_deg,
+                        circle_config.red_region_perpendicular_max_angle_deg);
+        }
+        return beds;
+    };
+
+    cv::Mat selected = select(red_only_mask);
+    if (static_cast<int>(ls.size()) < kMinDoubleRingSamples) {
+        return selected;
+    }
+    const auto median = [](std::vector<float>& values) {
+        std::nth_element(values.begin(), values.begin() + values.size() / 2, values.end());
+        return values[values.size() / 2];
+    };
+    AdaptiveRedLabModel ring_model;
+    ring_model.l = median(ls);
+    ring_model.a = median(as);
+    ring_model.b = median(bs);
+    ring_model.sample_count = static_cast<int>(ring_points.size());
+    ring_model.sample_rect = red_lab_model.sample_rect;
+    const size_t debug_step = std::max<size_t>(1, ring_points.size() / 40);
+    for (size_t i = 0; i < ring_points.size(); i += debug_step) {
+        ring_model.sample_points.push_back(ring_points[i]);
+    }
+    const cv::Mat ring_mask = ExtractRedOnlyMask(measurement_base_bgr, ring_model);
+    cv::Mat ring_selected = select(ring_mask);
+    const int usual_beds = bed_count(selected);
+    const int ring_beds = bed_count(ring_selected);
+    __android_log_print(
+        ANDROID_LOG_INFO,
+        "BullTrackNativeV2",
+        "double red reference: usual L%.0f a%.0f b%.0f %d beds, double ring L%.0f a%.0f b%.0f %d beds",
+        red_lab_model.l, red_lab_model.a, red_lab_model.b, usual_beds,
+        ring_model.l, ring_model.a, ring_model.b, ring_beds);
+    if (ring_beds > usual_beds) {
+        red_lab_model = ring_model;
+        red_only_mask = ring_mask;
+        return ring_selected;
+    }
+    return selected;
+}
 #if BT_ENABLE_DEBUG_IMAGES
 cv::Mat DrawRotatedBoxesDebugImage(
     const cv::Mat& base_binary_img,
@@ -712,25 +992,56 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     cv::Mat measurement_base_bgr = PrepareBoardMeasurementBaseImage(img_before);
     AdaptiveRedLabModel red_lab_model = EstimateAdaptiveRedLabModel(measurement_base_bgr);
     cv::Mat red_only_mask = ExtractRedOnlyMask(measurement_base_bgr, red_lab_model);
-    cv::Mat red_binary_pre = red_only_mask.clone();
-    // Seen at an angle the board is an ellipse filling the box, so remove an ellipse scaled from
-    // the box; a circle from the box width cut into the top and bottom doubles when shot from
-    // above or below.
-    const cv::Size inner_remove_axes(
-        std::max(1, static_cast<int>(std::lround(img_before.cols * 0.5 * kInnerRemoveRadiusScale))),
-        std::max(1, static_cast<int>(std::lround(img_before.rows * 0.5 * kInnerRemoveRadiusScale))));
-    cv::ellipse(
-        red_binary_pre,
-        cv::Point(static_cast<int>(std::lround(rough_center.x)), static_cast<int>(std::lround(rough_center.y))),
-        inner_remove_axes,
-        0.0,
-        0.0,
-        360.0,
-        cv::Scalar(0),
-        -1);
+    cv::Mat red_binary_pre;
+    // Where the double beds are looked for: from the treble beds' fit when it holds, otherwise
+    // between two ellipses scaled from the box.
+    const std::optional<TrebleFrame> treble_frame = FitTrebleFrame(measurement_base_bgr, circle_config);
+    cv::Point2f bed_center = rough_center;
+    if (treble_frame.has_value()) {
+        red_binary_pre = SelectDoubleRedFromTrebleFrame(
+            measurement_base_bgr, treble_frame.value(), circle_config, red_lab_model, red_only_mask);
+        bed_center = treble_frame->board_center;
+        __android_log_print(
+            ANDROID_LOG_INFO,
+            "BullTrackNativeV2",
+            "treble frame: seats=%d residual=%.4f",
+            treble_frame->seat_count,
+            treble_frame->max_residual);
+    } else {
+        __android_log_print(ANDROID_LOG_INFO, "BullTrackNativeV2", "treble frame: none, box ellipses");
+        red_binary_pre = red_only_mask.clone();
+        // Seen at an angle the board is an ellipse filling the box, so remove an ellipse scaled from
+        // the box; a circle from the box width cut into the top and bottom doubles when shot from
+        // above or below.
+        const cv::Size inner_remove_axes(
+            std::max(1, static_cast<int>(std::lround(img_before.cols * 0.5 * kInnerRemoveRadiusScale))),
+            std::max(1, static_cast<int>(std::lround(img_before.rows * 0.5 * kInnerRemoveRadiusScale))));
+        cv::ellipse(
+            red_binary_pre,
+            cv::Point(static_cast<int>(std::lround(rough_center.x)), static_cast<int>(std::lround(rough_center.y))),
+            inner_remove_axes,
+            0.0,
+            0.0,
+            360.0,
+            cv::Scalar(0),
+            -1);
+        cv::Mat board_area = cv::Mat::zeros(red_binary_pre.size(), CV_8U);
+        cv::ellipse(
+            board_area,
+            cv::Point(img_before.cols / 2, img_before.rows / 2),
+            cv::Size(
+                static_cast<int>(img_before.cols * 0.5 * kRedSearchRadiusScale),
+                static_cast<int>(img_before.rows * 0.5 * kRedSearchRadiusScale)),
+            0.0,
+            0.0,
+            360.0,
+            cv::Scalar(255),
+            -1);
+        cv::bitwise_and(red_binary_pre, board_area, red_binary_pre);
+    }
     cv::Mat inner_removed_binary = red_binary_pre.clone();
     cv::Mat red_only_blurred = red_binary_pre.clone();
-    auto components = ExtractComponentCandidates(red_binary_pre, circle_config.red_region_min_area, rough_center);
+    auto components = ExtractComponentCandidates(red_binary_pre, circle_config.red_region_min_area, bed_center);
     if (components.empty()) {
         return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, cv::Mat(), cv::Mat(), cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "无可用红色区域"};
     }
@@ -748,12 +1059,19 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
     std::vector<ComponentCandidate> perpendicular_components;
     const cv::Size2d board_half_axes(img_before.cols * 0.5, img_before.rows * 0.5);
     for (const auto& component : elongated_components) {
-        if (IsComponentPerpendicularToCenterVector(
-                component.rect,
-                rough_center,
-                board_half_axes,
-                circle_config.red_region_perpendicular_min_angle_deg,
-                circle_config.red_region_perpendicular_max_angle_deg)) {
+        const bool along_ring = treble_frame.has_value()
+            ? IsComponentAlongEllipse(
+                  component.rect,
+                  treble_frame->ellipse,
+                  circle_config.red_region_perpendicular_min_angle_deg,
+                  circle_config.red_region_perpendicular_max_angle_deg)
+            : IsComponentPerpendicularToCenterVector(
+                  component.rect,
+                  rough_center,
+                  board_half_axes,
+                  circle_config.red_region_perpendicular_min_angle_deg,
+                  circle_config.red_region_perpendicular_max_angle_deg);
+        if (along_ring) {
             perpendicular_components.push_back(component);
         }
     }
@@ -792,7 +1110,7 @@ RedRadiusCorrectionResult EstimateCorrectedRadiusFromRedRegions(
         }
     }
 
-    std::optional<DoubleSeatFit> seat_fit = FitDoubleSeats(pool, rough_center);
+    std::optional<DoubleSeatFit> seat_fit = FitDoubleSeats(pool, bed_center);
     if (!seat_fit.has_value()) {
         return {std::nullopt, red_lab_model, red_only_mask, red_only_blurred, {}, inner_removed_binary, perpendicular_rotated_boxes_debug, perpendicular_components_binary, cv::Mat(), cv::Mat(), {}, {}, cv::Mat(), "分座位后双倍区不足8个"};
     }
