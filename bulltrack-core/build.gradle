@@ -12,7 +12,7 @@ def configuredMinSdk = (rootProject.ext.has("minSdkVersion") ? rootProject.ext.g
 def configuredNdkVersion = (rootProject.ext.has("ndkVersion") ? rootProject.ext.get("ndkVersion")?.toString() : null) ?: "27.1.12297006"
 
 android {
-    namespace = "com.zheng.bulltrack.shared"
+    namespace = "io.github.thomasff.bulltrack.core"
     compileSdk = configuredCompileSdk
     ndkVersion = configuredNdkVersion
 

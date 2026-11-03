@@ -92,9 +92,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.zheng.bulltrackmobile"
+    namespace "io.github.thomasff.bulltrack"
     defaultConfig {
-        applicationId "com.zheng.bulltrackmobile"
+        applicationId "io.github.thomasff.bulltrack"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

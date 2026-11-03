@@ -77,7 +77,7 @@ void ThrowJavaRuntimeException(JNIEnv* env, const std::string& message) {
 }
 
 jobject CreateNativeDebugImageResult(JNIEnv* env, const bulltrack::DebugImageArtifact& artifact) {
-    jclass result_class = env->FindClass("com/zheng/bulltrack/vision/NativeDebugImageResult");
+    jclass result_class = env->FindClass("io/github/thomasff/bulltrack/core/vision/NativeDebugImageResult");
     jmethodID constructor = env->GetMethodID(result_class, "<init>", "(Ljava/lang/String;[B)V");
     jstring file_name = env->NewStringUTF(artifact.file_name.c_str());
     jbyteArray jpeg_bytes = env->NewByteArray(static_cast<jsize>(artifact.jpeg_bytes.size()));
@@ -95,7 +95,7 @@ jobject CreateNativeDebugImageResult(JNIEnv* env, const bulltrack::DebugImageArt
 }
 
 jobjectArray CreateNativeDebugImageArray(JNIEnv* env, const std::vector<bulltrack::DebugImageArtifact>& artifacts) {
-    jclass result_class = env->FindClass("com/zheng/bulltrack/vision/NativeDebugImageResult");
+    jclass result_class = env->FindClass("io/github/thomasff/bulltrack/core/vision/NativeDebugImageResult");
     jobjectArray array = env->NewObjectArray(static_cast<jsize>(artifacts.size()), result_class, nullptr);
     for (size_t i = 0; i < artifacts.size(); ++i) {
         jobject obj = CreateNativeDebugImageResult(env, artifacts[i]);
@@ -106,11 +106,11 @@ jobjectArray CreateNativeDebugImageArray(JNIEnv* env, const std::vector<bulltrac
 }
 
 jobject CreateNativeStartRoundResult(JNIEnv* env, const bulltrack::AndroidStartRoundResult& result) {
-    jclass result_class = env->FindClass("com/zheng/bulltrack/vision/NativeStartRoundResult");
+    jclass result_class = env->FindClass("io/github/thomasff/bulltrack/core/vision/NativeStartRoundResult");
     jmethodID constructor = env->GetMethodID(
         result_class,
         "<init>",
-        "([Lcom/zheng/bulltrack/vision/NativeDebugImageResult;Ljava/lang/String;IFFZI)V");
+        "([Lio/github/thomasff/bulltrack/core/vision/NativeDebugImageResult;Ljava/lang/String;IFFZI)V");
     jobjectArray debug_images = CreateNativeDebugImageArray(env, result.debug_images);
     jstring error_message = result.error_message.empty() ? nullptr : env->NewStringUTF(result.error_message.c_str());
     jobject obj = env->NewObject(
@@ -131,14 +131,14 @@ jobject CreateNativeStartRoundResult(JNIEnv* env, const bulltrack::AndroidStartR
 }
 
 jobject CreateNativeFrameProcessResult(JNIEnv* env, const bulltrack::AndroidFrameProcessResult& result) {
-    jclass result_class = env->FindClass("com/zheng/bulltrack/vision/NativeFrameProcessResult");
+    jclass result_class = env->FindClass("io/github/thomasff/bulltrack/core/vision/NativeFrameProcessResult");
     jmethodID constructor = env->GetMethodID(
         result_class,
         "<init>",
-        "(ZLjava/lang/String;[Lcom/zheng/bulltrack/vision/NativePointResult;[Z[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;)V");
+        "(ZLjava/lang/String;[Lio/github/thomasff/bulltrack/core/vision/NativePointResult;[Z[Lio/github/thomasff/bulltrack/core/vision/NativeDebugImageResult;[Lio/github/thomasff/bulltrack/core/vision/NativeDebugImageResult;)V");
     jstring reason = env->NewStringUTF(result.gate_reason.c_str());
     // One element per confirmed dart; null when the dart has no tip point.
-    jclass point_class = env->FindClass("com/zheng/bulltrack/vision/NativePointResult");
+    jclass point_class = env->FindClass("io/github/thomasff/bulltrack/core/vision/NativePointResult");
     jmethodID point_constructor = env->GetMethodID(point_class, "<init>", "(FF)V");
     jobjectArray detected_points = env->NewObjectArray(static_cast<jsize>(result.detected_points.size()), point_class, nullptr);
     for (size_t i = 0; i < result.detected_points.size(); ++i) {
@@ -179,7 +179,7 @@ jobject CreateNativeFrameProcessResult(JNIEnv* env, const bulltrack::AndroidFram
 }
 
 jobjectArray CreateNativePointArray(JNIEnv* env, const std::vector<cv::Point2f>& points) {
-    jclass point_class = env->FindClass("com/zheng/bulltrack/vision/NativePointResult");
+    jclass point_class = env->FindClass("io/github/thomasff/bulltrack/core/vision/NativePointResult");
     jmethodID constructor = env->GetMethodID(point_class, "<init>", "(FF)V");
     jobjectArray array = env->NewObjectArray(static_cast<jsize>(points.size()), point_class, nullptr);
     for (size_t i = 0; i < points.size(); ++i) {
@@ -195,11 +195,11 @@ jobjectArray CreateNativePointArray(JNIEnv* env, const std::vector<cv::Point2f>&
 }
 
 jobject CreateNativeRedetectResult(JNIEnv* env, const bulltrack::AndroidRedetectResult& result) {
-    jclass result_class = env->FindClass("com/zheng/bulltrack/vision/NativeRedetectResult");
+    jclass result_class = env->FindClass("io/github/thomasff/bulltrack/core/vision/NativeRedetectResult");
     jmethodID constructor = env->GetMethodID(
         result_class,
         "<init>",
-        "([Lcom/zheng/bulltrack/vision/NativePointResult;[Lcom/zheng/bulltrack/vision/NativeDebugImageResult;Ljava/lang/String;)V");
+        "([Lio/github/thomasff/bulltrack/core/vision/NativePointResult;[Lio/github/thomasff/bulltrack/core/vision/NativeDebugImageResult;Ljava/lang/String;)V");
     jobjectArray points = CreateNativePointArray(env, result.points);
     jobjectArray debug_images = CreateNativeDebugImageArray(env, result.debug_images);
     jstring yolo_status = env->NewStringUTF(result.yolo_status.c_str());
@@ -215,7 +215,7 @@ jobject CreateNativeRedetectResult(JNIEnv* env, const bulltrack::AndroidRedetect
 extern "C" {
 
 JNIEXPORT void JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeInit(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeInit(
     JNIEnv* env,
     jobject thiz,
     jobject asset_manager) {
@@ -226,7 +226,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeInit(
 }
 
 JNIEXPORT void JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRelease(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeRelease(
     JNIEnv* env,
     jobject thiz) {
     (void)env;
@@ -235,7 +235,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRelease(
 }
 
 JNIEXPORT void JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeWarmUp(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeWarmUp(
     JNIEnv* env,
     jobject thiz) {
     (void)env;
@@ -249,7 +249,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeWarmUp(
 }
 
 JNIEXPORT void JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeSetDebugImagesEnabled(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeSetDebugImagesEnabled(
     JNIEnv* env,
     jobject thiz,
     jboolean enabled) {
@@ -259,7 +259,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeSetDebugImagesEnabled(
 }
 
 JNIEXPORT void JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeSetYoloForceCpu(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeSetYoloForceCpu(
     JNIEnv* env,
     jobject thiz,
     jboolean force_cpu) {
@@ -269,7 +269,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeSetYoloForceCpu(
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeCreateSession(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeCreateSession(
     JNIEnv* env,
     jobject thiz) {
     (void)env;
@@ -279,7 +279,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeCreateSession(
 }
 
 JNIEXPORT void JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeDestroySession(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeDestroySession(
     JNIEnv* env,
     jobject thiz,
     jlong session_id) {
@@ -290,7 +290,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeDestroySession(
 }
 
 JNIEXPORT jobject JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeStartRound(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeStartRound(
     JNIEnv* env,
     jobject thiz,
     jlong session_id,
@@ -315,7 +315,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeStartRound(
 }
 
 JNIEXPORT jobject JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeProcessFrame(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeProcessFrame(
     JNIEnv* env,
     jobject thiz,
     jlong session_id,
@@ -339,7 +339,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeProcessFrame(
 }
 
 JNIEXPORT jobject JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRedetectRound(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeRedetectRound(
     JNIEnv* env,
     jobject thiz,
     jlong session_id,
@@ -363,7 +363,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRedetectRound(
 }
 
 JNIEXPORT jobject JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeFindMissedDarts(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeFindMissedDarts(
     JNIEnv* env,
     jobject thiz,
     jlong session_id) {
@@ -383,7 +383,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeFindMissedDarts(
 }
 
 JNIEXPORT jstring JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeDescribeFrameStageTimes(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeDescribeFrameStageTimes(
     JNIEnv* env,
     jobject thiz,
     jlong session_id) {
@@ -398,7 +398,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeDescribeFrameStageTimes
 // Copies the round's photo material out of the session, so it outlives it; release it with
 // nativeReleasePhotoSource.
 JNIEXPORT jlong JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeTakePhotoSource(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeTakePhotoSource(
     JNIEnv* env,
     jobject thiz,
     jlong session_id) {
@@ -418,7 +418,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeTakePhotoSource(
 }
 
 JNIEXPORT void JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeReleasePhotoSource(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeReleasePhotoSource(
     JNIEnv* env,
     jobject thiz,
     jlong source_id) {
@@ -429,7 +429,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeReleasePhotoSource(
 
 // Returns two JPEGs: the round board photo and the close-up (empty when there is none).
 JNIEXPORT jobjectArray JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRenderPhotos(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeRenderPhotos(
     JNIEnv* env,
     jobject thiz,
     jlong source_id) {
@@ -466,7 +466,7 @@ Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeRenderPhotos(
 // Returns frame width and height, band top and height, then 1 and the board box (x, y, width,
 // height) when a board was found, or 0 and four zeros.
 JNIEXPORT jintArray JNICALL
-Java_com_zheng_bulltrack_vision_NativeDartDetector_nativeDetectPrepBoard(
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeDetectPrepBoard(
     JNIEnv* env,
     jobject thiz,
     jobject frame,

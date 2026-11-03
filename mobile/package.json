@@ -1,5 +1,5 @@
 {
-  "name": "com.zheng.bulltrackmobile",
+  "name": "bulltrack",
   "version": "0.1.0",
   "private": true,
   "codegenConfig": {
@@ -7,7 +7,7 @@
     "type": "all",
     "jsSrcsDir": "src/native-bridge",
     "android": {
-      "javaPackageName": "com.zheng.bulltrackmobile.specs"
+      "javaPackageName": "io.github.thomasff.bulltrack.specs"
     }
   },
   "scripts": {
