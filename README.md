@@ -103,7 +103,7 @@ Requirements: Node.js ≥ 22.11, JDK ≥ 17, Android SDK 36, NDK 27.1.12297006, 
 git clone https://github.com/Thomasff/BullTrack.git
 cd BullTrack
 node scripts/fetch-native-deps.js    # OpenCV 4.12.0 and ncnn 20260113 prebuilt packages (~340 MB, SHA-256 checked)
-# Download model.ncnn.param / model.ncnn.bin for the matching version from Releases into bulltrack-core/src/main/assets/ncnn/
+# Download model.ncnn.param / model.ncnn.bin from the model-v1 release (https://github.com/Thomasff/BullTrack/releases/tag/model-v1) into bulltrack-core/src/main/assets/ncnn/
 cd mobile && npm install
 cd android && ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a
 ```

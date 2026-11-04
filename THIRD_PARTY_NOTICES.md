@@ -10,7 +10,7 @@ It builds on the third-party components listed below, each under its own license
 | --- | --- | --- |
 | Ultralytics YOLO11s | AGPL-3.0 | https://github.com/ultralytics/ultralytics |
 
-The model published in Releases (`model.ncnn.param` / `model.ncnn.bin`) was fine-tuned from the YOLO11s pretrained weights with Ultralytics and converted to the ncnn format. It is distributed under AGPL-3.0.
+The model published in the `model-v1` release (`model.ncnn.param` / `model.ncnn.bin`) was fine-tuned from the YOLO11s pretrained weights with Ultralytics and converted to the ncnn format. It is distributed under AGPL-3.0.
 
 ## Native libraries
 

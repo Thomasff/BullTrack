@@ -103,7 +103,7 @@ scripts/           编译依赖下载脚本
 git clone https://github.com/Thomasff/BullTrack.git
 cd BullTrack
 node scripts/fetch-native-deps.js    # OpenCV 4.12.0、ncnn 20260113 预编译包（约 340 MB，校验 SHA-256）
-# 从 Releases 下载对应版本的 model.ncnn.param / model.ncnn.bin，放到 bulltrack-core/src/main/assets/ncnn/
+# 从 model-v1 Release（https://github.com/Thomasff/BullTrack/releases/tag/model-v1）下载 model.ncnn.param / model.ncnn.bin，放到 bulltrack-core/src/main/assets/ncnn/
 cd mobile && npm install
 cd android && ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a
 ```
