@@ -18,6 +18,8 @@ local.properties
 *.jpg
 *.png
 !mobile/android/app/src/main/res/**/*.png
+!asset/github/*.png
+!asset/github/*.jpg
 cpp_dart_detector_v2/build/
 cpp_dart_detector_v2/images/
 cpp_dart_detector_v2/result/
