@@ -70,6 +70,7 @@ The in-app "Placement guide" (the "?" button on the preview, or in Settings) sho
 - Very transparent or pale shafts and flights, or boards with unusual colours, may not be detected.
 - Darts landing very close together or hidden behind each other are occasionally misread and need correcting.
 - Android only for now.
+- Tested on only a few phones so far. If you run into problems on yours, please [report them](#reporting-issues).
 
 ## How it works
 
