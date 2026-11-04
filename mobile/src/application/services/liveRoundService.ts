@@ -304,7 +304,9 @@ export const prepareLiveCamera = async () => {
     lockPhase: 'IDLE',
     lockReason: null,
   });
-  const { hasBackCamera, maxZoomRatio } = await bullTrackNativeBridge.prepareRoundCamera();
+  const { hasBackCamera, maxZoomRatio } = await bullTrackNativeBridge.prepareRoundCamera(
+    useSettingsStore.getState().yoloOnCpu,
+  );
   useGameStore.setState({ backCamera: { hasBackCamera, maxZoomRatio } });
 };
 

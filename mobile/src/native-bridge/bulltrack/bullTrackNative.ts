@@ -20,8 +20,8 @@ export const bullTrackNativeModule = NativeBullTrackModule;
 
 const nativeBridge: BullTrackNativeBridge | null = bullTrackNativeModule
   ? {
-      prepareRoundCamera: async () =>
-        bullTrackNativeModule.prepareRoundCamera() as Promise<
+      prepareRoundCamera: async (yoloOnCpu: boolean) =>
+        bullTrackNativeModule.prepareRoundCamera(yoloOnCpu) as Promise<
           CameraReadyState & BackCameraInfo
         >,
       startLiveRound: async (input: StartLiveRoundInput) =>

@@ -133,9 +133,9 @@ class BullTrackLiveRoundController(
         }
     }
 
-    suspend fun prepareRoundCamera(): WritableMap {
+    suspend fun prepareRoundCamera(yoloOnCpu: Boolean): WritableMap {
         cameraManager.initialize(appContext)
-        warmUpDetector()
+        warmUpDetector(yoloOnCpu)
         return currentCameraReadyState("camera_handles_preview").apply {
             putBackCameraInfo(this)
         }
@@ -167,7 +167,9 @@ class BullTrackLiveRoundController(
     // Loads the model and builds its GPU programs once per process while the player is still
     // aiming, so the first round does not wait for them. The model then stays loaded until the
     // process ends; a round started before this finishes simply waits for it inside the detector.
-    private fun warmUpDetector() {
+    // With YOLO on the CPU (developer switch) the GPU is never touched, so a GPU whose driver
+    // crashes can be avoided.
+    private fun warmUpDetector(yoloOnCpu: Boolean) {
         if (warmUpStarted || isProbablyEmulator()) {
             return
         }
@@ -176,6 +178,7 @@ class BullTrackLiveRoundController(
             val startNs = SystemClock.elapsedRealtimeNanos()
             runCatching {
                 ensureDetectorInitialized()
+                detector.setYoloForceCpu(yoloOnCpu)
                 detector.warmUp()
             }.onFailure { Log.w(TAG, "Detector warm-up failed", it) }
             Log.i(TAG, "Detector warm-up took ${elapsedMs(startNs)} ms")
@@ -1143,9 +1146,19 @@ class BullTrackLiveRoundController(
         synchronized(detector) {
             if (!detectorInitialized) {
                 detector.init()
+                detector.setGpuCheckGuard(File(appContext.noBackupFilesDir, GPU_CHECK_FILE), gpuCheckKey())
                 detectorInitialized = true
             }
         }
+    }
+
+    // A new install or update of the app, or a system update (which may bring a new GPU driver),
+    // gives the GPU another chance after a crashed check.
+    private fun gpuCheckKey(): String {
+        val updatedAt = runCatching {
+            appContext.packageManager.getPackageInfo(appContext.packageName, 0).lastUpdateTime
+        }.getOrDefault(0L)
+        return "$updatedAt ${Build.FINGERPRINT}"
     }
 
     private fun ensureSupportedRuntime() {
@@ -1282,6 +1295,7 @@ class BullTrackLiveRoundController(
         private const val LIVE_FRAMES_KEPT = 3
         private const val MAX_DARTS = 3
         private const val NATIVE_CALL_TIMEOUT_MS = 12_000L
+        private const val GPU_CHECK_FILE = "gpu_check.txt"
         private const val CAMERA_READY_TIMEOUT_MS = 4_000L
         // Two stills a second (user's choice, for power): a still takes about 0.25 s, so this
         // paces the loop rather than the camera.

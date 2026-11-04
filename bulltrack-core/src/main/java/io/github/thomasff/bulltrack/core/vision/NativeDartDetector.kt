@@ -7,6 +7,7 @@ import android.graphics.Rect
 import io.github.thomasff.bulltrack.core.domain.model.DartPosition
 import io.github.thomasff.bulltrack.core.domain.model.ThrowResult
 import io.github.thomasff.bulltrack.core.domain.scoring.VirtualBoardScorer
+import java.io.File
 
 class NativeDartDetector(
     private val assetManager: AssetManager? = null
@@ -21,6 +22,7 @@ class NativeDartDetector(
     private external fun nativeWarmUp()
     private external fun nativeSetDebugImagesEnabled(enabled: Boolean)
     private external fun nativeSetYoloForceCpu(forceCpu: Boolean)
+    private external fun nativeSetGpuCheckGuard(path: String, key: String)
     private external fun nativeCreateSession(): Long
     private external fun nativeDestroySession(sessionId: Long)
     private external fun nativeStartRound(
@@ -66,6 +68,15 @@ class NativeDartDetector(
     /** Developer setting: run YOLO on the CPU even when the GPU works. */
     fun setYoloForceCpu(forceCpu: Boolean) {
         nativeSetYoloForceCpu(forceCpu)
+    }
+
+    /**
+     * Lets the GPU check survive a driver that crashes or hangs: [file] counts checks that never
+     * finished, and after two in a row for the same [key] (this app install and system build) YOLO
+     * stays on the CPU. Call before the first detection.
+     */
+    fun setGpuCheckGuard(file: File, key: String) {
+        nativeSetGpuCheckGuard(file.absolutePath, key)
     }
 
     override fun createSession(): Long = nativeCreateSession()

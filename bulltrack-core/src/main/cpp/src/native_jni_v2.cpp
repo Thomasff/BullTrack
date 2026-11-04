@@ -268,6 +268,26 @@ Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeSetYoloFo
     bulltrack::SetYoloForceCpu(force_cpu == JNI_TRUE);
 }
 
+JNIEXPORT void JNICALL
+Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeSetGpuCheckGuard(
+    JNIEnv* env,
+    jobject thiz,
+    jstring path,
+    jstring key) {
+    (void)thiz;
+    const char* path_chars = env->GetStringUTFChars(path, nullptr);
+    const char* key_chars = env->GetStringUTFChars(key, nullptr);
+    if (path_chars != nullptr && key_chars != nullptr) {
+        bulltrack::SetGpuCheckGuard(path_chars, key_chars);
+    }
+    if (path_chars != nullptr) {
+        env->ReleaseStringUTFChars(path, path_chars);
+    }
+    if (key_chars != nullptr) {
+        env->ReleaseStringUTFChars(key, key_chars);
+    }
+}
+
 JNIEXPORT jlong JNICALL
 Java_io_github_thomasff_bulltrack_core_vision_NativeDartDetector_nativeCreateSession(
     JNIEnv* env,

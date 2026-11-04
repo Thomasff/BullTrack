@@ -39,6 +39,9 @@ cv::Rect BoardCentredSquare(const cv::Size& image_size, const cv::Rect& board_bo
 void SetNcnnAssetManager(AAssetManager* asset_manager);
 // Runs YOLO on the CPU even when the GPU works (developer setting); the default uses the GPU.
 void SetYoloForceCpu(bool force_cpu);
+// Where the GPU check counts its unfinished runs, and the key of this app install and system
+// build; after two unfinished runs (a driver crash or hang) for the same key YOLO stays on the CPU.
+void SetGpuCheckGuard(const std::string& path, const std::string& key);
 void WarmUpYoloObjects();
 // An empty square means the centred one.
 YoloDetectionResult DetectYoloObjects(const cv::Mat& image_bgr, const cv::Rect& square = cv::Rect());

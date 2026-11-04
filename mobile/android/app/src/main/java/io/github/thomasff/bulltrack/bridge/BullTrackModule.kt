@@ -62,9 +62,9 @@ class BullTrackModule(
         reactContext.addActivityEventListener(pickResultListener)
     }
 
-    override fun prepareRoundCamera(promise: Promise) {
+    override fun prepareRoundCamera(yoloOnCpu: Boolean, promise: Promise) {
         resolveSuspendPromise(promise) {
-            controller.prepareRoundCamera()
+            controller.prepareRoundCamera(yoloOnCpu)
         }
     }
 

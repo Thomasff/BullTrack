@@ -115,7 +115,8 @@ export interface NativeErrorEvent {
 }
 
 export interface BullTrackNativeBridge {
-  prepareRoundCamera(): Promise<CameraReadyState & BackCameraInfo>;
+  // yoloOnCpu: the developer switch, applied before the model loads so the GPU is not touched.
+  prepareRoundCamera(yoloOnCpu: boolean): Promise<CameraReadyState & BackCameraInfo>;
   startLiveRound(input: StartLiveRoundInput): Promise<StartLiveRoundResult>;
   stopLiveRound(): Promise<ActionAcceptedResult>;
   redetectCurrentRound(input: RedetectCurrentRoundInput): Promise<ActionAcceptedResult>;

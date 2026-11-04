@@ -11,12 +11,16 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <fstream>
 #include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include <unistd.h>
 
 namespace bulltrack {
 namespace {
@@ -52,6 +56,45 @@ constexpr float kDartNmsThreshold = 0.7f;
 constexpr int kGpuDeviceIndex = 0;
 // Largest mean |GPU - CPU| over the self-check output that still counts as a working GPU.
 constexpr double kGpuSelfCheckMaxMeanDiff = 2.0;
+// A driver that crashes or hangs while the GPU programs are built kills the app before the
+// self-check can fall back, and would do so on every start. So a file counts the GPU checks that
+// started without finishing, for this app install and system build; at this many in a row, YOLO
+// stays on the CPU. Two, so that one app kill during the check (about 8 s on a Mali-G57) does not
+// cost a working GPU.
+constexpr int kMaxUnfinishedGpuChecks = 2;
+
+// Set from Kotlin before the first detection; an empty path means no guard.
+std::mutex g_gpu_guard_mutex;
+std::string g_gpu_guard_path;
+std::string g_gpu_guard_key;
+
+// The file holds the key on its first line and the unfinished check count on its second; a
+// different key (app updated or reinstalled, system updated) counts as none.
+int ReadUnfinishedGpuChecks(const std::string& path, const std::string& key) {
+    std::ifstream file(path);
+    std::string stored_key;
+    int count = 0;
+    if (!std::getline(file, stored_key) || stored_key != key || !(file >> count)) {
+        return 0;
+    }
+    return std::max(count, 0);
+}
+
+// Written through to the disk before the GPU is touched, so the count survives a crash.
+void WriteUnfinishedGpuChecks(const std::string& path, const std::string& key, int count) {
+    if (count <= 0) {
+        std::remove(path.c_str());
+        return;
+    }
+    FILE* file = std::fopen(path.c_str(), "w");
+    if (file == nullptr) {
+        return;
+    }
+    std::fprintf(file, "%s\n%d\n", key.c_str(), count);
+    std::fflush(file);
+    fsync(fileno(file));
+    std::fclose(file);
+}
 
 AAssetManager* g_asset_manager = nullptr;
 
@@ -344,21 +387,43 @@ private:
             return gpu_available_;
         }
         gpu_checked_ = true;
+        std::string guard_path;
+        std::string guard_key;
+        {
+            std::lock_guard<std::mutex> guard_lock(g_gpu_guard_mutex);
+            guard_path = g_gpu_guard_path;
+            guard_key = g_gpu_guard_key;
+        }
+        const int unfinished = guard_path.empty() ? 0 : ReadUnfinishedGpuChecks(guard_path, guard_key);
+        if (unfinished >= kMaxUnfinishedGpuChecks) {
+            gpu_failure_reason_ = "GPU check did not finish " + std::to_string(unfinished) + " times";
+            __android_log_print(ANDROID_LOG_WARN, "BullTrackYolo", "%s, using CPU", gpu_failure_reason_.c_str());
+            gpu_available_ = false;
+            return false;
+        }
+        if (!guard_path.empty()) {
+            WriteUnfinishedGpuChecks(guard_path, guard_key, unfinished + 1);
+        }
+        gpu_available_ = CheckGpu();
+        if (!guard_path.empty()) {
+            WriteUnfinishedGpuChecks(guard_path, guard_key, 0);
+        }
+        return gpu_available_;
+    }
+
+    bool CheckGpu() {
         const auto start = std::chrono::steady_clock::now();
         const int create_result = ncnn::create_gpu_instance();
         __android_log_print(ANDROID_LOG_INFO, "BullTrackYolo", "GPU instance took %lld ms", ElapsedMs(start));
         if (create_result != 0) {
             gpu_failure_reason_ = "create_gpu_instance failed";
-            gpu_available_ = false;
             return false;
         }
         if (ncnn::get_gpu_count() <= 0) {
             gpu_failure_reason_ = "get_gpu_count == 0";
-            gpu_available_ = false;
             return false;
         }
-        gpu_available_ = GpuMatchesCpu();
-        return gpu_available_;
+        return GpuMatchesCpu();
     }
 
     // Some GPU drivers run the model but return wrong numbers (Mali-G925, 2026-11-04). Before the
@@ -636,6 +701,12 @@ void SetNcnnAssetManager(AAssetManager* asset_manager) {
 
 void SetYoloForceCpu(bool force_cpu) {
     g_force_cpu.store(force_cpu);
+}
+
+void SetGpuCheckGuard(const std::string& path, const std::string& key) {
+    std::lock_guard<std::mutex> lock(g_gpu_guard_mutex);
+    g_gpu_guard_path = path;
+    g_gpu_guard_key = key;
 }
 
 void WarmUpYoloObjects() {

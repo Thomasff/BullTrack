@@ -2,7 +2,7 @@ import type { TurboModule } from 'react-native';
 import { TurboModuleRegistry } from 'react-native';
 
 export interface Spec extends TurboModule {
-  prepareRoundCamera(): Promise<Object>;
+  prepareRoundCamera(yoloOnCpu: boolean): Promise<Object>;
   startLiveRound(request: Object): Promise<Object>;
   stopLiveRound(): Promise<Object>;
   redetectCurrentRound(request: Object): Promise<Object>;
