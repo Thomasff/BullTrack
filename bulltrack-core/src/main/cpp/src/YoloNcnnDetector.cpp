@@ -50,6 +50,8 @@ constexpr float kNmsThreshold = 0.45f;
 // same dart; a low threshold merged neighbours into one box and the second dart was missed.
 constexpr float kDartNmsThreshold = 0.7f;
 constexpr int kGpuDeviceIndex = 0;
+// Largest mean |GPU - CPU| over the self-check output that still counts as a working GPU.
+constexpr double kGpuSelfCheckMaxMeanDiff = 2.0;
 
 AAssetManager* g_asset_manager = nullptr;
 
@@ -100,6 +102,49 @@ std::vector<std::string> ReadAssetLines(AAssetManager* asset_manager, const char
         throw std::runtime_error(std::string("classes_empty: ") + asset_path);
     }
     return lines;
+}
+
+// The model's constant tables (anchor grid and strides) are MemoryData layers. On a Mali-G925
+// (Dimensity 9400+, 2026-11-04) their GPU copies were overwritten during a light-mode run: scores
+// were right but boxes and tips were off by up to ~640 px. featmask 31=16 keeps a layer off
+// Vulkan, so these few small layers run on the CPU; the model file stays unchanged.
+std::string ReadModelParamText(AAssetManager* asset_manager) {
+    const std::vector<unsigned char> bytes = ReadAssetBytes(asset_manager, kModelParamAssetPath);
+    std::istringstream stream(std::string(bytes.begin(), bytes.end()));
+    std::string text;
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        if (line.rfind("MemoryData", 0) == 0) {
+            line += " 31=16";
+        }
+        text += line;
+        text += '\n';
+    }
+    return text;
+}
+
+// A fixed, synthetic frame for the GPU self-check: rings and sectors loosely like a board, so
+// every part of the model sees real structure.
+cv::Mat SelfCheckImage() {
+    cv::Mat image(kInputSize, kInputSize, CV_8UC3);
+    const float centre = kInputSize / 2.0f;
+    for (int y = 0; y < kInputSize; ++y) {
+        auto* row = image.ptr<cv::Vec3b>(y);
+        for (int x = 0; x < kInputSize; ++x) {
+            const float dx = x - centre;
+            const float dy = y - centre;
+            const int ring = static_cast<int>(std::sqrt(dx * dx + dy * dy) / 18.0f);
+            const int sector = static_cast<int>((std::atan2(dy, dx) + static_cast<float>(M_PI)) / (2.0f * static_cast<float>(M_PI)) * 20.0f);
+            const bool dark = ((ring + sector) % 2) == 0;
+            row[x] = dark
+                ? cv::Vec3b(static_cast<uchar>(30 + ring * 5), 40, static_cast<uchar>(20 + sector * 9))
+                : cv::Vec3b(200, static_cast<uchar>(180 + (x % 50)), static_cast<uchar>(160 + (y % 70)));
+        }
+    }
+    return image;
 }
 
 struct ModelInput {
@@ -312,8 +357,73 @@ private:
             gpu_available_ = false;
             return false;
         }
-        gpu_available_ = true;
+        gpu_available_ = GpuMatchesCpu();
+        return gpu_available_;
+    }
+
+    // Some GPU drivers run the model but return wrong numbers (Mali-G925, 2026-11-04). Before the
+    // GPU is used, one synthetic frame runs on both backends; if the GPU output is far from the
+    // CPU one, YOLO stays on the CPU. On a working GPU the two differ by ~0.2 on average (fp16);
+    // the broken runs were off by 100+ or had NaN.
+    bool GpuMatchesCpu() {
+        const auto start = std::chrono::steady_clock::now();
+        const cv::Mat image = SelfCheckImage();
+        ncnn::Mat gpu_output;
+        ncnn::Mat cpu_output;
+        try {
+            EnsureInitialized(gpu_runtime_);
+            gpu_output = RunModel(gpu_runtime_, image);
+            EnsureInitialized(cpu_runtime_);
+            cpu_output = RunModel(cpu_runtime_, image);
+        } catch (const std::exception& error) {
+            gpu_failure_reason_ = std::string("GPU self-check: ") + error.what();
+            ReleaseRuntime(gpu_runtime_);
+            return false;
+        }
+
+        double diff_sum = 0.0;
+        size_t non_finite = 0;
+        const size_t count = gpu_output.total();
+        const bool same_shape = count == cpu_output.total() && gpu_output.w == cpu_output.w && gpu_output.h == cpu_output.h;
+        if (same_shape) {
+            const float* gpu_values = reinterpret_cast<const float*>(gpu_output.data);
+            const float* cpu_values = reinterpret_cast<const float*>(cpu_output.data);
+            for (size_t i = 0; i < count; ++i) {
+                if (!std::isfinite(gpu_values[i])) {
+                    ++non_finite;
+                    continue;
+                }
+                diff_sum += std::fabs(gpu_values[i] - cpu_values[i]);
+            }
+        }
+        const double mean_diff = same_shape && count > non_finite ? diff_sum / static_cast<double>(count - non_finite) : 0.0;
+        const bool passed = same_shape && non_finite == 0 && mean_diff <= kGpuSelfCheckMaxMeanDiff;
+        __android_log_print(
+            passed ? ANDROID_LOG_INFO : ANDROID_LOG_WARN,
+            "BullTrackYolo",
+            "GPU self-check %s: %s, mean diff %.3f, non-finite %zu, took %lld ms",
+            passed ? "passed" : "failed, using CPU",
+            ncnn::get_gpu_info(kGpuDeviceIndex).device_name(),
+            mean_diff,
+            non_finite,
+            ElapsedMs(start));
+        if (!passed) {
+            std::ostringstream reason;
+            reason.setf(std::ios::fixed);
+            reason.precision(1);
+            reason << "GPU self-check failed (mean diff " << mean_diff << ", non-finite " << non_finite << ")";
+            gpu_failure_reason_ = reason.str();
+            ReleaseRuntime(gpu_runtime_);
+            return false;
+        }
+        // Loaded only for the check; the CPU model loads again if it is ever needed.
+        ReleaseRuntime(cpu_runtime_);
         return true;
+    }
+
+    static void ReleaseRuntime(BackendRuntime& runtime) {
+        runtime.net.clear();
+        runtime.initialized = false;
     }
 
     void EnsureInitialized(BackendRuntime& runtime) {
@@ -327,12 +437,16 @@ private:
         runtime.net.opt.use_fp16_packed = true;
         runtime.net.opt.use_fp16_storage = true;
         runtime.net.opt.use_fp16_arithmetic = true;
+        // Cooperative matrix gave NaN on a Mali-G925 (2026-11-04), which also ran faster without
+        // it (78 vs 125 ms); the Adreno 750 does not support it at all.
+        runtime.net.opt.use_cooperative_matrix = false;
         if (runtime.use_vulkan) {
             runtime.net.set_vulkan_device(kGpuDeviceIndex);
         }
 
         auto start = std::chrono::steady_clock::now();
-        if (runtime.net.load_param(g_asset_manager, kModelParamAssetPath) != 0) {
+        const std::string param_text = ReadModelParamText(g_asset_manager);
+        if (runtime.net.load_param_mem(param_text.c_str()) != 0) {
             throw std::runtime_error("yolo_param_load_failed: ncnn/model.ncnn.param");
         }
         const long long param_ms = ElapsedMs(start);
@@ -359,13 +473,30 @@ private:
         EnsureInitialized(runtime);
 
         ModelInput model_input = SquareResize(image_bgr, square, kInputSize);
+        const ncnn::Mat output = RunModel(runtime, model_input.image);
+        std::vector<YoloDetectionBox> boxes = DecodeOutput(output, model_input, image_bgr.size());
+        // Sorted by score, so a low candidate never suppresses a counted box.
+        std::vector<YoloDetectionBox> kept_boxes = ApplyNms(std::move(boxes));
+        // The overlay is only a debug image; skip the full-frame copy and drawing otherwise.
+        cv::Mat overlay = DebugImagesActive()
+            ? DrawOverlay(image_bgr, kept_boxes, model_input.square, backend, status_detail)
+            : cv::Mat();
+        YoloDetectionResult result{{}, overlay, backend, status_detail, {}};
+        for (YoloDetectionBox& box : kept_boxes) {
+            (box.score >= CountedScoreThreshold(box.label) ? result.boxes : result.low_score_dart_boxes).push_back(std::move(box));
+        }
+        return result;
+    }
+
+    // One inference on a model-sized BGR image; returns the raw out0 blob.
+    static ncnn::Mat RunModel(BackendRuntime& runtime, const cv::Mat& model_image_bgr) {
         // The model was trained on RGB images; fed BGR it scored the same darts but put tips
         // 1.5 px further off (median, 44 App test frames) with tip scores all over the place.
         ncnn::Mat input = ncnn::Mat::from_pixels(
-            model_input.image.data,
+            model_image_bgr.data,
             ncnn::Mat::PIXEL_BGR2RGB,
-            model_input.image.cols,
-            model_input.image.rows);
+            model_image_bgr.cols,
+            model_image_bgr.rows);
         const float norm_vals[3] = {1.0f / 255.0f, 1.0f / 255.0f, 1.0f / 255.0f};
         input.substract_mean_normalize(nullptr, norm_vals);
 
@@ -379,19 +510,7 @@ private:
         if (extractor.extract(kOutputBlobName, output) != 0) {
             throw std::runtime_error("yolo_output_failed: out0");
         }
-
-        std::vector<YoloDetectionBox> boxes = DecodeOutput(output, model_input, image_bgr.size());
-        // Sorted by score, so a low candidate never suppresses a counted box.
-        std::vector<YoloDetectionBox> kept_boxes = ApplyNms(std::move(boxes));
-        // The overlay is only a debug image; skip the full-frame copy and drawing otherwise.
-        cv::Mat overlay = DebugImagesActive()
-            ? DrawOverlay(image_bgr, kept_boxes, model_input.square, backend, status_detail)
-            : cv::Mat();
-        YoloDetectionResult result{{}, overlay, backend, status_detail, {}};
-        for (YoloDetectionBox& box : kept_boxes) {
-            (box.score >= CountedScoreThreshold(box.label) ? result.boxes : result.low_score_dart_boxes).push_back(std::move(box));
-        }
-        return result;
+        return output;
     }
 
     std::vector<YoloDetectionBox> DecodeOutput(
