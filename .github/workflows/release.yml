@@ -1,0 +1,141 @@
+# Builds the signed release APK on GitHub.
+# - Push a tag v<versionName> (e.g. v0.1.0): builds, attests and creates a draft release with the APK.
+# - Run it by hand (Actions tab): builds only and keeps the APK as a run artifact for 7 days.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  # The model comes from its own release; change both together when a new model is released.
+  MODEL_RELEASE: model-v1
+  MODEL_SHA256: |
+    454a5a2c040c966149dc7785d30731a213b7ff381812509ea5f46e1f7c87de8c  model.ncnn.param
+    bc04f7cc77d19471d8885ec350335819f250f44fb05977c91dc2dbbd20ebc913  model.ncnn.bin
+  # Certificate of the BullTrack release key; the build fails if the APK is signed with anything else.
+  SIGNING_CERT_SHA256: 15c1ed27e1e8c167f5daa1e0c911f99cb1a9c28f8e5bf71de4d801b609391994
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(grep -oP 'versionName "\K[^"]+' mobile/android/app/build.gradle)
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match versionName $version"
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install Android SDK packages
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" "ndk;27.1.12297006" "cmake;3.22.1" > /dev/null
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            bulltrack-core/src/main/cpp/opencv-sdk
+            bulltrack-core/src/main/cpp/third_party
+          key: native-deps-${{ hashFiles('scripts/fetch-native-deps.js') }}
+
+      - name: Download OpenCV and ncnn
+        run: node scripts/fetch-native-deps.js
+
+      - name: Download the model
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd bulltrack-core/src/main/assets/ncnn
+          gh release download "$MODEL_RELEASE" --repo "$GITHUB_REPOSITORY" --pattern 'model.ncnn.*'
+          printf '%s' "$MODEL_SHA256" | sha256sum -c -
+
+      - name: Install npm packages
+        working-directory: mobile
+        run: npm ci
+
+      - name: Set up the signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.BULLTRACK_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.BULLTRACK_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BULLTRACK_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.BULLTRACK_KEY_PASSWORD }}
+        run: |
+          dir="$RUNNER_TEMP/signing"
+          mkdir -p "$dir"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$dir/release.jks"
+          {
+            echo "storeFile=$dir/release.jks"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > "$dir/release-signing.properties"
+          echo "BULLTRACK_SIGNING_PROPERTIES=$dir/release-signing.properties" >> "$GITHUB_ENV"
+
+      - name: Build the APK
+        working-directory: mobile/android
+        run: bash gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon
+
+      - name: Check the signature and name the APK
+        run: |
+          apk=mobile/android/app/build/outputs/apk/release/app-release.apk
+          certs=$("$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs "$apk")
+          if ! grep -q "SHA-256 digest: $SIGNING_CERT_SHA256" <<< "$certs"; then
+            echo "$certs"
+            echo "The APK is not signed with the BullTrack release key"
+            exit 1
+          fi
+          name="BullTrack-$GITHUB_REF_NAME.apk"
+          cp "$apk" "$name"
+          sha256sum "$name" | tee "$name.sha256"
+          echo "APK=$name" >> "$GITHUB_ENV"
+
+      - name: Remove the signing key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/signing"
+
+      # Build provenance; GitHub offers it for public repositories only.
+      - uses: actions/attest-build-provenance@v3
+        if: github.event.repository.private == false
+        with:
+          subject-path: ${{ env.APK }}
+
+      - name: Keep the APK (test runs)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: ${{ env.APK }}
+          retention-days: 7
+
+      - name: Create a draft release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$APK" --draft --verify-tag \
+            --title "BullTrack $GITHUB_REF_NAME" \
+            --notes "SHA-256 of $APK: \`$(cut -d' ' -f1 "$APK.sha256")\`"
