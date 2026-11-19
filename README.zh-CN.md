@@ -12,7 +12,7 @@
 [![Platform](https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white)](../../releases)
 [![Min SDK](https://img.shields.io/badge/minSdk-26%20(Android%208.0)-3DDC84)](#下载安装)
 [![Target SDK](https://img.shields.io/badge/targetSdk-36-3DDC84)](#下载安装)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](../../releases)
+[![Version](https://img.shields.io/github/v/release/Thomasff/BullTrack?filter=v*&sort=semver&label=version&color=blue)](../../releases)
 [![React Native](https://img.shields.io/badge/React%20Native-0.84-61DAFB?logo=react&logoColor=black)](https://reactnative.dev)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
