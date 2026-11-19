@@ -13,6 +13,27 @@ export const MailIcon = ({ size, color }: IconProps) => (
   </Svg>
 );
 
+// A circular arrow.
+export const UpdateIcon = ({ size, color }: IconProps) => (
+  <Svg width={size} height={size} viewBox="0 0 24 24">
+    <Path
+      d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"
+      stroke={color}
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      fill="none"
+    />
+    <Path
+      d="M18 3v4.5h-4.5"
+      stroke={color}
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      fill="none"
+    />
+  </Svg>
+);
+
 // The GitHub mark (Octicons mark-github).
 export const GitHubIcon = ({ size, color }: IconProps) => (
   <Svg width={size} height={size} viewBox="0 0 16 16">

@@ -24,7 +24,12 @@ import {
   openUrl,
 } from '../../application/services/feedback';
 import { SHARE_URL } from '../../domain/share/shareCards';
-import { GitHubIcon, LicenseIcon, MailIcon } from '../components/AboutIcons';
+import {
+  UpdateAnswer,
+  answerUpdate,
+  fetchReleasesFromGitHub,
+} from '../../application/services/updateCheck';
+import { GitHubIcon, LicenseIcon, MailIcon, UpdateIcon } from '../components/AboutIcons';
 import { version } from '../../../package.json';
 
 type BackupResult = { text: string; failed: boolean };
@@ -72,6 +77,40 @@ export const SettingsTab = () => {
   const [backupResult, setBackupResult] = useState<BackupResult | null>(null);
   const [noMailApp, setNoMailApp] = useState(false);
   const versionTaps = useRef({ count: 0, at: 0 });
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateAnswer, setUpdateAnswer] = useState<UpdateAnswer | null>(null);
+
+  // Only a tap reaches GitHub; once a newer release is known, the next tap opens its page.
+  const pressUpdate = () => {
+    if (checkingUpdate) {
+      return;
+    }
+    if (updateAnswer?.kind === 'newer') {
+      openUrl(updateAnswer.page);
+      return;
+    }
+    setCheckingUpdate(true);
+    setUpdateAnswer(null);
+    answerUpdate(version, fetchReleasesFromGitHub)
+      .then(setUpdateAnswer)
+      .finally(() => setCheckingUpdate(false));
+  };
+
+  const updateText = () => {
+    if (checkingUpdate) {
+      return t('settings.updateChecking');
+    }
+    switch (updateAnswer?.kind) {
+      case 'upToDate':
+        return t('settings.updateLatest');
+      case 'newer':
+        return t('settings.updateNewer', { version: updateAnswer.version });
+      case 'failed':
+        return t('settings.updateFailed');
+      default:
+        return t('settings.updateCurrent', { version });
+    }
+  };
 
   // Seven quick taps on the version line turn developer mode on.
   const tapVersion = () => {
@@ -349,12 +388,29 @@ export const SettingsTab = () => {
 
       <View style={styles.card}>
         <Pressable
+          onPress={pressUpdate}
+          style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+          <UpdateIcon size={22} color={colors.textSecondary} />
+          <View style={styles.rowText}>
+            <Text style={styles.label}>{t('settings.updateCheck')}</Text>
+            <Text
+              style={[
+                styles.description,
+                updateAnswer?.kind === 'newer' && styles.updateNewer,
+                updateAnswer?.kind === 'failed' && styles.danger,
+              ]}>
+              {updateText()}
+            </Text>
+          </View>
+          <Text style={styles.chevron}>›</Text>
+        </Pressable>
+        <Pressable
           onPress={() => {
             openFeedbackEmail()
               .then(opened => setNoMailApp(!opened))
               .catch(() => undefined);
           }}
-          style={({ pressed }) => [styles.row, pressed && styles.pressed]}>
+          style={({ pressed }) => [styles.row, styles.rowDivider, pressed && styles.pressed]}>
           <MailIcon size={22} color={colors.textSecondary} />
           <View style={styles.rowText}>
             <Text style={styles.label}>{t('settings.feedback')}</Text>
@@ -496,6 +552,10 @@ const styles = StyleSheet.create({
   },
   danger: {
     color: colors.danger,
+  },
+  updateNewer: {
+    color: colors.accent,
+    fontWeight: '600',
   },
   result: {
     color: colors.textPrimary,
